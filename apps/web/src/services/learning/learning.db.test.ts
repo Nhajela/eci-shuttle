@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ServicePattern } from "@eci-shuttle/shared";
 import { makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import {
   auditLog,
@@ -299,6 +299,49 @@ describe("recomputeAll: segment_speeds", () => {
     expect(allDay[0]).toMatchObject({ startM: 0, endM: 200 });
     expect(rows.some((r) => r.hourBucket === 9)).toBe(true);
   });
+
+  it("drops trips over 3× the leg median (a breakdown's stationary pings don't drag segments down)", async () => {
+    const w = await world();
+    const pingsFor = (at: Date, n: number, stepS: number, lat: (i: number) => number) =>
+      db()
+        .insert(pings)
+        .values(
+          Array.from({ length: n }, (_, i) => ({
+            workspaceId: w.ws.id,
+            deviceId: w.phone.id,
+            vehicleId: w.bus.id,
+            recordedAt: new Date(at.getTime() + i * stepS * 1000),
+            lat: lat(i),
+            lng: RIVA.lng,
+            accuracy: 5,
+          })),
+        );
+    const dLat = CIRCLE.lat - RIVA.lat;
+    // three normal 1 km / 100 s trips → ~10 m/s
+    for (const day of DAYS.slice(0, 3)) {
+      const at = ist(day, "09:40");
+      await pingsFor(at, 6, 20, (i) => RIVA.lat + (i * dLat) / 5);
+      await trip(w, { at, durationS: 100 });
+    }
+    const speedsOf = () =>
+      db()
+        .select()
+        .from(segmentSpeeds)
+        .where(and(eq(segmentSpeeds.routeId, w.route.id), isNull(segmentSpeeds.hourBucket)))
+        .orderBy(segmentSpeeds.segmentIndex);
+    await recomputeAll(db(), w.ws.id, NOW);
+    const before = await speedsOf();
+
+    // a clean 5000 s trip that sat broken down near the start: pings every 20 s barely moving
+    const at = ist(DAYS[3] as string, "12:00");
+    await pingsFor(at, 250, 20, (i) => RIVA.lat + (i < 249 ? 0.0001 : dLat));
+    await trip(w, { at, durationS: 5000 });
+    await recomputeAll(db(), w.ws.id, NOW);
+    const after = await speedsOf();
+    expect(after.map((r) => [r.segmentIndex, r.n, r.medianMps])).toEqual(
+      before.map((r) => [r.segmentIndex, r.n, r.medianMps]),
+    );
+  });
 });
 
 describe("loadEstimates", () => {
@@ -402,6 +445,12 @@ describe("recomputeAll: suggestions", () => {
     await recomputeAll(db(), w.ws.id, NOW);
     await recomputeAll(db(), w.ws.id, NOW);
     expect(await suggestionsOf(w)).toHaveLength(1);
+    // unchanged evidence (jsonb reorders keys) is not rewritten
+    const audit = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.workspaceId, w.ws.id), eq(auditLog.entity, "suggestion")));
+    expect(audit).toHaveLength(1);
 
     await db().update(suggestions).set({ status: "dismissed" }).where(eq(suggestions.workspaceId, w.ws.id));
     await db().delete(departureMatches).where(eq(departureMatches.workspaceId, w.ws.id));

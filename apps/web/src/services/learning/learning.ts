@@ -1,4 +1,5 @@
 /** learning: leg_stats, segment_speeds, suggestions (SPEC §6a). Derived: not audited, except suggestion writes. */
+import { isDeepStrictEqual } from "node:util";
 import {
   distanceM,
   type EtaLeg,
@@ -207,11 +208,19 @@ async function writeSegmentSpeeds(db: Db, route: Route, now: Date) {
     .where(and(eq(trips.routeId, route.id), eq(trips.quality, "clean"), between(trips.departedAt, since, now)))
     .orderBy(trips.id, pings.recordedAt);
 
+  // runs more than 3× the leg's median are dropped, as in leg_stats (a breakdown's stationary pings)
+  const legOf = (t: Trip) => `${t.fromSpotId}|${t.toSpotId}`;
+  const durations = new Map<string, number[]>();
+  for (const t of new Map(rows.map((r) => [r.trip.id, r.trip])).values())
+    if (t.durationS != null && !excluded(ex, t.departedAt, t.serviceId))
+      (durations.get(legOf(t)) ?? durations.set(legOf(t), []).get(legOf(t)))?.push(t.durationS);
+  const tooLong = (t: Trip) => t.durationS != null && t.durationS > 3 * median(durations.get(legOf(t)) ?? []);
+
   const speeds = new Map<string, number[]>(); // "segment|hour" → m/s
   let prev: { tripId: string; alongM: number; at: number } | null = null;
   for (const r of rows) {
     const leg = legs.find((l) => l.fromSpotId === r.trip.fromSpotId && l.toSpotId === r.trip.toSpotId);
-    if (!leg || excluded(ex, r.trip.departedAt, r.trip.serviceId)) continue;
+    if (!leg || excluded(ex, r.trip.departedAt, r.trip.serviceId) || tooLong(r.trip)) continue;
     const cur = { tripId: r.trip.id, alongM: leg.startM + projectOntoPath(leg.sub, r).alongM, at: r.at.getTime() };
     if (prev?.tripId === cur.tripId) {
       const dt = (cur.at - prev.at) / 1000;
@@ -530,10 +539,10 @@ async function writeSuggestions(db: Db, workspaceId: string, found: Found[]) {
   for (const f of found) {
     const old = existing.find((e) => e.dedupeKey === f.dedupeKey);
     if (old && old.status !== "open") continue;
+    // key-order blind: jsonb hands evidence / proposedChanges back with its keys reordered
     if (
       old &&
-      JSON.stringify([old.summary, old.evidence, old.proposedChanges]) ===
-        JSON.stringify([f.summary, f.evidence, f.proposedChanges])
+      isDeepStrictEqual([old.summary, old.evidence, old.proposedChanges], [f.summary, f.evidence, f.proposedChanges])
     )
       continue;
     await mutate(
