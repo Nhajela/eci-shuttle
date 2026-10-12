@@ -3,6 +3,7 @@
  * audited. Called by devices/sync inside its transaction.
  */
 import {
+  type Departure,
   type EtaLeg,
   type EtaVehicle,
   etaToSpot,
@@ -23,6 +24,7 @@ import {
   type ServiceExceptionDef,
   type TripQuality,
   trackingWindows,
+  type VehicleWindow,
   type Weekday,
 } from "@eci-shuttle/shared";
 import { and, asc, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
@@ -96,14 +98,23 @@ export function tripQuality(fixes: Fix[], path: LatLng[], departedAt: number, ar
 
 const serviceDef = (s: Service): ServiceDef => ({ ...s, daysOfWeek: s.daysOfWeek as Weekday[] });
 
-/** Services, routes and tracking windows of the given vehicles (windows = trackingWindows over service_vehicles). */
-async function scheduleFor(db: Db, workspaceId: string, vehicleIds: string[], from: number, to: number) {
-  const svs = vehicleIds.length
-    ? await db
-        .select()
-        .from(serviceVehicles)
-        .where(and(eq(serviceVehicles.workspaceId, workspaceId), inArray(serviceVehicles.vehicleId, vehicleIds)))
-    : [];
+/**
+ * Services, routes and tracking windows of the given vehicles (null = every vehicle of the workspace).
+ * serviceAt resolves the service per instant: a vehicle may run back-to-back services.
+ */
+async function scheduleFor(db: Db, workspaceId: string, vehicleIds: string[] | null, from: number, to: number) {
+  const svs =
+    vehicleIds?.length === 0
+      ? []
+      : await db
+          .select()
+          .from(serviceVehicles)
+          .where(
+            and(
+              eq(serviceVehicles.workspaceId, workspaceId),
+              vehicleIds ? inArray(serviceVehicles.vehicleId, vehicleIds) : undefined,
+            ),
+          );
   const serviceIds = [...new Set(svs.map((s) => s.serviceId))];
   const svcs = serviceIds.length ? await db.select().from(services).where(inArray(services.id, serviceIds)) : [];
   const exs: ServiceExceptionDef[] = serviceIds.length
@@ -117,20 +128,30 @@ async function scheduleFor(db: Db, workspaceId: string, vehicleIds: string[], fr
     : [];
   const routeIds = [...new Set(svcs.map((s) => s.routeId))];
   const rts = routeIds.length ? await db.select().from(routes).where(inArray(routes.id, routeIds)) : [];
-  const windows = trackingWindows(
-    svs.map((s) => ({ ...s, startsAt: s.startsAt.getTime(), endsAt: s.endsAt.getTime() })),
-    svcs.map(serviceDef),
-    exs,
-    from,
-    to,
-  );
+  const sv = svs.map((s) => ({ ...s, startsAt: s.startsAt.getTime(), endsAt: s.endsAt.getTime() }));
+  // one trackingWindows call per service, so back-to-back services on one vehicle never merge into one window;
+  // core = the unpadded window, which wins where one service's padding overlaps the next service
+  const perService = svcs.map(serviceDef).map((d) => {
+    const own = sv.filter((s) => s.serviceId === d.id);
+    return {
+      id: d.id,
+      padded: trackingWindows(own, [d], exs, from, to),
+      core: trackingWindows(own, [d], exs, from, to, 0),
+    };
+  });
+  const covers = (ws: VehicleWindow[], t: number, vehicleId?: string) =>
+    ws.some((w) => (vehicleId == null || w.vehicleId === vehicleId) && w.startsAt <= t && t < w.endsAt);
   const serviceAt = (vehicleId: string, t: number) =>
-    windows.find((w) => w.vehicleId === vehicleId && w.startsAt <= t && t < w.endsAt)?.serviceIds[0] ?? null;
+    (perService.find((s) => covers(s.core, t, vehicleId)) ?? perService.find((s) => covers(s.padded, t, vehicleId)))
+      ?.id ?? null;
+  /** some vehicle was assigned to run the service at t */
+  const staffed = (serviceId: string, t: number) => perService.some((s) => s.id === serviceId && covers(s.padded, t));
   return {
     services: new Map(svcs.map((s) => [s.id, s])),
     routes: new Map(rts.map((r) => [r.id, r])),
     exceptions: exs,
     serviceAt,
+    staffed,
   };
 }
 type Schedule = Awaited<ReturnType<typeof scheduleFor>>;
@@ -182,23 +203,26 @@ export async function ingestPings(
     const closedTrips: Trip[] = [];
     const vehicleIds: string[] = [];
     for (const [vehicleId, vRows] of byVehicle) {
-      const closed = await processVehicle(tx, workspaceId, vehicleId, vRows, now);
-      if (!closed) continue;
-      vehicleIds.push(vehicleId);
-      closedTrips.push(...closed);
+      const res = await processVehicle(tx, workspaceId, vehicleId, vRows, now);
+      if (!res) continue;
+      if (res.live) vehicleIds.push(vehicleId);
+      closedTrips.push(...res.closed);
     }
     return { inserted: rows.length, closedTrips, vehicleIds };
   });
 }
 
-/** Advance one vehicle by its new pings. Returns the trips it closed, or null when nothing newer than its state. */
+/**
+ * Advance one vehicle by its new pings. Returns the trips it closed and whether its state is live (newest fix
+ * <= 2 min old), or null when nothing is newer than its state.
+ */
 async function processVehicle(
   tx: Db,
   workspaceId: string,
   vehicleId: string,
   rows: PingRow[],
   now: Date,
-): Promise<Trip[] | null> {
+): Promise<{ closed: Trip[]; live: boolean } | null> {
   await tx.insert(vehicleState).values({ workspaceId, vehicleId, since: now }).onConflictDoNothing();
   const [st] = await tx.select().from(vehicleState).where(eq(vehicleState.vehicleId, vehicleId)).for("update");
   const cutoff = st.lastPingAt?.getTime() ?? Number.NEGATIVE_INFINITY;
@@ -259,10 +283,23 @@ async function processVehicle(
   const route = serviceId ? sched.routes.get(sched.services.get(serviceId)?.routeId as string) : undefined;
   const atSpot = gf.insideSpotId != null;
   const spotId = gf.insideSpotId ?? openTrip?.fromSpotId ?? null;
-  const phase: Phase = !serviceId ? "off_duty" : atSpot ? "at_spot" : "en_route";
+  // a backlog uploaded late is history, not a live position (SPEC §6: never pretends to be live)
+  const stale = now.getTime() - lastAt > OFFLINE_MS;
+  const phase: Phase = !serviceId ? "off_duty" : stale ? "offline" : atSpot ? "at_spot" : "en_route";
   const live =
-    route && spotId ? await routeProgress(route, spotId, atSpot, gf.enteredAt ?? lastAt, lastGood, now) : null;
-  const since = lastEventAt != null ? new Date(lastEventAt) : phase !== st.phase ? fresh[0].recordedAt : st.since;
+    route && spotId && phase !== "offline"
+      ? await routeProgress(route, spotId, atSpot, gf.enteredAt ?? lastAt, lastGood, now)
+      : null;
+  const since =
+    phase === "offline"
+      ? st.phase === "offline"
+        ? st.since
+        : now
+      : lastEventAt != null
+        ? new Date(lastEventAt)
+        : phase !== st.phase
+          ? fresh[0].recordedAt
+          : st.since;
   await tx
     .update(vehicleState)
     .set({
@@ -276,12 +313,12 @@ async function processVehicle(
       lat: lastGood?.lat ?? st.lat,
       lng: lastGood?.lng ?? st.lng,
       alongM: live?.alongM ?? null,
-      offRoute: !atSpot && route ? await offRouteNow(tx, vehicleId, route.path, lastAt) : false,
+      offRoute: !stale && !atSpot && route ? await offRouteNow(tx, vehicleId, route.path, lastAt) : false,
       geofence: gf,
       updatedAt: now,
     })
     .where(eq(vehicleState.vehicleId, vehicleId));
-  return closed;
+  return { closed, live: !stale };
 }
 
 async function closeTrip(tx: Db, trip: Trip, toSpotId: string, at: number, sched: Schedule): Promise<Trip> {
@@ -372,10 +409,7 @@ async function routeProgress(
   };
 }
 
-/**
- * Re-match the service day's planned departures from the route's first spot against every actual departure
- * (dwells at that spot on that service). Passed planned departures with no match are written as missed.
- */
+/** After an actual departure from the route's first spot: re-match the service day(s) it can belong to. */
 async function matchDay(tx: Db, svc: Service, sched: Schedule, spotId: string, at: number, now: Date) {
   const route = sched.routes.get(svc.routeId);
   if (route?.spotIds[0] !== spotId) return;
@@ -383,63 +417,103 @@ async function matchDay(tx: Db, svc: Service, sched: Schedule, spotId: string, a
   for (const date of new Set([istDate(at), istDate(at - DAY_MS)])) {
     const planned = expandServiceDepartures(serviceDef(svc), sched.exceptions, date);
     if (!planned.length) continue;
-    const lo = planned[0].at - MATCH_TOL_MS;
-    const hi = planned[planned.length - 1].at + MATCH_TOL_MS;
-    if (at < lo || at > hi) continue;
-    const actual = await tx
-      .select()
-      .from(dwells)
-      .where(
-        and(
-          eq(dwells.serviceId, svc.id),
-          eq(dwells.spotId, spotId),
-          gte(dwells.departedAt, new Date(lo)),
-          lte(dwells.departedAt, new Date(hi)),
-        ),
-      );
-    const res = matchDepartures(
-      planned.map((p) => ({ id: String(p.at), at: p.at })),
-      actual.map((d) => ({ id: d.id, at: (d.departedAt as Date).getTime() })),
-    );
-    const key = { workspaceId: svc.workspaceId, serviceId: svc.id, spotId, date };
-    for (const m of res.matches) {
-      const plannedAt = new Date(Number(m.plannedId));
-      const dwell = actual.find((d) => d.id === m.actualId);
-      if (!dwell && plannedAt.getTime() + MATCH_TOL_MS > now.getTime()) {
-        // not due yet: drop a match an earlier run made, if the re-match moved it
-        await tx
-          .delete(departureMatches)
-          .where(
-            and(
-              eq(departureMatches.serviceId, svc.id),
-              eq(departureMatches.spotId, spotId),
-              eq(departureMatches.plannedAt, plannedAt),
-            ),
-          );
-        continue;
-      }
-      const row = {
-        actualAt: dwell?.departedAt ?? null,
-        dwellId: dwell?.id ?? null,
-        delayMin: m.delayMin,
-        missed: m.missed,
-        updatedAt: now,
-      };
-      await tx
-        .insert(departureMatches)
-        .values({ ...key, plannedAt, ...row })
-        .onConflictDoUpdate({
-          target: [departureMatches.serviceId, departureMatches.spotId, departureMatches.plannedAt],
-          set: row,
-        });
-      if (dwell) await tx.update(dwells).set({ plannedDepartureAt: plannedAt }).where(eq(dwells.id, dwell.id));
+    if (at < planned[0].at - MATCH_TOL_MS || at > planned[planned.length - 1].at + MATCH_TOL_MS) continue;
+    await matchDate(tx, svc, spotId, date, planned, now);
+  }
+}
+
+/**
+ * Sweep: write departure_matches for planned departures past due (planned + 25 min) with no row yet, e.g. the
+ * vehicle sat out, went silent, or the day's last departure never happened. Only departures some vehicle was
+ * assigned to run count. Called by refreshPhases (the watchdog, every minute).
+ */
+export async function matchDue(db: Db, workspaceId: string, now: Date): Promise<void> {
+  const t = now.getTime();
+  const sched = await scheduleFor(db, workspaceId, null, t - 2 * DAY_MS, t + DAY_MS);
+  for (const svc of sched.services.values()) {
+    const spotId = sched.routes.get(svc.routeId)?.spotIds[0];
+    if (!spotId || svc.archivedAt) continue;
+    for (const date of new Set([istDate(t), istDate(t - DAY_MS)])) {
+      const planned = expandServiceDepartures(serviceDef(svc), sched.exceptions, date);
+      const due = planned.filter((p) => p.at + MATCH_TOL_MS <= t && sched.staffed(svc.id, p.at));
+      if (!due.length) continue;
+      const have = await db
+        .select({ plannedAt: departureMatches.plannedAt })
+        .from(departureMatches)
+        .where(
+          and(
+            eq(departureMatches.serviceId, svc.id),
+            eq(departureMatches.spotId, spotId),
+            eq(departureMatches.date, date),
+          ),
+        );
+      const seen = new Set(have.map((h) => h.plannedAt.getTime()));
+      if (due.some((p) => !seen.has(p.at))) await matchDate(db, svc, spotId, date, planned, now);
     }
   }
 }
 
 /**
+ * Re-match one service day's planned departures from the route's first spot against every actual departure
+ * (dwells at that spot on that service). Passed planned departures with no match are written as missed.
+ */
+async function matchDate(tx: Db, svc: Service, spotId: string, date: string, planned: Departure[], now: Date) {
+  const lo = planned[0].at - MATCH_TOL_MS;
+  const hi = planned[planned.length - 1].at + MATCH_TOL_MS;
+  const actual = await tx
+    .select()
+    .from(dwells)
+    .where(
+      and(
+        eq(dwells.serviceId, svc.id),
+        eq(dwells.spotId, spotId),
+        gte(dwells.departedAt, new Date(lo)),
+        lte(dwells.departedAt, new Date(hi)),
+      ),
+    );
+  const res = matchDepartures(
+    planned.map((p) => ({ id: String(p.at), at: p.at })),
+    actual.map((d) => ({ id: d.id, at: (d.departedAt as Date).getTime() })),
+  );
+  const key = { workspaceId: svc.workspaceId, serviceId: svc.id, spotId, date };
+  for (const m of res.matches) {
+    const plannedAt = new Date(Number(m.plannedId));
+    const dwell = actual.find((d) => d.id === m.actualId);
+    if (!dwell && plannedAt.getTime() + MATCH_TOL_MS > now.getTime()) {
+      // not due yet: drop a match an earlier run made, if the re-match moved it
+      await tx
+        .delete(departureMatches)
+        .where(
+          and(
+            eq(departureMatches.serviceId, svc.id),
+            eq(departureMatches.spotId, spotId),
+            eq(departureMatches.plannedAt, plannedAt),
+          ),
+        );
+      continue;
+    }
+    const row = {
+      actualAt: dwell?.departedAt ?? null,
+      dwellId: dwell?.id ?? null,
+      delayMin: m.delayMin,
+      missed: m.missed,
+      updatedAt: now,
+    };
+    await tx
+      .insert(departureMatches)
+      .values({ ...key, plannedAt, ...row })
+      .onConflictDoUpdate({
+        target: [departureMatches.serviceId, departureMatches.spotId, departureMatches.plannedAt],
+        set: row,
+      });
+    if (dwell) await tx.update(dwells).set({ plannedDepartureAt: plannedAt }).where(eq(dwells.id, dwell.id));
+  }
+}
+
+/**
  * Mark vehicles offline (phase "offline") whose last ping is > 2 min old while inside a tracking window, and
- * "off_duty" outside windows. Called by the watchdog/windows jobs. Returns vehicles changed.
+ * "off_duty" outside windows, then sweep past-due departures (matchDue). Called by the watchdog/windows jobs.
+ * Returns vehicles changed.
  */
 export async function refreshPhases(db: Db, workspaceId: string, now: Date): Promise<string[]> {
   return db.transaction(async (tx) => {
@@ -464,6 +538,7 @@ export async function refreshPhases(db: Db, workspaceId: string, now: Date): Pro
         .where(eq(vehicleState.vehicleId, r.vehicleId));
       changed.push(r.vehicleId);
     }
+    await matchDue(tx, workspaceId, now);
     return changed;
   });
 }

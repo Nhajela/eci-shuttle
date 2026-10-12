@@ -250,6 +250,57 @@ describe("ingestPings", () => {
     expect(ms[1].delayMin).toBeGreaterThan(1);
   });
 
+  it("a backlog whose newest fix is > 2 min old is processed but leaves the vehicle offline, not live", async () => {
+    const w = await world();
+    // the phone reconnects at 09:06 and uploads 08:58–09:01
+    const r = await w.send(riva, ist("09:06:00"));
+    expect(r.vehicleIds).toEqual([]);
+    expect(await w.state()).toMatchObject({
+      phase: "offline",
+      serviceId: w.service.id,
+      etaS: null,
+      nextSpotId: null,
+      alongM: null,
+    });
+    expect((await w.state()).lastPingAt?.getTime()).toBe(ist("09:01:00"));
+    expect(await db().select().from(dwells).where(eq(dwells.vehicleId, w.vehicle.id))).toHaveLength(1);
+  });
+
+  it("back-to-back services on one vehicle: each instant belongs to the service running then", async () => {
+    const w = await world();
+    const [next] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w.ws.id,
+        name: "Late",
+        kind: "regular",
+        routeId: w.route.id,
+        validFrom: "2026-10-11",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "11:00",
+        endTime: "13:00",
+        pattern: { kind: "times", times: ["11:30"] },
+      })
+      .returning();
+    await db()
+      .insert(serviceVehicles)
+      .values({
+        workspaceId: w.ws.id,
+        serviceId: next.id,
+        vehicleId: w.vehicle.id,
+        startsAt: new Date(ist("11:00:00")),
+        endsAt: new Date(ist("13:00:00")),
+      });
+    await w.send(riva);
+    expect((await w.state()).serviceId).toBe(w.service.id);
+    // 11:05 is inside Regular's 15 min padding but Late's own hours
+    await w.send(track(ist("11:05:00"), ist("11:06:00"), CIRCLE));
+    expect((await w.state()).serviceId).toBe(next.id);
+    const [d] = await db().select().from(dwells).where(eq(dwells.spotId, w.circle.id));
+    expect(d.serviceId).toBe(next.id);
+  });
+
   it("pings outside any service window keep the vehicle off duty with no service", async () => {
     const w = await world({ svFrom: "10:00:00", svTo: "11:00:00" });
     await w.send(riva);
@@ -275,6 +326,28 @@ describe("refreshPhases", () => {
     // pings bring it back
     await w.send(track(ist("09:10:00"), ist("09:10:30"), RIVA), ist("09:10:30"));
     expect(await w.state()).toMatchObject({ phase: "at_spot", serviceId: w.service.id });
+  });
+
+  it("sweeps planned departures that passed with no departure at all into missed", async () => {
+    const w = await world();
+    // departs Riva for 09:00, then never again
+    await w.send([...riva, ...drive, ...atCircle]);
+    const matches = () =>
+      db()
+        .select()
+        .from(departureMatches)
+        .where(eq(departureMatches.serviceId, w.service.id))
+        .orderBy(departureMatches.plannedAt);
+    expect((await matches()).map((m) => m.plannedAt.getTime())).toEqual([ist("09:00:00")]);
+
+    await refreshPhases(db(), w.ws.id, new Date(ist("10:00:00"))); // 09:40 not due until 10:05
+    expect(await matches()).toHaveLength(1);
+
+    await refreshPhases(db(), w.ws.id, new Date(ist("10:10:00")));
+    expect((await matches()).map((m) => [m.plannedAt.getTime(), m.missed, m.date])).toEqual([
+      [ist("09:00:00"), false, "2026-10-13"],
+      [ist("09:40:00"), true, "2026-10-13"],
+    ]);
   });
 });
 
