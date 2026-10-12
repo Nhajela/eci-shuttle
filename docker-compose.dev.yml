@@ -1,0 +1,13 @@
+# Local Postgres for `pnpm dev` (persistent volume). Tests use their own throwaway server: `pnpm test-db`.
+services:
+  postgres:
+    image: postgres:18
+    pull_policy: never
+    ports: ["5548:5432"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shuttle
+    volumes: [shuttle-dev-pg:/var/lib/postgresql]
+volumes:
+  shuttle-dev-pg:
