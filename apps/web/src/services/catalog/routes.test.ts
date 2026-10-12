@@ -38,6 +38,18 @@ describe("generatePath", () => {
     expect(r.spotPathIdx).toEqual([0, 2, 4]);
   });
 
+  it("loop: pins the ends even when OSRM snaps the end vertex closer to the first spot than the start vertex", async () => {
+    const f = osrmOk([
+      [73.7358, 15.6303],
+      [73.733, 15.635],
+      [73.7301, 15.6402],
+      [73.731, 15.636],
+      [73.7356, 15.6301],
+    ]);
+    const r = await generatePath([riva, circle, riva], f as unknown as typeof fetch);
+    expect(r.spotPathIdx).toEqual([0, 2, 4]);
+  });
+
   it.each([
     ["network error", vi.fn(async () => Promise.reject(new Error("offline")))],
     ["http 500", vi.fn(async () => new Response("boom", { status: 500 }))],

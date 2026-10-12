@@ -26,16 +26,20 @@ const OSRM = "https://router.project-osrm.org/route/v1/driving/";
 const OSRM_TIMEOUT_MS = 5_000;
 
 /**
- * For each point, the nearest path index, searching forward from the previous point's index so a loop's
- * repeated first spot lands at the end of the path, not back at 0. Equirectangular distance is plenty here.
+ * For each point, the nearest path index. The first and last points are pinned to the path's ends (OSRM paths and
+ * hand-drawn ones start at the first stop and end at the last; on a loop the end vertex can snap closer to the
+ * first stop than the start does). Middle points search forward from the previous index. Equirectangular distance.
  */
 export function spotIndexes(path: LatLng[], points: LatLng[]): number[] {
+  const last = points.length - 1;
   let from = 0;
-  return points.map((p) => {
+  return points.map((p, i) => {
+    if (i === 0) return 0;
+    if (i === last) return path.length - 1;
     const k = Math.cos((p.lat * Math.PI) / 180);
     let best = from;
     let bestD = Number.POSITIVE_INFINITY;
-    for (let j = from; j < path.length; j++) {
+    for (let j = from; j < path.length - 1; j++) {
       const d = (path[j].lat - p.lat) ** 2 + ((path[j].lng - p.lng) * k) ** 2;
       if (d < bestD) [best, bestD] = [j, d];
     }
@@ -147,6 +151,8 @@ export async function updateRoute(
       .set({
         ...(name !== undefined && { name }),
         spotIds: ids,
+        // typical_leg_s is one learned median per leg; new stops make the old legs meaningless
+        ...(spotIds && spotIds.join() !== before.spotIds.join() && { typicalLegS: [] }),
         ...(g && { path: g.path, pathSource: g.source, spotPathIdx: g.spotPathIdx }),
         version: before.version + 1,
         updatedAt: new Date(),

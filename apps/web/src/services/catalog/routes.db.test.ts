@@ -123,6 +123,31 @@ describe("updateRoute", () => {
     expect(u).toMatchObject({ spotIds: [riva.id, party.id, riva.id], pathSource: "osrm", spotPathIdx: [0, 1, 2] });
   });
 
+  it("changing spotIds clears the learned leg times; same spotIds or a rename keeps them", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
+    await db()
+      .update(routes)
+      .set({ typicalLegS: [420] })
+      .where(eq(routes.id, r.id));
+    const same = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [riva.id, circle.id] },
+      offline,
+    );
+    expect(same.typicalLegS).toEqual([420]);
+    const renamed = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, name: "R2" }, offline);
+    expect(renamed.typicalLegS).toEqual([420]);
+    const u = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [riva.id, party.id] },
+      offline,
+    );
+    expect(u.typicalLegS).toEqual([]);
+  });
+
   it("a hand-edited path wins over regeneration and is marked manual, with spot indexes recomputed", async () => {
     const { ws, actor, riva, circle } = await setup();
     const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
