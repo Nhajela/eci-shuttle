@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
-import { makePerson } from "@tests/factories/core";
+import { makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "@/db";
+import { memberships } from "@/db/schema";
 import type { Person } from "@/db/types";
+import { NO_WORKSPACES } from "@/mcp/text";
 import { authenticateMcp } from "@/services/mcp/tokens";
 import { GET as asMeta } from "../../../.well-known/oauth-authorization-server/[[...rest]]/route";
 import { GET as prMeta } from "../../../.well-known/oauth-protected-resource/[[...rest]]/route";
@@ -13,12 +17,27 @@ import { POST as token } from "./token/route";
 process.env.TOKEN_SECRETS = "oauth-route-test-secret-at-least-32-chars";
 const session = vi.hoisted(() => ({ person: null as Person | null }));
 vi.mock("@/lib/session", () => ({ currentPerson: async () => session.person }));
+// ponytail: stand-in for svc-auth's resolveWorkspace (still a stub): any membership → that workspace, none → null
+vi.mock("@/services/auth/actor", () => ({
+  resolveWorkspace: async (d: Db, personId: string) => {
+    const [m] = await d.select().from(memberships).where(eq(memberships.personId, personId));
+    return m ? { workspace: { id: m.workspaceId }, role: m.role } : null;
+  },
+}));
 
 const O = "http://localhost:3000";
 const CB = "https://claude.ai/api/mcp/auth_callback";
 const VERIFIER = "x".repeat(60);
 const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
 const db = () => testDb();
+
+/** A person with an admin membership in a fresh workspace. */
+async function member(over: Partial<Person> = {}) {
+  const person = await makePerson(db(), over);
+  const ws = await makeWorkspace(db());
+  await db().insert(memberships).values({ personId: person.id, workspaceId: ws.id, role: "admin" });
+  return person;
+}
 
 beforeEach(() => {
   session.person = null;
@@ -97,11 +116,13 @@ describe("authorize", () => {
   });
 
   it("logged in → a consent page, unframeable, with the client name escaped", async () => {
-    session.person = await makePerson(db(), { firstName: "Naman" });
+    session.person = await member({ firstName: "Naman" });
     const { client_id } = await registered("<script>x</script>");
     const res = await authorizeGet(new Request(authorizeUrl(client_id)));
     expect(res.status).toBe(200);
     expect(res.headers.get("x-frame-options")).toBe("DENY");
+    // no-referrer would make browsers post the Allow form with `Origin: null`, which the POST refuses
+    expect(res.headers.get("referrer-policy")).toBe("same-origin");
     const html = await res.text();
     expect(html).toContain("&lt;script&gt;x&lt;/script&gt;");
     expect(html).not.toContain("<script>x");
@@ -109,7 +130,7 @@ describe("authorize", () => {
   });
 
   it("POST from another origin is refused; Cancel → access_denied with state", async () => {
-    session.person = await makePerson(db());
+    session.person = await member();
     const { client_id } = await registered();
     const evil = await allow(authorizeUrl(client_id), "allow", "https://evil.example");
     expect(evil.status).toBe(400);
@@ -118,11 +139,24 @@ describe("authorize", () => {
     expect(`${loc.origin}${loc.pathname}`).toBe(CB);
     expect(Object.fromEntries(loc.searchParams)).toMatchObject({ error: "access_denied", state: "s1", iss: O });
   });
+
+  it("someone with no workspace membership gets a 403 page and no code", async () => {
+    session.person = await makePerson(db());
+    const { client_id } = await registered();
+    const get = await authorizeGet(new Request(authorizeUrl(client_id)));
+    expect(get.status).toBe(403);
+    const html = await get.text();
+    expect(html).toContain(NO_WORKSPACES.replaceAll("'", "&#39;"));
+    expect(html).not.toContain("<form");
+    const post = await allow(authorizeUrl(client_id));
+    expect(post.status).toBe(403);
+    expect(post.headers.get("location")).toBeNull();
+  });
 });
 
 describe("full connect: register → authorize → token → bearer", () => {
   it("issues a token bound to the logged-in person", async () => {
-    const person = await makePerson(db());
+    const person = await member();
     session.person = person;
     const { client_id } = await registered();
     const res = await allow(authorizeUrl(client_id));
@@ -164,7 +198,7 @@ describe("full connect: register → authorize → token → bearer", () => {
   });
 
   it("accepts a JSON token request too", async () => {
-    session.person = await makePerson(db());
+    session.person = await member();
     const { client_id } = await registered();
     const code = new URL((await allow(authorizeUrl(client_id))).headers.get("location") as string).searchParams.get(
       "code",

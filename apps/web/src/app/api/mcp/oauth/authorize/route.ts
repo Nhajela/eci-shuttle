@@ -4,8 +4,11 @@
  * /login?next=<this URL>, else show "Allow <client>?". POST (same URL, same-origin only): Allow → a sealed code back
  * to the client; Cancel → access_denied.
  */
+import { db } from "@/db";
 import { env, origin } from "@/lib/env";
 import { currentPerson } from "@/lib/session";
+import { NO_WORKSPACES } from "@/mcp/text";
+import { resolveWorkspace } from "@/services/auth/actor";
 import { issueAuthCode, validateAuthorize } from "@/services/auth/oauth";
 import { isServiceError } from "@/services/kernel";
 
@@ -14,7 +17,8 @@ const PAGE_HEADERS = {
   "Cache-Control": "no-store",
   "X-Frame-Options": "DENY",
   "Content-Security-Policy": "frame-ancestors 'none'",
-  "Referrer-Policy": "no-referrer",
+  // not no-referrer: browsers then send `Origin: null` on the Allow form POST, and the origin check below refuses it
+  "Referrer-Policy": "same-origin",
 };
 
 const esc = (s: string) =>
@@ -60,6 +64,10 @@ function check(request: Request) {
   }
 }
 
+// SPEC §7a: the token is bound to an admin, so someone with no workspace membership can't connect
+const noWorkspaces = async (personId: string) =>
+  (await resolveWorkspace(db(), personId)) ? null : page("Can't connect", `<p>${esc(NO_WORKSPACES)}</p>`, 403);
+
 const toLogin = (url: URL) =>
   new Response(null, {
     status: 303,
@@ -71,6 +79,8 @@ export async function GET(request: Request): Promise<Response> {
   if (!c.ok) return errorPage(c.error);
   const person = await currentPerson();
   if (!person) return toLogin(c.url);
+  const denied = await noWorkspaces(person.id);
+  if (denied) return denied;
   const who = esc(person.firstName ?? (person.username ? `@${person.username}` : "you"));
   const client = esc(c.ok.clientName ?? "An MCP client");
   return page(
@@ -96,6 +106,8 @@ export async function POST(request: Request): Promise<Response> {
     return backToClient(c.ok.redirectUri, { error: "access_denied", error_description: "Cancelled.", state });
   const person = await currentPerson();
   if (!person) return toLogin(c.url);
+  const denied = await noWorkspaces(person.id);
+  if (denied) return denied;
   const code = issueAuthCode(
     {
       personId: person.id,
