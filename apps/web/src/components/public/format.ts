@@ -4,11 +4,25 @@
  */
 import type { AnswerLine } from "@eci-shuttle/shared";
 
-export type AnswerParts = { label: string; value: string; range: string | null };
+/** `small`: not a time, so it is shown in the small style. */
+export type AnswerParts = { label: string; value: string; range: string | null; small?: true };
 
-/** The big line. `single` = the only service at this spot, so it reads as a sentence. */
-export function answerParts(line: AnswerLine, single: boolean): AnswerParts {
+/** Past this, a live answer is no longer live (SPEC §6.2). */
+const STALE_S = 120;
+
+const isStale = (line: AnswerLine, ageS: number) =>
+  line.kind === "live" && line.lastSeenS !== null && line.lastSeenS + ageS > STALE_S;
+
+/**
+ * The big line. `single` = the only service at this spot, so it reads as a sentence.
+ * `ageS` = how old the answer is; a live line older than 2 min falls back to the timetable.
+ */
+export function answerParts(line: AnswerLine, single: boolean, ageS = 0): AnswerParts {
   const label = single ? null : line.serviceName;
+  if (isStale(line, ageS))
+    return line.nextAtLabel
+      ? { label: label ?? "Next scheduled", value: line.nextAtLabel, range: null }
+      : { label: label ?? "Shuttle", value: "Live tracking off", range: null, small: true };
   if (line.kind === "live" && line.minutes !== null) {
     if (line.minutes === 0) return { label: label ?? "Shuttle is", value: "here now", range: null };
     const { rangeLo: lo, rangeHi: hi } = line;
@@ -27,7 +41,7 @@ export function answerParts(line: AnswerLine, single: boolean): AnswerParts {
 export function contextText(line: AnswerLine, ageS: number): string {
   if (line.lastSeenS === null) return line.phaseText;
   const s = line.lastSeenS + ageS;
-  return `${line.phaseText} · last seen ${s < 60 ? `${s}s` : `${Math.round(s / 60)} min`} ago`;
+  return `${isStale(line, ageS) ? "live tracking off" : line.phaseText} · last seen ${s < 60 ? `${s}s` : `${Math.round(s / 60)} min`} ago`;
 }
 
 export function ageSeconds(generatedAt: string, now: Date): number {

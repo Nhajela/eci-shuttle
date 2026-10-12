@@ -136,8 +136,8 @@ function Answer({ spot, ageS }: { spot: PublicSpot; ageS: number }) {
 }
 
 function AnswerRow({ line, single, ageS }: { line: AnswerLine; single: boolean; ageS: number }) {
-  const p = answerParts(line, single);
-  const big = line.kind !== "none";
+  const p = answerParts(line, single, ageS);
+  const big = line.kind !== "none" && !p.small;
   return (
     <div className="flex flex-col gap-1">
       <p className="flex items-center gap-2 text-base text-ink-soft">

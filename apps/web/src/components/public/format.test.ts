@@ -58,11 +58,35 @@ describe("answerParts", () => {
   });
 });
 
+describe("stale live data (>2 min since last seen) never pretends to be live", () => {
+  it("no minutes once lastSeenS + ageS > 120", () => {
+    const p = answerParts(line(), true, 200);
+    expect(p.value).not.toMatch(/min/);
+    expect(p).toEqual({ label: "Shuttle", value: "Live tracking off", range: null, small: true });
+  });
+
+  it("falls back to the next scheduled time when known", () => {
+    expect(answerParts(line({ nextAtLabel: "09:40" }), true, 200)).toEqual({
+      label: "Next scheduled",
+      value: "09:40",
+      range: null,
+    });
+  });
+
+  it("still live at exactly 120s", () => {
+    expect(answerParts(line(), true, 108).value).toBe("6 min");
+  });
+
+  it("context says live tracking is off", () => {
+    expect(contextText(line(), 200)).toBe("live tracking off · last seen 4 min ago");
+  });
+});
+
 describe("contextText", () => {
   it("phase plus last seen, aged by how old the answer is", () => {
     expect(contextText(line(), 0)).toBe("leaving Riva now · last seen 12s ago");
     expect(contextText(line(), 50)).toBe("leaving Riva now · last seen 1 min ago");
-    expect(contextText(line({ lastSeenS: 200 }), 0)).toBe("leaving Riva now · last seen 3 min ago");
+    expect(contextText(line({ lastSeenS: 100 }), 0)).toBe("leaving Riva now · last seen 2 min ago");
   });
 
   it("no last seen when not live", () => {
