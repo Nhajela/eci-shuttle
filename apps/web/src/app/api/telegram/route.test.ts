@@ -18,11 +18,13 @@ const post = (body: string, secret: string | null = SECRET) =>
       body,
     }),
   );
-const update = { update_id: 7, message: { message_id: 1, date: 0, chat: { id: 5, type: "private" }, text: "/start" } };
+let nextId = 7;
+let update = { update_id: 7, message: { message_id: 1, date: 0, chat: { id: 5, type: "private" }, text: "/start" } };
 const reply = { send: [{ chatId: 5, html: "hi", kind: "reply" }] };
 
 const saved = process.env.TELEGRAM_WEBHOOK_SECRET;
 beforeEach(() => {
+  update = { ...update, update_id: nextId++ };
   process.env.TELEGRAM_WEBHOOK_SECRET = SECRET;
   handleUpdate.mockReset().mockResolvedValue(reply);
   performReply.mockReset().mockResolvedValue(undefined);
@@ -48,6 +50,23 @@ describe("POST /api/telegram", () => {
     expect(res.status).toBe(200);
     expect(handleUpdate).toHaveBeenCalledWith(fakeDb, update, expect.any(Date));
     expect(performReply).toHaveBeenCalledWith(fakeDb, reply);
+  });
+
+  it("handles a redelivered update_id only once (Telegram retries after a slow reply)", async () => {
+    expect((await post(JSON.stringify(update))).status).toBe(200);
+    expect((await post(JSON.stringify(update))).status).toBe(200);
+    expect(handleUpdate).toHaveBeenCalledTimes(1);
+    expect(performReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a redelivery that arrives while the first is still being handled", async () => {
+    let finish!: (v: unknown) => void;
+    handleUpdate.mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const first = post(JSON.stringify(update));
+    expect((await post(JSON.stringify(update))).status).toBe(200);
+    finish(reply);
+    expect((await first).status).toBe(200);
+    expect(handleUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("400 on a body that isn't a Telegram update", async () => {
