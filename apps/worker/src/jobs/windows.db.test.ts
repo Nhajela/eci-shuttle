@@ -16,6 +16,7 @@ vi.mock("@/services/ingest/ingest", () => ({ refreshPhases: vi.fn() }));
 const NOW = new Date("2026-10-12T04:10:00.300Z");
 const MIN = 60_000;
 const t = NOW.getTime();
+const FLOOR = Math.floor(t / MIN) * MIN; // the tick's range ends on the whole minute
 
 const win = (startsAt: number, endsAt: number, mode: Window["mode"] = "active"): Window => ({
   startsAt,
@@ -47,7 +48,7 @@ beforeEach(() => {
   vi.mocked(refreshPhases).mockResolvedValue([]);
 });
 
-const run = () => windows.run({ db: testDb(), now: NOW, workerId: "w", startedAt: NOW, log: () => {} });
+const run = (now = NOW) => windows.run({ db: testDb(), now, workerId: "w", startedAt: now, log: () => {} });
 const bumpAudits = (workspaceId: string) =>
   testDb()
     .select()
@@ -69,8 +70,8 @@ describe("windows job", () => {
 
     expect(bumpConfigs).toHaveBeenCalledTimes(1);
     expect(vi.mocked(bumpConfigs).mock.calls[0][1]).toEqual({ deviceIds: ["opened", "closed"] });
-    // the config is read from a minute ago so a window that just closed is still in it
-    expect(desiredConfig).toHaveBeenCalledWith(expect.anything(), "opened", new Date(t - MIN));
+    // the config is read at the range start so a window that just closed is still in it
+    expect(desiredConfig).toHaveBeenCalledWith(expect.anything(), "opened", new Date(FLOOR - MIN));
     const audits = await bumpAudits(ws.id);
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({ actorKind: "system", actorId: "windows", entity: "device" });
@@ -86,10 +87,10 @@ describe("windows job", () => {
     expect(vi.mocked(bumpConfigs).mock.calls[0][1]).toEqual({ deviceIds: ["silenced"] });
   });
 
-  it("an edge exactly a minute ago belongs to the previous tick", async () => {
+  it("an edge on the previous whole minute belongs to the previous tick", async () => {
     const ws = await makeWorkspace(testDb());
     phonesByWs[ws.id] = [phone("edge")];
-    schedules = { edge: [win(t - MIN, t + 60 * MIN)] };
+    schedules = { edge: [win(FLOOR - MIN, t + 60 * MIN)] };
     await run();
     expect(bumpConfigs).not.toHaveBeenCalled();
   });
@@ -128,5 +129,18 @@ describe("windows job", () => {
     });
     await expect(run()).rejects.toThrow(/boom/);
     expect(await bumpAudits(good.id)).toHaveLength(1);
+  });
+
+  it("catches up the edges of a skipped tick", async () => {
+    const ws = await makeWorkspace(testDb());
+    phonesByWs[ws.id] = [phone("late")];
+    const T = FLOOR + 5 * MIN + 400;
+    schedules = { late: [win(T + 30_000, T + 60 * MIN)] }; // opens in the T+1 tick's minute
+    await run(new Date(T));
+    expect(bumpConfigs).not.toHaveBeenCalled();
+    // the T+1 tick never runs
+    await run(new Date(T + 2 * MIN));
+    expect(vi.mocked(bumpConfigs).mock.calls[0][1]).toEqual({ deviceIds: ["late"] });
+    expect(desiredConfig).toHaveBeenLastCalledWith(expect.anything(), "late", new Date(FLOOR + 5 * MIN));
   });
 });
