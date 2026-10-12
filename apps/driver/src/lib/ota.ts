@@ -19,7 +19,13 @@ export type OtaInput = {
  * updateFailed: true in the next sync. For svc-ota, a rollback must republish the old update
  * (`eas update:republish`) so it is the newest on the channel; pointing the target at an older id can't be fetched.
  */
-export function otaStep({ targetUpdateId, runningUpdateId, downloadedUpdateId, lastAttemptedTargetId, mode }: OtaInput) {
+export function otaStep({
+  targetUpdateId,
+  runningUpdateId,
+  downloadedUpdateId,
+  lastAttemptedTargetId,
+  mode,
+}: OtaInput) {
   if (!targetUpdateId || targetUpdateId === runningUpdateId) return "none";
   if (downloadedUpdateId !== targetUpdateId) return lastAttemptedTargetId === targetUpdateId ? "none" : "download";
   return mode === "active" ? "wait" : "apply";

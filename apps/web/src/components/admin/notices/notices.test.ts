@@ -5,9 +5,9 @@ import {
   istInputToIso,
   noticeState,
   placementLabel,
-  untilLabel,
   previewPages,
   type Shown,
+  untilLabel,
 } from "./notices";
 
 const T = Date.parse("2026-10-12T04:10:00Z"); // 09:40 IST
@@ -75,7 +75,9 @@ describe("untilLabel", () => {
     expect(untilLabel({ endsAt: null, endedAt: new Date(T) })).toBe("Mon 12 Oct, 09:40 (ended by hand)");
   });
   it("ended by hand before its end time shows when it was ended", () => {
-    expect(untilLabel({ endsAt: new Date(T + 3_600_000), endedAt: new Date(T) })).toBe("Mon 12 Oct, 09:40 (ended by hand)");
+    expect(untilLabel({ endsAt: new Date(T + 3_600_000), endedAt: new Date(T) })).toBe(
+      "Mon 12 Oct, 09:40 (ended by hand)",
+    );
   });
   it("endsAt set shows the end time", () => {
     expect(untilLabel({ endsAt: new Date(T), endedAt: null })).toBe("Mon 12 Oct, 09:40");

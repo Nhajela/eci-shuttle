@@ -60,9 +60,7 @@ export default function Status() {
           }}
         />
       )}
-      {d.config.revoked && (
-        <Button label="Pair again" onPress={() => router.push("/pair")} />
-      )}
+      {d.config.revoked && <Button label="Pair again" onPress={() => router.push("/pair")} />}
 
       <Row label="Next" value={v.next} />
       <Row label="Vehicle" value={v.vehicle} />

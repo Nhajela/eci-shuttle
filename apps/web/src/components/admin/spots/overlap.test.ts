@@ -35,7 +35,9 @@ describe("overlapWarnings", () => {
 
   it("warns about overlap when the centres are closer than the sum of the radii", () => {
     const d = distanceM(riva, circle); // ~1.4 km; small radii keep the exit-hysteresis rule out of play
-    expect(overlapWarnings({ lat: riva.lat, lng: riva.lng, radiusM: Math.ceil(d) - 74 }, [circle])[0]).toMatch(/Overlaps Circle/);
+    expect(overlapWarnings({ lat: riva.lat, lng: riva.lng, radiusM: Math.ceil(d) - 74 }, [circle])[0]).toMatch(
+      /Overlaps Circle/,
+    );
   });
 
   it("warns when a shuttle at one spot would never leave the other (exit radius x 1.5)", () => {

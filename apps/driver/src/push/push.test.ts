@@ -5,7 +5,13 @@ const m = vi.hoisted(() => ({
   getExpoPushTokenAsync: vi.fn(),
   getPermissionsAsync: vi.fn(async () => ({ granted: false })),
 }));
-vi.mock("expo-constants", () => ({ default: { get expoConfig() { return { extra: m.extra }; } } }));
+vi.mock("expo-constants", () => ({
+  default: {
+    get expoConfig() {
+      return { extra: m.extra };
+    },
+  },
+}));
 vi.mock("expo-task-manager", () => ({ defineTask: vi.fn() }));
 vi.mock("expo-notifications", () => ({
   addPushTokenListener: vi.fn(),

@@ -71,10 +71,12 @@ export function useDevice(): ScreenSnapshot | null {
   );
 }
 
-const then = <A extends unknown[]>(fn: (...a: A) => Promise<unknown>) => async (...a: A) => {
-  await fn(...a);
-  await refresh();
-};
+const then =
+  <A extends unknown[]>(fn: (...a: A) => Promise<unknown>) =>
+  async (...a: A) => {
+    await fn(...a);
+    await refresh();
+  };
 
 export const acceptConsent = then(device.acceptConsent);
 export const finishSetup = then(device.finishSetup);

@@ -85,7 +85,10 @@ export function LiveBoard({
             Next departures
           </h2>
           {board.nextDepartures.map((d) => (
-            <div key={`${d.serviceId}:${d.date}:${d.planned}`} className="flex flex-wrap items-center gap-2 rounded-xl border p-2 pl-3">
+            <div
+              key={`${d.serviceId}:${d.date}:${d.planned}`}
+              className="flex flex-wrap items-center gap-2 rounded-xl border p-2 pl-3"
+            >
               <span className="min-w-0 flex-1">
                 <span className="font-semibold tabular-nums">{d.atText}</span> {d.serviceName}
               </span>

@@ -28,7 +28,9 @@ export function overlapWarnings(
   return others
     .filter((o) => o.id !== spot.id && !o.archivedAt)
     .map((o) => ({ o, d: distanceM(spot, o) }))
-    .filter(({ o, d }) => d < Math.max(spot.radiusM + o.radiusM, GEOFENCE_EXIT_FACTOR * Math.max(spot.radiusM, o.radiusM)))
+    .filter(
+      ({ o, d }) => d < Math.max(spot.radiusM + o.radiusM, GEOFENCE_EXIT_FACTOR * Math.max(spot.radiusM, o.radiusM)),
+    )
     .map(({ o, d }) =>
       d < spot.radiusM + o.radiusM
         ? `Overlaps ${o.name} (${Math.round(d)} m apart). A shuttle in both circles counts as at the nearer one.`

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { otaStep } from "./ota";
 
-const base = { targetUpdateId: "u2", runningUpdateId: "u1", downloadedUpdateId: null, lastAttemptedTargetId: null, mode: "idle" as const };
+const base = {
+  targetUpdateId: "u2",
+  runningUpdateId: "u1",
+  downloadedUpdateId: null,
+  lastAttemptedTargetId: null,
+  mode: "idle" as const,
+};
 
 describe("otaStep (SPEC §5: server-controlled OTA, apply only while idle)", () => {
   it("does nothing when the server sets no target", () => {

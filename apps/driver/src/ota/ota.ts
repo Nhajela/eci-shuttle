@@ -56,6 +56,8 @@ export function createOta({
             targetUpdateId,
             runningUpdateId: updates.updateId,
             downloadedUpdateId: downloaded,
+            // this module tracks the unreachable target itself (`mismatched`), checked before any fetch
+            lastAttemptedTargetId: null,
             mode: getMode(),
           });
         if (step() === "download") {

@@ -6,7 +6,9 @@ export const EAS_PROJECT_ID = "";
 const easProjectId = EAS_PROJECT_ID;
 
 if (!easProjectId && process.env.EAS_BUILD) {
-  throw new Error("EAS_PROJECT_ID is empty in apps/driver/app.config.ts: run `eas init` and commit the id, or this APK can never get OTA updates.");
+  throw new Error(
+    "EAS_PROJECT_ID is empty in apps/driver/app.config.ts: run `eas init` and commit the id, or this APK can never get OTA updates.",
+  );
 }
 
 const config: ExpoConfig = {

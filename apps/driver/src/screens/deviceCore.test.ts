@@ -85,7 +85,11 @@ describe("resume", () => {
     expect((await store.deviceConfig())?.killed).toBe(false);
     expect((await store.state()).resumePending).toBe(true);
     expect(syncNow).toHaveBeenCalledTimes(1);
-    const sync: SyncState = { ...initialSyncState(ORIGIN), token: "tok", resumePending: (await store.state()).resumePending };
+    const sync: SyncState = {
+      ...initialSyncState(ORIGIN),
+      token: "tok",
+      resumePending: (await store.state()).resumePending,
+    };
     const req = buildSyncRequest(sync, {} as never, [], NOW);
     expect(req.resume).toBe(true);
   });
@@ -127,7 +131,10 @@ describe("load", () => {
   it("reads the sync clock offset and last sync, defaulting to none", async () => {
     const { dev, files } = setup();
     expect((await dev.load()).sync).toMatchObject({ clockOffsetMs: 0, lastSyncAt: null });
-    await files.set("sync-state", JSON.stringify({ ...initialSyncState(ORIGIN), clockOffsetMs: 90_000, lastSyncAt: NOW }));
+    await files.set(
+      "sync-state",
+      JSON.stringify({ ...initialSyncState(ORIGIN), clockOffsetMs: 90_000, lastSyncAt: NOW }),
+    );
     expect((await dev.load()).sync).toMatchObject({ clockOffsetMs: 90_000, lastSyncAt: NOW });
   });
 });
