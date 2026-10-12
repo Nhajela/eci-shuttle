@@ -23,10 +23,18 @@ export const MORE: NavItem[] = [
   { href: "/admin/workspaces", label: "Workspaces" },
 ];
 
-/** Mirrors lib/session.requireAdmin: `?w=` when it's one of mine, else the server's choice (cookie → live → first). */
+/**
+ * Mirrors lib/session.requireAdmin (`w ?? cookie` → resolveWorkspace): `?w=` when it's one of mine; an unknown `?w=`
+ * → live → first (never the cookie, or the header could say TEST while the page writes live); no `?w=` → the
+ * server-resolved cookie workspace (`fallbackSlug`).
+ */
 export function pickWorkspace(list: ShellWorkspace[], w: string | null, fallbackSlug: string): ShellWorkspace | null {
-  return list.find((x) => x.slug === w) ?? list.find((x) => x.slug === fallbackSlug) ?? list[0] ?? null;
+  const slug = w ?? fallbackSlug;
+  return list.find((x) => x.slug === slug) ?? list.find((x) => x.isLive) ?? list[0] ?? null;
 }
+
+/** For a page form's Save bar (SPEC §7 sticky Save): sticks above the phone tab bar, at the bottom on desktop. */
+export const STICKY_SAVE = "sticky bottom-[var(--admin-tabbar)] z-30";
 
 export function withWorkspace(href: string, slug: string): string {
   return `${href}?w=${encodeURIComponent(slug)}`;

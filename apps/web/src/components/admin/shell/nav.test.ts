@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { isActive, MORE, pickWorkspace, type ShellWorkspace, safeAdminPath, TABS, withWorkspace } from "./nav";
+import {
+  isActive,
+  MORE,
+  pickWorkspace,
+  type ShellWorkspace,
+  STICKY_SAVE,
+  safeAdminPath,
+  TABS,
+  withWorkspace,
+} from "./nav";
 
 const ws = (slug: string, isLive = false): ShellWorkspace => ({ slug, name: slug.toUpperCase(), isLive, role: "ops" });
 const list = [ws("eci", true), ws("test")];
@@ -21,8 +30,9 @@ describe("pickWorkspace", () => {
   it("?w= wins when the person is a member", () => {
     expect(pickWorkspace(list, "test", "eci")?.slug).toBe("test");
   });
-  it("unknown ?w= falls back to the server-resolved workspace", () => {
-    expect(pickWorkspace(list, "other", "test")?.slug).toBe("test");
+  it("unknown ?w= falls back to live, like requireAdmin, never to the cookie workspace", () => {
+    expect(pickWorkspace(list, "other", "test")?.slug).toBe("eci");
+    expect(pickWorkspace([ws("a"), ws("b")], "other", "b")?.slug).toBe("a");
   });
   it("no ?w= uses the fallback, then the first", () => {
     expect(pickWorkspace(list, null, "test")?.slug).toBe("test");
@@ -30,6 +40,12 @@ describe("pickWorkspace", () => {
   });
   it("empty list → null", () => {
     expect(pickWorkspace([], "eci", "eci")).toBeNull();
+  });
+});
+
+describe("STICKY_SAVE", () => {
+  it("sits above the phone tab bar", () => {
+    expect(STICKY_SAVE).toContain("bottom-[var(--admin-tabbar)]");
   });
 });
 
