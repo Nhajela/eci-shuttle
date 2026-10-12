@@ -98,6 +98,30 @@ describe("describeAudit", () => {
     ).toBe("watchdog nudged a phone");
   });
 
+  it("shows timestamps in IST and null as none", () => {
+    const upd = (before: Record<string, unknown>, after: Record<string, unknown>) =>
+      describeAudit(row({ action: "notice.update", entity: "notice", before, after }));
+    expect(upd({ endsAt: "2026-10-12T05:15:00.000Z" }, { endsAt: "2026-10-12T06:00:00.000Z" })).toBe(
+      "Asha changed notice: endsAt Mon 12 Oct, 10:45 → Mon 12 Oct, 11:30",
+    );
+    expect(upd({ endsAt: null }, { endsAt: "2026-10-12T06:00:00.000Z" })).toBe(
+      "Asha changed notice: endsAt none → Mon 12 Oct, 11:30",
+    );
+  });
+
+  it("never prints secrets in the change list", () => {
+    expect(
+      describeAudit(
+        row({
+          action: "device.update",
+          entity: "device",
+          before: { pushToken: "ExpoA" },
+          after: { pushToken: "ExpoB" },
+        }),
+      ),
+    ).toBe("Asha changed device");
+  });
+
   it("falls back to '<actor> <action> <entity>' for unknown actions", () => {
     expect(describeAudit(row({ action: "widget.frob", entity: "widget" }))).toBe("Asha widget.frob widget");
   });

@@ -2,6 +2,7 @@
  * svc-activity: reads of the one audit_log (SPEC §7 Activity, §7a). Admin Activity page, each object's timeline
  * and MCP shuttle_activity all read through here. Never writes.
  */
+import { formatIst } from "@eci-shuttle/shared";
 import { and, desc, eq, gte, lt, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
@@ -52,10 +53,20 @@ export async function listActivity(db: Db, actor: Actor, input: z.input<typeof A
     .limit(q.limit + 1);
   const more = rows.length > q.limit;
   if (more) rows.pop();
-  return { rows, nextBefore: more ? rows[rows.length - 1].id : null };
+  return {
+    rows: rows.map((r) => ({ ...r, before: hide(r.before), after: hide(r.after) })),
+    nextBefore: more ? rows[rows.length - 1].id : null,
+  };
 }
 
 type Diff = Record<string, unknown> | null;
+
+/** Diff keys no reader may see: a live pairing code pairs a phone; push tokens and hashes are credentials. */
+const SECRET = new Set(["pushToken", "tokenHash", "code", "token"]);
+
+// ponytail: top-level keys only; nested objects in a diff are not scanned
+const hide = (d: Diff): Diff =>
+  d && Object.fromEntries(Object.entries(d).map(([k, v]) => [k, SECRET.has(k) ? "[hidden]" : v]));
 
 const CHANNEL: Record<string, string> = { mcp: "MCP", telegram: "Telegram" };
 
@@ -90,10 +101,17 @@ const named = (row: AuditRow): string => {
   return typeof n === "string" ? ` '${n}'` : "";
 };
 
+/** IST for ISO timestamps, "none" for null. */
+const show = (v: unknown): string => {
+  if (v == null) return "none";
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) return formatIst(new Date(v));
+  return JSON.stringify(v);
+};
+
 const changes = (row: AuditRow): string => {
   const parts = Object.keys(row.after ?? {})
-    .filter((k) => k !== "version")
-    .map((k) => `${k} ${JSON.stringify(row.before?.[k] ?? null)} → ${JSON.stringify(row.after?.[k] ?? null)}`);
+    .filter((k) => k !== "version" && !SECRET.has(k))
+    .map((k) => `${k} ${show(row.before?.[k])} → ${show(row.after?.[k])}`);
   return parts.length ? `: ${parts.join(", ")}` : "";
 };
 

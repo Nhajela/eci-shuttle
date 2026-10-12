@@ -74,6 +74,29 @@ describe("listActivity", () => {
     expect(p2.nextBefore).toBeNull();
   });
 
+  it("hides pairing codes, push tokens and token hashes from every reader", async () => {
+    const ws = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id, "viewer");
+    await audit(ws.id, {
+      action: "pairing_code.create",
+      entity: "pairing_code",
+      entityId: "pc1",
+      after: { code: "123456", workspaceId: ws.id },
+    });
+    await audit(ws.id, {
+      action: "device.pair",
+      entity: "device",
+      entityId: "d1",
+      after: { id: "d1", pushToken: "ExponentPushToken[abc]", tokenHash: "h" },
+    });
+    const page = await listActivity(db(), actor, { workspaceId: ws.id });
+    const text = JSON.stringify(page.rows);
+    expect(text).not.toContain("ExponentPushToken[abc]");
+    expect(text).not.toContain("123456");
+    expect(page.rows.map((r) => r.after?.pushToken ?? r.after?.code)).toEqual(["[hidden]", "[hidden]"]);
+    expect(page.rows[0].after).toMatchObject({ id: "d1", tokenHash: "[hidden]" });
+  });
+
   it("refuses non-members and bad input", async () => {
     const ws = await makeWorkspace(db());
     const other = await makeWorkspace(db());
