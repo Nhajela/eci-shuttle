@@ -33,9 +33,17 @@ describe("overlapWarnings", () => {
     expect(overlapWarnings({ id: "riva", lat: riva.lat, lng: riva.lng, radiusM: 75 }, [riva, archived])).toEqual([]);
   });
 
-  it("only warns when the centres are closer than the sum of the radii", () => {
-    const d = distanceM(riva, circle);
-    expect(overlapWarnings({ lat: riva.lat, lng: riva.lng, radiusM: Math.floor(d) - 75 }, [circle])).toEqual([]);
-    expect(overlapWarnings({ lat: riva.lat, lng: riva.lng, radiusM: Math.ceil(d) - 74 }, [circle])).toHaveLength(1);
+  it("warns about overlap when the centres are closer than the sum of the radii", () => {
+    const d = distanceM(riva, circle); // ~1.4 km; small radii keep the exit-hysteresis rule out of play
+    expect(overlapWarnings({ lat: riva.lat, lng: riva.lng, radiusM: Math.ceil(d) - 74 }, [circle])[0]).toMatch(/Overlaps Circle/);
+  });
+
+  it("warns when a shuttle at one spot would never leave the other (exit radius x 1.5)", () => {
+    const at110m = { lat: riva.lat + 110 / 111_195, lng: riva.lng, radiusM: 30 }; // circles apart: 105 < 110
+    const w = overlapWarnings(at110m, [riva]);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/Too close to Riva \(110 m\)/);
+    const at115m = { ...at110m, lat: riva.lat + 115 / 111_195 }; // beyond 75 x 1.5 = 112.5 m
+    expect(overlapWarnings(at115m, [riva])).toEqual([]);
   });
 });

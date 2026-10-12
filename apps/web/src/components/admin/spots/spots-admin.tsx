@@ -1,7 +1,7 @@
 "use client";
 /** admin-spots (SPEC §7 Spots): list + map of spots, and the editor (pin by tap or "use my location", radius, archive). */
 import type { LatLng } from "@eci-shuttle/shared";
-import { formatIst } from "@eci-shuttle/shared";
+import { formatIst, GEOFENCE_DWELL_S } from "@eci-shuttle/shared";
 import { LocateFixedIcon, PlusIcon, TriangleAlertIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
@@ -257,7 +257,7 @@ function SpotEditor({
               />
             </div>
             <p className="text-sm text-muted-foreground">
-              A shuttle inside this circle for 20 s counts as at the spot.
+              A shuttle inside this circle for {GEOFENCE_DWELL_S} s counts as at the spot.
             </p>
           </div>
           {warnings.length > 0 && (
