@@ -1,0 +1,38 @@
+{
+  "name": "@eci-shuttle/driver",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "doctor": "expo-doctor"
+  },
+  "dependencies": {
+    "@eci-shuttle/shared": "workspace:*",
+    "expo": "57.0.28",
+    "expo-camera": "~57.0.6",
+    "expo-constants": "~57.0.21",
+    "expo-dev-client": "~57.0.20",
+    "expo-device": "~57.0.2",
+    "expo-linking": "~57.0.12",
+    "expo-location": "~57.0.21",
+    "expo-notifications": "~57.0.22",
+    "expo-router": "~57.0.26",
+    "expo-secure-store": "~57.0.4",
+    "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.21",
+    "expo-updates": "~57.0.26",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.18",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.4"
+  }
+}
