@@ -38,9 +38,21 @@ type) and report the needed change in your task result (`contractRequests`). The
 
 ### Audit
 One `audit_log` row per mutation (`mutate`). `action` is a dotted verb (`spot.create`, `phone.kill`,
-`subscription.create`, `session.login`, `mcp_token.revoke` …). Not audited: derived data (pings, vehicle_state,
+`subscription.create`, `subscription.cancel`, `subscription.cancel_all` (entityId null, before/after = count),
+`session.login`, `mcp_token.revoke`, `suggestion.dismiss`, `learning.exclude` …). Not audited: derived data (pings, vehicle_state,
 dwells, trips, matches, stats), and worker bookkeeping (`notices.sent_at`, `subscriptions.fired_at/cancelled_at`
 on expiry, outbox status, `mcp_tokens.last_used_at`, heartbeat, login/pairing/proposal code lifecycle).
+
+### Settled at integration (wave 2)
+- Device tokens: `devices.token_hash` = lowercase hex sha256 of the raw token (`devices/sync.authenticateDevice`).
+- MCP tokens: personal `shs_…`, OAuth-issued `sho_…`; `listTokens`/`revokeToken` return `PublicToken`
+  (`McpToken` without `tokenHash`). Admin pages use `PublicToken`.
+- `catalog/schedule.assignServiceVehicle`: the same vehicle twice on the same service with overlapping times is
+  `CONFLICT`; overlaps across services are allowed (a party run).
+- `catalog/workspaces.listAllWorkspaces(db)`: system read for worker jobs (no actor).
+- `learning.loadEstimates(db, input, now, hour?)`: optional IST hour bucket (default: the current hour).
+- `bot/callbacks`: `arrive:<spotId>[:<leadMin>]`.
+- Shared barrels also export `headwaysFromDepartures`, `applyDirectives`, `VehicleDirective`, `notificationText`.
 
 ### Actors (`services/kernel/actor.ts`, built by adapters only)
 | Adapter | Builds |
@@ -86,6 +98,7 @@ Inline buttons: `bot/callbacks.encodeCallback` (≤ 64 bytes, actions listed in 
 | `GET /api/status?w=<slug>` | web-public | `PublicStatus`, `Cache-Control: s-maxage=5` |
 | `/admin/<page>?w=<slug>` | admin-* | pages: live, phones, vehicles, people, workspaces, spots, routes, schedule, notices, insights, activity; `/admin` → `/admin/live` |
 | `/login`, `/login/magic?code=` | web-auth | Telegram login, magic link "Continue as …" |
+| `/login/denied` | web-auth | logged in, but no membership or the role is too low |
 | `/api/auth/*` | web-auth | start, poll, magic (POST), logout: route shapes are the owner's |
 | `POST /api/telegram` | web-bot | webhook, `X-Telegram-Bot-Api-Secret-Token` |
 | `/api/mcp` | web-mcp | streamable HTTP, stateless |
@@ -94,7 +107,8 @@ Inline buttons: `bot/callbacks.encodeCallback` (≤ 64 bytes, actions listed in 
 | `POST /api/device/sync`, `POST /api/device/pair` | web-device | device protocol (SPEC §4) |
 | `GET /api/health` | contracts | 200 iff DB ok and a worker beat < 3 min ago |
 
-Cookies: `shuttle_session` (signed, 60 days, `auth/session`), `shuttle_ws` (admin workspace choice). Admin
+Cookies: `shuttle_session` (signed, 60 days, `auth/session`), `shuttle_ws` (admin workspace choice),
+`shuttle_login` (the pending Telegram deep-link code, httpOnly, 10 min). Admin
 workspace resolution: `?w=` → cookie → live → first membership (`auth/actor.resolveWorkspace`).
 
 ### Tests
@@ -141,13 +155,15 @@ Paths: `S` = `apps/web/src/services`, `A` = `apps/web/src/app`, `C` = `apps/web/
 | svc-insights | `S/learning/insights.ts` |
 | svc-notices | `S/notices/*` |
 | svc-public | `S/public/*` |
-| svc-activity | `S/activity/*` |
-| svc-auth | `S/auth/*` |
-| svc-mcp | `S/mcp/*` |
-| svc-bot | `S/bot/{types,handle,start,callbacks,deliver}.ts` |
-| svc-bot-commands | `S/bot/attendee.ts`, `S/bot/admin.ts` |
-| svc-subscriptions | `S/subscriptions/*` |
-| svc-alerts | `S/alerts/*` |
+| activity | `S/activity/*` |
+| auth-login | `S/auth/{actor,codes,session}.ts` |
+| mcp-core | `S/auth/{seal,oauth}.ts`, `S/mcp/tokens.ts` |
+| mcp-propose | `S/mcp/proposals.ts` |
+| svc-mcp (**not built yet**) | `S/mcp/changes.ts` |
+| svc-bot (**not built yet**; `callbacks` encode/decode done at integration) | `S/bot/{types,handle,start,callbacks,deliver}.ts` |
+| bot-admin | `S/bot/admin.ts` |
+| bot-attendee | `S/bot/attendee.ts`, `S/subscriptions/*` |
+| alerts | `S/alerts/*` |
 | job-windows | `W/jobs/windows.ts` |
 | job-queue | `W/jobs/queue.ts` |
 | job-learning | `W/jobs/learning.ts` |
