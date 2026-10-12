@@ -35,7 +35,6 @@ vi.mock("@/services/devices/phones", () => ({
 }));
 vi.mock("@/services/ingest/ingest", () => ({ vehicleStates: vi.fn() }));
 vi.mock("@/services/notices/notices", () => ({ createNotice: vi.fn(), listNotices: vi.fn() }));
-vi.mock("./callbacks", () => ({ encodeCallback: (cb: Callback) => [cb.action, ...cb.args].join(":") }));
 
 const db = () => testDb();
 /** Mon 12 Oct 2026, 10:00 IST */

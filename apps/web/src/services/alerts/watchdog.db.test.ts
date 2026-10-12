@@ -28,9 +28,6 @@ vi.mock("@eci-shuttle/shared", async (orig) => ({
   },
 }));
 vi.mock("@/services/ingest/ingest", () => ({ refreshPhases: vi.fn(async () => []) }));
-vi.mock("@/services/bot/callbacks", () => ({
-  encodeCallback: ({ action, args }: { action: string; args: string[] }) => [action, ...args].join(":"),
-}));
 
 const db = () => testDb();
 const NOW = new Date(istToEpoch("2026-10-12", "09:40"));

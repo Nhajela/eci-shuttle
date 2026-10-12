@@ -10,7 +10,7 @@ import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 export const CallbackAction = z.enum([
   // attendee (bot/attendee)
   "spot", // spot:<spotId>               show that spot's answer
-  "arrive", // arrive:<spotId>           tell me when it's close
+  "arrive", // arrive:<spotId>[:<leadMin>] tell me when it's close (5 / 10 min buttons pass leadMin)
   "nsub", // nsub:<spotId|all>           notices for a spot / all
   "nunsub", // nunsub:<subscriptionId|all>
   // admin (bot/admin)
@@ -28,12 +28,17 @@ export type Callback = { action: CallbackAction; args: string[] };
 
 /** Pure. Throws Error when the result exceeds 64 bytes or an arg contains ":". */
 export function encodeCallback(cb: Callback): string {
-  return notImplemented(cb);
+  if (cb.args.some((a) => a.includes(":"))) throw new Error(`callback arg contains ":": ${cb.action}`);
+  const data = [cb.action, ...cb.args].join(":");
+  if (Buffer.byteLength(data) > 64) throw new Error(`callback data over 64 bytes: ${data}`);
+  return data;
 }
 
 /** Pure. null for anything that isn't a known action. */
 export function decodeCallback(data: string | undefined): Callback | null {
-  return notImplemented(data);
+  const [action, ...args] = (data ?? "").split(":");
+  const known = CallbackAction.safeParse(action);
+  return known.success ? { action: known.data, args } : null;
 }
 
 /**

@@ -12,9 +12,6 @@ import type { BotContext } from "./types";
 
 vi.mock("../public/status", () => ({ publicStatus: vi.fn(), spotAnswer: vi.fn() }));
 vi.mock("../auth/actor", () => ({ attendeeActor: vi.fn() }));
-vi.mock("./callbacks", () => ({
-  encodeCallback: (cb: { action: string; args: string[] }) => [cb.action, ...cb.args].join(":"),
-}));
 
 const db = () => testDb();
 const NOW = new Date("2026-10-12T04:10:00Z");
