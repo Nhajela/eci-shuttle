@@ -1,5 +1,4 @@
-import type { Fix, GeofenceSpot, GeofenceState, GeofenceStepResult } from "../contracts";
-import { notImplemented } from "../notImplemented";
+import type { Fix, GeofenceEvent, GeofenceSpot, GeofenceState, GeofenceStepResult } from "../contracts";
 
 /** Seconds a vehicle must stay inside a spot's radius before it counts as arrived. */
 export const GEOFENCE_DWELL_S = 20;
@@ -22,5 +21,51 @@ export const GEOFENCE_MAX_ACCURACY_M = 100;
  * - A spot missing from `spots` (archived) while inside → `departed` at fix.at.
  */
 export function geofenceStep(state: GeofenceState, fix: Fix, spots: GeofenceSpot[]): GeofenceStepResult {
-  return notImplemented(state, fix, spots);
+  if (fix.accuracy > GEOFENCE_MAX_ACCURACY_M) return { state, events: [] };
+  if (state.lastFixAt !== null && fix.at <= state.lastFixAt) return { state, events: [] };
+
+  const events: GeofenceEvent[] = [];
+  const next: GeofenceState = { ...state, lastFixAt: fix.at };
+
+  if (next.insideSpotId !== null) {
+    const spot = spots.find((s) => s.id === next.insideSpotId);
+    if (spot && haversineM(fix, spot) <= spot.radiusM * GEOFENCE_EXIT_FACTOR) return { state: next, events };
+    events.push({ kind: "departed", spotId: next.insideSpotId, at: fix.at });
+    next.insideSpotId = null;
+    next.enteredAt = null;
+  }
+
+  let nearest: GeofenceSpot | null = null;
+  let nearestM = Number.POSITIVE_INFINITY;
+  for (const spot of spots) {
+    const d = haversineM(fix, spot);
+    if (d <= spot.radiusM && d < nearestM) {
+      nearest = spot;
+      nearestM = d;
+    }
+  }
+
+  if (!nearest) {
+    next.candidateSpotId = null;
+    next.candidateSince = null;
+  } else if (nearest.id !== next.candidateSpotId || next.candidateSince === null) {
+    next.candidateSpotId = nearest.id;
+    next.candidateSince = fix.at;
+  } else if (fix.at - next.candidateSince >= GEOFENCE_DWELL_S * 1000) {
+    events.push({ kind: "arrived", spotId: nearest.id, at: next.candidateSince });
+    next.insideSpotId = nearest.id;
+    next.enteredAt = next.candidateSince;
+    next.candidateSpotId = null;
+    next.candidateSince = null;
+  }
+  return { state: next, events };
+}
+
+// ponytail: local haversine because path.distanceM is still a stub owned by another task; switch to it once it lands.
+function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad;
+  const dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
 }
