@@ -2,7 +2,7 @@
 // allowed_updates [message, callback_query, my_chat_member], and setMyCommands. Run after every host move.
 import { pathToFileURL } from "node:url";
 
-/** The menu everyone sees. Admin commands (/status /today /notice /silence) stay unlisted: ops know them. */
+/** The menu in private chats (never the group). Admin commands (/status /today /notice /silence) stay unlisted: ops know them. */
 export const COMMANDS = [
   { command: "shuttle", description: "Where is the shuttle? Pick your spot" },
   { command: "stop", description: "Stop all my shuttle alerts" },
@@ -31,7 +31,9 @@ export async function setupBot({ token, origin, secret, fetchImpl = fetch }) {
     secret_token: secret,
     allowed_updates: ["message", "callback_query", "my_chat_member"],
   });
-  await call("setMyCommands", { commands: COMMANDS });
+  // private chats only: /login in the main group would post a login link everyone can see
+  await call("deleteMyCommands", {}); // clears a menu an older setup left on the default (group) scope
+  await call("setMyCommands", { commands: COMMANDS, scope: { type: "all_private_chats" } });
   return url;
 }
 

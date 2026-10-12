@@ -16,12 +16,13 @@ const fakeTelegram = (fail?: string) => {
 const opts = { token: "123:abc", origin: "https://eci-shuttle.example.com", secret: "s".repeat(32) };
 
 describe("setupBot", () => {
-  it("points the webhook at <origin>/api/telegram with the secret and the three update kinds, then sets commands", async () => {
+  it("points the webhook at <origin>/api/telegram with the secret and the three update kinds, then sets commands for private chats only", async () => {
     const t = fakeTelegram();
     const url = await setupBot({ ...opts, fetchImpl: t.fetchImpl });
     expect(url).toBe("https://eci-shuttle.example.com/api/telegram");
     expect(t.calls.map((c) => c.url)).toEqual([
       "https://api.telegram.org/bot123:abc/setWebhook",
+      "https://api.telegram.org/bot123:abc/deleteMyCommands",
       "https://api.telegram.org/bot123:abc/setMyCommands",
     ]);
     expect(t.calls[0]?.body).toEqual({
@@ -29,7 +30,8 @@ describe("setupBot", () => {
       secret_token: opts.secret,
       allowed_updates: ["message", "callback_query", "my_chat_member"],
     });
-    expect(t.calls[1]?.body).toEqual({ commands: COMMANDS });
+    expect(t.calls[1]?.body).toEqual({}); // default scope: drops any old group menu
+    expect(t.calls[2]?.body).toEqual({ commands: COMMANDS, scope: { type: "all_private_chats" } });
   });
 
   it("tolerates a trailing slash on the origin", async () => {
