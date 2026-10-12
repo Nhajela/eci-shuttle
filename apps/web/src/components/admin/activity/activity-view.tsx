@@ -40,12 +40,16 @@ export function ActivityView({
         {filters.w && <input type="hidden" name="w" value={filters.w} />}
         {filters.actor && <input type="hidden" name="actor" value={filters.actor} />}
         {filters.proposal && <input type="hidden" name="proposal" value={filters.proposal} />}
+        {/* on an object timeline the entity is locked; the "One object" chip is the way out */}
+        {filters.entityId && <input type="hidden" name="entityId" value={filters.entityId} />}
+        {filters.entityId && filters.entity && <input type="hidden" name="entity" value={filters.entity} />}
         <div className="grid gap-1.5">
           <Label htmlFor="activity-entity">What</Label>
           <select
             id="activity-entity"
             name="entity"
             defaultValue={filters.entity ?? ""}
+            disabled={!!filters.entityId}
             className="h-11 w-full rounded-(--radius-field) border border-input bg-background px-3 text-base"
           >
             <option value="">Everything</option>

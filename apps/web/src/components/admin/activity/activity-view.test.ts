@@ -56,6 +56,24 @@ describe("ActivityView", () => {
     expect(html).not.toContain(">Older<");
   });
 
+  it("keeps the object timeline when the filter form is sent", () => {
+    const html = render({
+      page: { rows: [], nextBefore: null },
+      filters: { w: "live", entity: "spot", entityId: "s1" },
+      paged: false,
+    });
+    expect(html).toContain('<input type="hidden" name="entityId" value="s1"/>');
+    // the select is locked, so a changed entity can't pair with a stale entityId
+    expect(html).toContain('<input type="hidden" name="entity" value="spot"/>');
+    expect(html).toMatch(/<select[^>]*disabled=""/);
+  });
+
+  it("leaves the entity select open without an object", () => {
+    const html = render({ page: { rows: [], nextBefore: null }, filters: { entity: "spot" }, paged: false });
+    expect(html).not.toContain('name="entityId"');
+    expect(html).not.toMatch(/<select[^>]*disabled/);
+  });
+
   it("says so when nothing matches", () => {
     expect(render({ page: { rows: [], nextBefore: null }, filters: {}, paged: false })).toContain(
       "Nothing changed yet with these filters.",
