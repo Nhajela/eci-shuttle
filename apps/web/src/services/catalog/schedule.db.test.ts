@@ -9,29 +9,6 @@ import type { Actor } from "../kernel";
 const bump = vi.hoisted(() => vi.fn(async () => [] as string[]));
 vi.mock("@/services/devices/config", () => ({ bumpConfigs: bump }));
 
-// ponytail: falls back to a "times"-only fake while sched-departures is unmerged; drop once it lands on main.
-vi.mock("@eci-shuttle/shared", async (orig) => {
-  const real = await orig<typeof import("@eci-shuttle/shared")>();
-  return {
-    ...real,
-    expandServiceDepartures: (s: Parameters<typeof real.expandServiceDepartures>[0], ex: never[], date: string) => {
-      try {
-        return real.expandServiceDepartures(s, ex, date);
-      } catch {
-        if (s.pattern.kind !== "times") return [];
-        return s.pattern.times.map((t) => ({
-          serviceId: s.id,
-          date,
-          at: Date.parse(`${date}T${t}:00+05:30`),
-          planned: t,
-          shiftedMin: 0,
-          added: false,
-        }));
-      }
-    },
-  };
-});
-
 const {
   addException,
   assignServiceVehicle,
@@ -226,6 +203,31 @@ describe("exceptions", () => {
     const input = { workspaceId: ws.id, serviceId: s.id, date: "2026-10-14", type: "cancel_day" as const };
     await addException(db(), actor, input);
     await expect(addException(db(), actor, input)).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("refuses a second cancel_day even when it carries a departure (CONFLICT, not a DB error)", async () => {
+    const { ws, actor, s } = await svc();
+    const input = { workspaceId: ws.id, serviceId: s.id, date: "2026-10-14", type: "cancel_day" as const };
+    await addException(db(), actor, input);
+    await expect(addException(db(), actor, { ...input, departure: "08:00" })).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("accepts cancelling a departure of an every-N-min service", async () => {
+    const { ws, actor, route } = await setup();
+    const s = await createService(db(), actor, {
+      ...base(ws.id, route.id),
+      endTime: "09:00",
+      pattern: { kind: "every" as const, everyMin: 20 },
+    });
+    const input = { workspaceId: ws.id, serviceId: s.id, date: "2026-10-14" };
+    await addException(db(), actor, { ...input, type: "cancel_departure", departure: "08:20" });
+    await expect(
+      addException(db(), actor, { ...input, type: "cancel_departure", departure: "08:10" }),
+    ).rejects.toMatchObject({ code: "INVALID" });
+    const [day] = await getSchedule(db(), actor, { workspaceId: ws.id, from: "2026-10-14", days: 1 });
+    expect(day.services[0].departures.map((d) => d.planned)).toEqual(["08:00", "08:40"]);
   });
 
   it("adds a departure outside the pattern", async () => {
