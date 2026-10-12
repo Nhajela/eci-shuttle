@@ -1,10 +1,10 @@
 /** svc-devices: pairing codes and pairing (SPEC §4 pair, §5 first run, §7 Phones). */
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { PairingCodeCreateFields, PairRequest, type PairResponse, withWorkspace } from "@eci-shuttle/shared";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
-import { devices, pairingCodes } from "@/db/schema";
+import { auditLog, devices, pairingCodes } from "@/db/schema";
 import { origin } from "@/lib/env";
 import { type Actor, mutate, parseInput, requireRole, ServiceError } from "../kernel";
 import { desiredConfig } from "./config";
@@ -59,18 +59,50 @@ export async function createPairingCode(
   });
 }
 
+/** Failed pairs (any code, any workspace) allowed per 10 min before every pair is refused. */
+export const MAX_FAILED_PAIRS = 20;
+
+const noSuchCode = () =>
+  new ServiceError(
+    "NOT_FOUND",
+    "That pairing code doesn't work: it's wrong, used or expired. Make a new one in admin.",
+  );
+
 /**
  * POST /api/device/pair (no actor yet: the code is the credential). Swaps an unused, unexpired code for a new
  * device in the code's workspace: random 32-byte token, stored as sha256; label from the code's label or the
- * model. Used/expired → GONE; unknown → NOT_FOUND. Marks the code used. Audited device.pair with the device as
- * actor. Returns the token once, plus the initial config. `now` for expiry.
+ * model. Unknown, used and expired all → the same NOT_FOUND, audited device.pair_failed (no workspace), and
+ * after MAX_FAILED_PAIRS of those in 10 min every pair → RATE_LIMITED, so 6-digit codes can't be enumerated.
+ * Marks the code used. Audited device.pair with the device as actor. Returns the token once, plus the initial
+ * config. `now` for expiry; the throttle window is DB time, like audit_log.at.
  */
 export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise<PairResponse> {
   const req = parseInput(PairRequest, input);
+  // ponytail: global cap, so a flood also blocks honest pairing for 10 min; the route should add a per-IP limit
+  const [{ misses }] = await db
+    .select({ misses: count() })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entity, "pairing_code"),
+        eq(auditLog.action, "device.pair_failed"),
+        gt(auditLog.at, sql`now() - interval '10 minutes'`),
+      ),
+    );
+  if (misses >= MAX_FAILED_PAIRS)
+    throw new ServiceError("RATE_LIMITED", "Too many wrong pairing codes. Wait 10 minutes, then try again.");
+
   const [code] = await db.select().from(pairingCodes).where(eq(pairingCodes.code, req.code));
-  if (!code) throw new ServiceError("NOT_FOUND", "That pairing code doesn't exist. Check the digits.");
-  const gone = () => new ServiceError("GONE", "That pairing code was used or has expired. Make a new one in admin.");
-  if (code.usedAt || code.expiresAt <= now) throw gone();
+  if (!code || code.usedAt || code.expiresAt <= now) {
+    const unpaired: Actor = { kind: "device", id: "unpaired", channel: "device", label: req.model };
+    await mutate(
+      db,
+      unpaired,
+      { action: "device.pair_failed", entity: "pairing_code", entityId: req.code, workspaceId: null },
+      async () => ({ before: null, after: null, result: null }),
+    );
+    throw noSuchCode();
+  }
 
   const deviceId = randomUUID();
   const token = randomBytes(32).toString("base64url");
@@ -88,7 +120,7 @@ export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise
         .set({ usedAt: now })
         .where(and(eq(pairingCodes.code, code.code), isNull(pairingCodes.usedAt), gt(pairingCodes.expiresAt, now)))
         .returning();
-      if (!claimed) throw gone();
+      if (!claimed) throw noSuchCode();
       const [device] = await tx
         .insert(devices)
         .values({

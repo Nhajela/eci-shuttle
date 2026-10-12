@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { auditLog, devices, pairingCodes } from "@/db/schema";
 import { systemActor } from "../kernel";
-import { createPairingCode, PAIRING_CODE_TTL_MS, pairDevice } from "./pairing";
+import { createPairingCode, MAX_FAILED_PAIRS, PAIRING_CODE_TTL_MS, pairDevice } from "./pairing";
 
 // desiredConfig belongs to svc-config; pairing only passes its answer through.
 vi.mock("./config", () => ({
@@ -94,19 +94,28 @@ describe("pairDevice", () => {
     expect(d.label).toBe("Redmi Note 12");
   });
 
-  it("used or expired → GONE, unknown → NOT_FOUND", async () => {
+  it("unknown, used and expired fail identically (a probe learns nothing); each miss is audited", async () => {
     const ws = await makeWorkspace(db());
     const used = await createPairingCode(db(), systemActor("test"), { workspaceId: ws.id }, NOW);
     await pairDevice(db(), pairReq(used.code), NOW);
-    await expect(pairDevice(db(), pairReq(used.code), NOW)).rejects.toMatchObject({ code: "GONE" });
-
     const old = await createPairingCode(db(), systemActor("test"), { workspaceId: ws.id }, NOW);
-    await expect(pairDevice(db(), pairReq(old.code), later(PAIRING_CODE_TTL_MS))).rejects.toMatchObject({
-      code: "GONE",
-    });
-
-    // never generated: codes are digits only
-    await expect(pairDevice(db(), pairReq("nope42"), NOW)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    const fail = (p: Promise<unknown>) =>
+      p.then(
+        () => null,
+        (e) => ({ code: e.code, message: e.message }),
+      );
+    const fails = [
+      await fail(pairDevice(db(), pairReq(used.code), NOW)),
+      await fail(pairDevice(db(), pairReq(old.code), later(PAIRING_CODE_TTL_MS))),
+      // never generated: codes are digits only
+      await fail(pairDevice(db(), pairReq("nope42"), NOW)),
+    ];
+    expect(fails[0]?.code).toBe("NOT_FOUND");
+    expect(fails[1]).toEqual(fails[0]);
+    expect(fails[2]).toEqual(fails[0]);
+    const misses = await db().select().from(auditLog).where(eq(auditLog.action, "device.pair_failed"));
+    expect(misses.map((m) => m.entityId)).toEqual(expect.arrayContaining([used.code, old.code, "nope42"]));
+    expect(misses[0]).toMatchObject({ workspaceId: null, actorKind: "device", channel: "device" });
   });
 
   it("two phones racing for one code: exactly one pairs", async () => {
@@ -117,7 +126,16 @@ describe("pairDevice", () => {
       pairDevice(db(), pairReq(c.code), NOW),
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(results.find((r) => r.status === "rejected")).toMatchObject({ reason: { code: "GONE" } });
+    expect(results.find((r) => r.status === "rejected")).toMatchObject({ reason: { code: "NOT_FOUND" } });
     expect(await db().select().from(devices).where(eq(devices.workspaceId, ws.id))).toHaveLength(1);
+  });
+
+  // last: its misses count against every later pair in this worker's DB
+  it(`after ${MAX_FAILED_PAIRS} misses in 10 min, refuses every pair (even a good code) with RATE_LIMITED`, async () => {
+    const ws = await makeWorkspace(db());
+    const good = await createPairingCode(db(), systemActor("test"), { workspaceId: ws.id }, NOW);
+    for (let i = 0; i < MAX_FAILED_PAIRS; i++) await pairDevice(db(), pairReq("000000"), NOW).catch(() => {});
+    await expect(pairDevice(db(), pairReq(good.code), NOW)).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    await expect(pairDevice(db(), pairReq("000000"), NOW)).rejects.toMatchObject({ code: "RATE_LIMITED" });
   });
 });
