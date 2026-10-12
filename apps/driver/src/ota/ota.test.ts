@@ -16,6 +16,11 @@ function setup(o: Opts = {}) {
   const updates = {
     updateId: o.running === undefined ? "u1" : o.running,
     isEmergencyLaunch: o.emergency ?? false,
+    // the channel's latest: what checkForUpdateAsync sees and fetchUpdateAsync would download
+    checkForUpdateAsync: vi.fn(async (): Promise<{ manifest?: { id: string } }> => {
+      const id = o.fetched === undefined ? "u2" : o.fetched;
+      return id ? { manifest: { id } } : {};
+    }),
     fetchUpdateAsync: vi.fn(async (): Promise<{ manifest?: { id: string } }> => {
       const id = o.fetched === undefined ? "u2" : o.fetched;
       return id ? { manifest: { id } } : {};
@@ -76,11 +81,23 @@ describe("createOta (SPEC §5: server-controlled OTA)", () => {
     expect(t.updates.reloadAsync).not.toHaveBeenCalled();
   });
 
-  it("never applies an update that isn't the target (EAS serves the channel's latest)", async () => {
+  it("never downloads an update that isn't the target (EAS serves the channel's latest), and stops asking", async () => {
     const t = setup({ fetched: "u3" });
     expect(await t.ota.reconcile("u2")).toBe("mismatch");
+    expect(await t.ota.reconcile("u2")).toBe("mismatch");
+    expect(t.updates.checkForUpdateAsync).toHaveBeenCalledOnce();
+    expect(t.updates.fetchUpdateAsync).not.toHaveBeenCalled();
     expect(t.updates.reloadAsync).not.toHaveBeenCalled();
-    expect(await setup({ fetched: null }).ota.reconcile("u2")).toBe("mismatch");
+    const none = setup({ fetched: null });
+    expect(await none.ota.reconcile("u2")).toBe("mismatch");
+    expect(none.updates.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it("still refuses to apply when the channel moved between check and download", async () => {
+    const t = setup();
+    t.updates.fetchUpdateAsync.mockResolvedValueOnce({ manifest: { id: "u3" } });
+    expect(await t.ota.reconcile("u2")).toBe("mismatch");
+    expect(t.updates.reloadAsync).not.toHaveBeenCalled();
   });
 
   it("returns error instead of throwing when the download fails, so sync keeps going", async () => {
@@ -125,6 +142,7 @@ describe("createOta (SPEC §5: server-controlled OTA)", () => {
       const t = setup({ attempted: "u2" });
       expect(await t.ota.reconcile("u2")).toBe("failed");
       expect(t.updates.fetchUpdateAsync).not.toHaveBeenCalled();
+      t.updates.checkForUpdateAsync.mockResolvedValueOnce({ manifest: { id: "u3" } });
       t.updates.fetchUpdateAsync.mockResolvedValueOnce({ manifest: { id: "u3" } });
       expect(await t.ota.reconcile("u3")).toBe("apply");
       expect(t.attempted()).toBe("u3");

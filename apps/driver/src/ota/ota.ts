@@ -5,6 +5,7 @@ import { otaStep } from "../lib/ota";
 export type UpdatesApi = {
   updateId: string | null;
   isEmergencyLaunch: boolean;
+  checkForUpdateAsync: () => Promise<{ manifest?: { id: string } }>;
   fetchUpdateAsync: () => Promise<{ manifest?: { id: string } }>;
   reloadAsync: () => Promise<void>;
 };
@@ -25,6 +26,8 @@ export function createOta({
 }) {
   let downloaded: string | null = null;
   let busy = false;
+  // a target the channel's latest didn't match; ids are immutable, so re-checking it is wasted network
+  let mismatched: string | null = null;
 
   return {
     /** Fields for the next SyncRequest. Failed = emergency launch, or the update we reloaded into isn't what runs. */
@@ -56,9 +59,15 @@ export function createOta({
             mode: getMode(),
           });
         if (step() === "download") {
+          // EAS serves only the channel's latest. Check before fetching: a stored non-target update would launch on the next cold start.
+          if (targetUpdateId === mismatched) return "mismatch";
+          if ((await updates.checkForUpdateAsync()).manifest?.id !== targetUpdateId) {
+            mismatched = targetUpdateId;
+            return "mismatch";
+          }
           downloaded = (await updates.fetchUpdateAsync()).manifest?.id ?? null;
         }
-        // ponytail: EAS fetches the channel's latest, not a chosen id; when that isn't the target we don't apply it.
+        // ponytail: the channel can still move between check and fetch; then we just don't apply what came down.
         const next = step(); // mode re-read: a window may have opened during the download
         if (next === "download") return "mismatch";
         if (next === "apply") {
