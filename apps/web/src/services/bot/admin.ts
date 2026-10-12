@@ -15,7 +15,8 @@ import {
   type NoticePlacement,
   type NoticeSeverity,
 } from "@eci-shuttle/shared";
-import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import type { Db } from "@/db";
 import { devices, directives, services } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { origin } from "@/lib/env";
@@ -64,6 +65,12 @@ const editTo = (q: TgCallbackQuery, html: string, buttons: TelegramButton[][] = 
     ? { ...toast(q, text), edit: { chatId: q.message.chat.id, messageId: q.message.message_id, html, buttons } }
     : toast(q, text);
 const expired = (q: TgCallbackQuery) => toast(q, "This button has expired.");
+/** `fn` in a transaction holding a lock on `key`: concurrent presses of one button (double tap, Telegram retry) run one after the other, so check-then-write stays idempotent. */
+const locked = <T>(ctx: BotContext, key: string, fn: (db: Db) => Promise<T>): Promise<T> =>
+  ctx.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
+    return fn(tx);
+  });
 
 /** The person's admin Actor in the workspace `slug` names (null = their live, else first, membership). */
 async function asAdmin(ctx: BotContext, slug: string | null): Promise<{ actor: Actor; ws: Workspace }> {
@@ -316,24 +323,28 @@ async function onWizard(ctx: BotContext, cb: Callback, q: TgCallbackQuery): Prom
         : d.dur === "eod"
           ? istToEpoch(istDate(ctx.now), "23:59")
           : +ctx.now + Number.parseInt(d.dur, 10) * H;
+    const { sev, ch } = d;
     // idempotent: a second press (or a Telegram retry) of the same draft finds the notice it already made
-    const dup = (await listNotices(ctx.db, actor, { workspaceId: ws.id })).some(
-      (n) =>
-        n.text === d.text &&
-        n.createdByPersonId === ctx.person.id &&
-        n.placements.length === 1 &&
-        n.placements[0] === placement &&
-        +n.createdAt > +ctx.now - 10 * 60_000,
-    );
-    if (!dup)
-      await createNotice(ctx.db, actor, {
-        workspaceId: ws.id,
-        text: d.text,
-        severity: d.sev,
-        placements: [placement],
-        channels: CH_CHANNELS[d.ch],
-        endsAt: ends == null ? null : new Date(ends).toISOString(),
-      });
+    const dup = await locked(ctx, `nw:${q.message?.chat.id}:${q.message?.message_id}`, async (db) => {
+      const found = (await listNotices(db, actor, { workspaceId: ws.id })).some(
+        (n) =>
+          n.text === d.text &&
+          n.createdByPersonId === ctx.person.id &&
+          n.placements.length === 1 &&
+          n.placements[0] === placement &&
+          +n.createdAt > +ctx.now - 10 * 60_000,
+      );
+      if (!found)
+        await createNotice(db, actor, {
+          workspaceId: ws.id,
+          text: d.text,
+          severity: sev,
+          placements: [placement],
+          channels: CH_CHANNELS[ch],
+          endsAt: ends == null ? null : new Date(ends).toISOString(),
+        });
+      return found;
+    });
     return editTo(q, renderDraft(d, "Notice posted"), [], dup ? "Already posted." : "Posted.");
   }
   return editTo(q, renderDraft(d), await wizardButtons(ctx, actor, ws, d));
@@ -366,24 +377,26 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
       return toast(q, `Nudged ${dev.label}: it will sync in a moment.`);
     case "sil1h": {
       // a repeat press while an hour-ish silence is already running changes nothing
-      const [cur] = await ctx.db
-        .select()
-        .from(directives)
-        .where(
-          and(
-            eq(directives.deviceId, dev.id),
-            eq(directives.kind, "silence_until"),
-            isNull(directives.cancelledAt),
-            lte(directives.startsAt, ctx.now),
-            gte(directives.endsAt, new Date(+ctx.now + 55 * 60_000)),
-          ),
-        )
-        .orderBy(desc(directives.endsAt))
-        .limit(1);
-      if (cur) return toast(q, `Already silenced until ${when(cur.endsAt, ctx.now)}.`);
-      const until = new Date(+ctx.now + H);
-      await silencePhone(ctx.db, actor, { ...input, until: until.toISOString() });
-      return toast(q, `Silenced ${dev.label} until ${when(until, ctx.now)}.`);
+      return locked(ctx, `sil1h:${dev.id}`, async (db) => {
+        const [cur] = await db
+          .select()
+          .from(directives)
+          .where(
+            and(
+              eq(directives.deviceId, dev.id),
+              eq(directives.kind, "silence_until"),
+              isNull(directives.cancelledAt),
+              lte(directives.startsAt, ctx.now),
+              gte(directives.endsAt, new Date(+ctx.now + 55 * 60_000)),
+            ),
+          )
+          .orderBy(desc(directives.endsAt))
+          .limit(1);
+        if (cur) return toast(q, `Already silenced until ${when(cur.endsAt, ctx.now)}.`);
+        const until = new Date(+ctx.now + H);
+        await silencePhone(db, actor, { ...input, until: until.toISOString() });
+        return toast(q, `Silenced ${dev.label} until ${when(until, ctx.now)}.`);
+      });
     }
     case "kill":
       requireRole(actor, dev.workspaceId, "admin");

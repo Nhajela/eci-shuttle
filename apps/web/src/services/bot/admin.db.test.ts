@@ -91,6 +91,18 @@ const plain = (html: string) =>
     .replace(/&amp;/g, "&");
 const datas = (buttons?: TelegramButton[][]) =>
   (buttons ?? []).flat().map((b) => ("callbackData" in b ? b.callbackData : b.url));
+/** Hold each adminActor call until `n` presses have reached it, so the presses race from the same moment. */
+function lineUp(n = 2) {
+  const real = vi.mocked(adminActor).getMockImplementation();
+  const waiting: (() => void)[] = [];
+  vi.mocked(adminActor).mockImplementation(async (...a) => {
+    await new Promise<void>((go) => {
+      waiting.push(go);
+      if (waiting.length === n) for (const g of waiting.splice(0)) g();
+    });
+    return (real as typeof adminActor)(...a);
+  });
+}
 const actorArg = (fn: unknown) => (vi.mocked(fn as () => void).mock.calls[0] as unknown[])[1] as Actor;
 
 describe("parseUntil", () => {
@@ -347,6 +359,24 @@ describe("/notice wizard", () => {
     });
   });
 
+  it("two Post presses at once still post once", async () => {
+    const { person, ctx } = await setup("ops");
+    const made: Notice[] = [];
+    vi.mocked(listNotices).mockImplementation(async () => made);
+    vi.mocked(createNotice).mockImplementation(async (_d, _a, i) => {
+      await new Promise((r) => setTimeout(r, 50)); // widen the window between the check and the write
+      const n = { ...i, createdByPersonId: person.id, createdAt: NOW } as unknown as Notice;
+      made.push(n);
+      return n;
+    });
+    const draft = "New notice\nRoad closed\n\nWhere: Everywhere\nFor: 1 hour\nSeverity: Info\nSend to: Page + group";
+    lineUp();
+    const press = () => onAdminCallback(ctx, { action: "nw", args: ["post"] }, query(draft));
+    const rs = await Promise.all([press(), press()]);
+    expect(createNotice).toHaveBeenCalledTimes(1);
+    expect(rs.map((r) => r.answerCallback?.text).sort()).toEqual(["Already posted.", "Posted."]);
+  });
+
   it("Cancel discards the draft", async () => {
     const { ctx } = await setup("ops");
     const r = await onAdminCallback(
@@ -398,6 +428,19 @@ describe("phone buttons", () => {
     await makeSilence(db(), ws.id, phone.id, new Date(+NOW - 60_000), new Date(+NOW + H - 30_000));
     const again = await onAdminCallback(ctx, cb("sil1h", phone.id), query("alert"));
     expect(again.answerCallback?.text).toBe("Already silenced until 10:59.");
+    expect(silencePhone).toHaveBeenCalledTimes(1);
+  });
+
+  it("two Silence 1h presses at once silence once", async () => {
+    const { ws, ctx } = await setup("ops");
+    const phone = await makeDevice(db(), ws.id);
+    vi.mocked(silencePhone).mockImplementation(async (d, _a, i) => {
+      await new Promise((r) => setTimeout(r, 50));
+      await makeSilence(d, ws.id, i.deviceId, NOW, new Date(i.until));
+      return undefined as never;
+    });
+    lineUp();
+    await Promise.all([1, 2].map(() => onAdminCallback(ctx, cb("sil1h", phone.id), query("alert"))));
     expect(silencePhone).toHaveBeenCalledTimes(1);
   });
 
