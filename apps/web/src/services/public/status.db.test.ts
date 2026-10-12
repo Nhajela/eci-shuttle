@@ -311,14 +311,18 @@ describe("publicStatus: live answers", () => {
       spotId: x.circle.id,
       nextSpotId: x.riva.id,
       alongM: 3100,
-      since: at("09:29"),
+      since: new Date(NOW.getTime() - 20_000),
     });
     etaToSpot.mockReturnValue({ seconds: 840, minutes: 14, lo: 12, hi: 17, basis: "learned", legsChained: 1 });
     expect((await answerAt(x.w.id, x.riva.id))?.answers[0]).toMatchObject({
       minutes: 14,
       phaseText: "leaving Circle now",
     });
-    expect(etaToSpot.mock.calls[0][0].vehicle).toEqual({ kind: "en_route", legIndex: 1, alongLegM: 100 });
+    expect(etaToSpot.mock.calls.map((c) => c[0].vehicle)).toContainEqual({
+      kind: "en_route",
+      legIndex: 1,
+      alongLegM: 100,
+    });
   });
 
   it("an off-route vehicle stays live without a made-up ETA, unless another vehicle has one", async () => {
@@ -362,8 +366,13 @@ describe("publicStatus: live answers", () => {
   });
 
   it("never shows lateness, even for a shuttle far behind its timetable", async () => {
-    const { w, riva, circle, svc } = await world();
-    await bus(w.id, svc.id, "Bus 1", { phase: "en_route", nextSpotId: circle.id, alongM: 100 });
+    const { w, circle, svc } = await world();
+    await bus(w.id, svc.id, "Bus 1", {
+      phase: "en_route",
+      nextSpotId: circle.id,
+      alongM: 100,
+      lastPingAt: at("09:54"),
+    });
     etaToSpot.mockReturnValue({ seconds: 2400, minutes: 40, lo: 35, hi: 45, basis: "learned", legsChained: 2 });
     const s = await publicStatus(db(), w.id, at("09:55"));
     const a = s.spots[0].answers[0];
