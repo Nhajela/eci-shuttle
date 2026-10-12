@@ -25,6 +25,8 @@ const ist = (d: string, hhmm: string) => new Date(`${d}T${hhmm}:00+05:30`);
 const D1 = "2026-10-12"; // Monday
 const D2 = "2026-10-13";
 const D3 = "2026-10-14";
+/** a "now" after every test date */
+const LATER = ist("2026-11-15", "00:00");
 
 async function seed(dbx: Db) {
   const ws = await makeWorkspace(dbx);
@@ -173,6 +175,40 @@ describe("getInsights", () => {
     expect(wait[b.id]).toBeNull();
   });
 
+  it("average wait ignores the gap between two service runs on one day", async () => {
+    const { w, a, b, route, s1, v } = await seed(db());
+    const [evening] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w,
+        kind: "regular",
+        routeId: route.id,
+        validFrom: "2026-10-01",
+        validTo: "2026-10-31",
+        name: "Evening",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "17:00",
+        endTime: "20:00",
+        pattern: { kind: "every", everyMin: 20 },
+      })
+      .returning();
+    const t = (serviceId: string, hhmm: string) => ({
+      workspaceId: w,
+      vehicleId: v.id,
+      serviceId,
+      routeId: route.id,
+      fromSpotId: a.id,
+      toSpotId: b.id,
+      departedAt: ist(D1, hhmm),
+    });
+    await db()
+      .insert(trips)
+      .values([t(s1.id, "09:00"), t(s1.id, "09:20"), t(evening.id, "17:00"), t(evening.id, "17:20")]);
+    const r = await getInsights(db(), systemActor("test"), { workspaceId: w, from: D1, to: D1 });
+    // two 20-min headways, not the 7 h 40 min gap between runs: 1200² · 2 / (2 · 2400) = 600
+    expect(r.averageWaitS.find((x) => x.spotId === a.id)?.seconds).toBe(600);
+  });
+
   it("tracked % = service windows (vehicle × running IST day) that got at least one ping", async () => {
     const { w, s1, v, dev } = await seed(db());
     await db()
@@ -198,7 +234,34 @@ describe("getInsights", () => {
     await db()
       .insert(pings)
       .values([p(D1, "09:10"), p(D2, "13:00"), p(D3, "10:00")]);
-    const r = await getInsights(db(), systemActor("test"), { workspaceId: w, from: D1, to: D3 });
+    const r = await getInsights(db(), systemActor("test"), { workspaceId: w, from: D1, to: D3 }, LATER);
+    expect(r.trackedPct).toBe(50);
+  });
+
+  it("tracked % only counts windows that have started by now", async () => {
+    const { w, s1, v, dev } = await seed(db());
+    await db()
+      .insert(serviceVehicles)
+      .values({
+        workspaceId: w,
+        serviceId: s1.id,
+        vehicleId: v.id,
+        startsAt: ist(D1, "00:00"),
+        endsAt: ist("2026-10-15", "00:00"),
+      });
+    await db()
+      .insert(pings)
+      .values({
+        workspaceId: w,
+        deviceId: dev.id,
+        vehicleId: v.id,
+        recordedAt: ist(D1, "09:10"),
+        lat: 15.6,
+        lng: 73.7,
+        accuracy: 10,
+      });
+    // now = D2 10:00: D1 tracked, D2 started and untracked, D3 not yet started (left out, not untracked)
+    const r = await getInsights(db(), systemActor("test"), { workspaceId: w, from: D1, to: D3 }, ist(D2, "10:00"));
     expect(r.trackedPct).toBe(50);
   });
 

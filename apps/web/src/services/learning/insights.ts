@@ -24,6 +24,7 @@ export async function getInsights(
   db: Db,
   actor: Actor,
   input: { workspaceId: string; from: IsoDate; to: IsoDate },
+  now: Date = new Date(),
 ): Promise<Insights> {
   const { workspaceId: w, from, to } = parseInput(InsightsInput, input);
   readable(actor, w);
@@ -76,12 +77,13 @@ export async function getInsights(
       )
       select route_id as "routeId", percentile_cont(0.5) within group (order by s)::float8 as "medianS", count(*)::int as n
       from c where s is not null group by 1 order by 1`),
-    // E[H²] / 2E[H] over headways between departures (any vehicle) from the spot, within one IST day.
+    // E[H²] / 2E[H] over headways between departures (any vehicle) from the spot, within one service run on one
+    // IST day: the gap between a morning and an evening service is not a wait.
     // ponytail: inline instead of shared averageWait() (still a stub on this base); same maths, swap once merged.
     rows<Insights["averageWaitS"][number]>(sql`
       with h as (
         select from_spot_id as spot_id, extract(epoch from departed_at - lag(departed_at) over (
-          partition by from_spot_id, (departed_at at time zone ${IST_TZ})::date order by departed_at
+          partition by from_spot_id, service_id, (departed_at at time zone ${IST_TZ})::date order by departed_at
         )) as h
         from trips where workspace_id = ${w} and ${inRange("departed_at")}
       )
@@ -90,7 +92,8 @@ export async function getInsights(
       where sp.workspace_id = ${w} and sp.archived_at is null
       group by sp.id order by sp.id`),
     // a service window = one assigned vehicle × one IST day the service runs, start..end (cross-midnight aware),
-    // clipped to the assignment. Tracked = at least one ping from that vehicle inside it.
+    // clipped to the assignment. Tracked = at least one ping from that vehicle inside it. Windows not yet started
+    // by now are left out, so a range running into the future does not read as untracked.
     rows<{ total: number; tracked: number }>(sql`
       with days as (select d::date as d from generate_series(${from}::date, ${to}::date, interval '1 day') d),
       win as (
@@ -112,7 +115,7 @@ export async function getInsights(
       select count(*)::int as total, count(*) filter (where exists (
         select 1 from pings p where p.vehicle_id = win.vehicle_id and p.recorded_at >= win.s and p.recorded_at < win.e
       ))::int as tracked
-      from win where s < e`),
+      from win where s < least(e, ${now.toISOString()}::timestamptz)`),
   ]);
 
   const { total, tracked: hit } = tracked[0] ?? { total: 0, tracked: 0 };
