@@ -1,4 +1,4 @@
 export { expandServiceDepartures } from "./departures";
 export { matchDepartures } from "./matchDepartures";
-export { resolveMode } from "./resolveMode";
-export { trackingWindows } from "./windows";
+export { notificationText, resolveMode } from "./resolveMode";
+export { applyDirectives, trackingWindows, type VehicleDirective } from "./windows";

@@ -1,4 +1,4 @@
-export { averageWait } from "./averageWait";
+export { averageWait, headwaysFromDepartures } from "./averageWait";
 export { etaToSpot } from "./eta";
 export { GEOFENCE_DWELL_S, GEOFENCE_EXIT_FACTOR, GEOFENCE_MAX_ACCURACY_M, geofenceStep } from "./geofence";
 export { legEstimate } from "./legEstimate";

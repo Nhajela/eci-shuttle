@@ -1,4 +1,5 @@
 import type { Fix, GeofenceEvent, GeofenceSpot, GeofenceState, GeofenceStepResult } from "../contracts";
+import { distanceM } from "./path";
 
 /** Seconds a vehicle must stay inside a spot's radius before it counts as arrived. */
 export const GEOFENCE_DWELL_S = 20;
@@ -29,7 +30,7 @@ export function geofenceStep(state: GeofenceState, fix: Fix, spots: GeofenceSpot
 
   if (next.insideSpotId !== null) {
     const spot = spots.find((s) => s.id === next.insideSpotId);
-    if (spot && haversineM(fix, spot) <= spot.radiusM * GEOFENCE_EXIT_FACTOR) return { state: next, events };
+    if (spot && distanceM(fix, spot) <= spot.radiusM * GEOFENCE_EXIT_FACTOR) return { state: next, events };
     events.push({ kind: "departed", spotId: next.insideSpotId, at: fix.at });
     next.insideSpotId = null;
     next.enteredAt = null;
@@ -38,7 +39,7 @@ export function geofenceStep(state: GeofenceState, fix: Fix, spots: GeofenceSpot
   let nearest: GeofenceSpot | null = null;
   let nearestM = Number.POSITIVE_INFINITY;
   for (const spot of spots) {
-    const d = haversineM(fix, spot);
+    const d = distanceM(fix, spot);
     if (d <= spot.radiusM && d < nearestM) {
       nearest = spot;
       nearestM = d;
@@ -59,13 +60,4 @@ export function geofenceStep(state: GeofenceState, fix: Fix, spots: GeofenceSpot
     next.candidateSince = null;
   }
   return { state: next, events };
-}
-
-// ponytail: local haversine because path.distanceM is still a stub owned by another task; switch to it once it lands.
-function haversineM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
-  const rad = Math.PI / 180;
-  const dLat = (b.lat - a.lat) * rad;
-  const dLng = (b.lng - a.lng) * rad;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
-  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
 }

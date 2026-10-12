@@ -1,5 +1,5 @@
 /** The replay plan: a route turned into an endless cycle of "dwell at a spot, drive the leg". Pure. */
-import type { LatLng } from "@eci-shuttle/shared";
+import { distanceM, type LatLng } from "@eci-shuttle/shared";
 
 /** One point = a dwell; more = a drive along the points. */
 type Step = { pts: LatLng[]; cum: number[]; durS: number };
@@ -9,18 +9,9 @@ export type Position = LatLng & { speedMps: number; heading: number | null };
 /** start/end closer than this = a loop route (Riva → Circle → Riva), replayed forward forever */
 const CLOSED_M = 50;
 
-// ponytail: local haversine because shared geo/path is a stub on this branch; switch to distanceM once merged.
-export function haversineM(a: LatLng, b: LatLng): number {
-  const r = Math.PI / 180;
-  const h =
-    Math.sin(((b.lat - a.lat) * r) / 2) ** 2 +
-    Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(((b.lng - a.lng) * r) / 2) ** 2;
-  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
-}
-
 const step = (pts: LatLng[], durS: number): Step => {
   const cum = [0];
-  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + haversineM(pts[i - 1], pts[i]));
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + distanceM(pts[i - 1], pts[i]));
   return { pts, cum, durS };
 };
 
@@ -42,7 +33,7 @@ export function buildPlan(
     s.durS = route.typicalLegS[k] > 0 ? route.typicalLegS[k] : s.cum[s.cum.length - 1] / mps;
     legs.push(s);
   }
-  if (haversineM(path[idx[0]], path[idx[idx.length - 1]]) >= CLOSED_M)
+  if (distanceM(path[idx[0]], path[idx[idx.length - 1]]) >= CLOSED_M)
     for (let k = idx.length - 2; k >= 0; k--) {
       const s = step(path.slice(idx[k], idx[k + 1] + 1).reverse(), 0);
       s.durS = s.cum[s.cum.length - 1] / mps;

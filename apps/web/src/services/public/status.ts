@@ -9,6 +9,9 @@ import {
   type EtaVehicle,
   etaToSpot,
   expandServiceDepartures,
+  istDate,
+  istHHMM,
+  istToEpoch,
   type LegEstimate,
   type PublicNotice,
   type PublicSpot,
@@ -43,14 +46,8 @@ const MIN_SAMPLES = 5;
 const BASELINE_MPS = 25 / 3.6;
 const BASELINE_DWELL_S = 180;
 const DAY = 86_400_000;
-const IST_MS = 330 * 60_000;
 
-// ponytail: local IST helpers; swap for the shared ist* helpers once task/contracts lands on main.
-const istIso = (ms: number) => new Date(ms + IST_MS).toISOString();
-const istDate = (ms: number) => istIso(ms).slice(0, 10);
-const istHHMM = (ms: number) => istIso(ms).slice(11, 16);
-const istAt = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00+05:30`);
-const addDays = (date: string, n: number) => istDate(istAt(date, "00:00") + n * DAY);
+const addDays = (date: string, n: number) => istDate(istToEpoch(date, "00:00") + n * DAY);
 const weekday = (date: string) => ((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7) + 1;
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -128,8 +125,8 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
   const days: { svc: Service; day: string; windowStart: number; windowEnd: number }[] = [];
   for (const svc of svcs) {
     for (const day of [yesterday, today]) {
-      const windowStart = istAt(day, svc.startTime);
-      const windowEnd = istAt(svc.endTime < svc.startTime ? addDays(day, 1) : day, svc.endTime);
+      const windowStart = istToEpoch(day, svc.startTime);
+      const windowEnd = istToEpoch(svc.endTime < svc.startTime ? addDays(day, 1) : day, svc.endTime);
       const runs =
         day >= svc.validFrom &&
         day <= svc.validTo &&

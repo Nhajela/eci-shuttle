@@ -1,18 +1,10 @@
 /** admin-spots: live geofence-overlap warning while a pin is placed. Pure, runs in the browser. */
-import type { LatLng } from "@eci-shuttle/shared";
-import { GEOFENCE_EXIT_FACTOR } from "@eci-shuttle/shared";
+import { distanceM, GEOFENCE_EXIT_FACTOR, type LatLng } from "@eci-shuttle/shared";
+
+export { distanceM };
 
 /** Mandrem, Goa: where the map opens when there are no spots yet. */
 export const DEFAULT_CENTER: LatLng = { lat: 15.656, lng: 73.715 };
-
-// ponytail: local haversine because shared geo distanceM is a stub in this base; swap to it once merged.
-export function distanceM(a: LatLng, b: LatLng): number {
-  const rad = Math.PI / 180;
-  const h =
-    Math.sin(((b.lat - a.lat) * rad) / 2) ** 2 +
-    Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lng - a.lng) * rad) / 2) ** 2;
-  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
-}
 
 type Fence = LatLng & { radiusM: number };
 

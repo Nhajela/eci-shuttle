@@ -4,7 +4,6 @@
  */
 import {
   type Departure,
-  type EtaLeg,
   type EtaVehicle,
   etaToSpot,
   expandServiceDepartures,
@@ -12,9 +11,8 @@ import {
   type GeofenceSpot,
   geofenceStep,
   INITIAL_GEOFENCE_STATE,
-  IST_OFFSET_MIN,
+  istDate,
   type LatLng,
-  legEstimate,
   matchDepartures,
   type Phase,
   type Ping,
@@ -45,6 +43,7 @@ import {
 } from "@/db/schema";
 import type { PingRow, Route, Service, Trip, VehicleState } from "@/db/types";
 import { ServiceError } from "@/services/kernel";
+import { loadEstimates } from "@/services/learning/learning";
 
 export type IngestResult = {
   /** pings stored (duplicates on (device_id, recorded_at) skipped) */
@@ -61,9 +60,6 @@ const OFF_ROUTE_MS = 60_000;
 const OFFLINE_MS = 2 * 60_000;
 const MATCH_TOL_MS = 25 * 60_000;
 const DAY_MS = 86_400_000;
-
-const istDate = (ms: number) => new Date(ms + IST_OFFSET_MIN * 60_000).toISOString().slice(0, 10);
-const istHour = (ms: number) => new Date(ms + IST_OFFSET_MIN * 60_000).getUTCHours();
 
 type Fix = { at: number; lat: number; lng: number };
 const goodFixes = (rows: PingRow[]): Fix[] =>
@@ -287,8 +283,8 @@ async function processVehicle(
   const stale = now.getTime() - lastAt > OFFLINE_MS;
   const phase: Phase = !serviceId ? "off_duty" : stale ? "offline" : atSpot ? "at_spot" : "en_route";
   const live =
-    route && spotId && phase !== "offline"
-      ? await routeProgress(route, spotId, atSpot, gf.enteredAt ?? lastAt, lastGood, now)
+    route && serviceId && spotId && phase !== "offline"
+      ? await routeProgress(tx, route, serviceId, spotId, atSpot, gf.enteredAt ?? lastAt, lastGood, now)
       : null;
   const since =
     phase === "offline"
@@ -367,11 +363,13 @@ async function offRouteNow(tx: Db, vehicleId: string, path: LatLng[], lastAt: nu
 }
 
 /**
- * Next spot, metres along the path and ETA to the next spot. Leg estimates are the day-1 baseline.
- * ponytail: baseline only; switch to learning.loadEstimates once it lands so eta_s uses learned leg/dwell times.
+ * Next spot, metres along the path and ETA to the next spot, from the learned leg and dwell times
+ * (learning.loadEstimates falls back to the day-1 baseline per leg until it has samples).
  */
 async function routeProgress(
+  db: Db,
   route: Route,
+  serviceId: string,
   spotId: string,
   atSpot: boolean,
   since: number,
@@ -383,20 +381,19 @@ async function routeProgress(
   const { path, spotPathIdx: idx, spotIds } = route;
   if (!nextSpotId || path.length < 2 || idx.length !== spotIds.length) return { nextSpotId, etaS: null, alongM: null };
   const nowMs = now.getTime();
-  const opts = { hourBucket: istHour(nowMs), now: nowMs };
   const legPath = (i: number) => path.slice(idx[i], idx[i + 1] + 1);
-  const legs: EtaLeg[] = spotIds.slice(1).map((to, i) => {
-    const lengthM = pathLengthM(legPath(i));
-    return { fromSpotId: spotIds[i], toSpotId: to, lengthM, estimate: legEstimate([], { ...opts, pathM: lengthM }) };
-  });
-  const dwellEst = legEstimate([], { ...opts, pathM: 0 });
+  const { legs, dwells } = await loadEstimates(
+    db,
+    { workspaceId: route.workspaceId, routeId: route.id, serviceId },
+    now,
+  );
   const alongLegM = !atSpot && fix ? projectOntoPath(legPath(k), fix).alongM : 0;
   const vehicle: EtaVehicle = atSpot
     ? { kind: "at_spot", spotIndex: k, since }
     : { kind: "en_route", legIndex: k, alongLegM };
   const eta = etaToSpot({
     legs,
-    dwells: Object.fromEntries(spotIds.map((s) => [s, dwellEst])),
+    dwells,
     vehicle,
     targetSpotId: nextSpotId,
     loop: spotIds[0] === spotIds[spotIds.length - 1],

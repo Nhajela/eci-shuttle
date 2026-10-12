@@ -79,7 +79,7 @@ export async function getInsights(
       from c where s is not null group by 1 order by 1`),
     // E[H²] / 2E[H] over headways between departures (any vehicle) from the spot, within one service run on one
     // IST day: the gap between a morning and an evening service is not a wait.
-    // ponytail: inline instead of shared averageWait() (still a stub on this base); same maths, swap once merged.
+    // same maths as shared averageWait(), done in SQL so headways never leave the database.
     rows<Insights["averageWaitS"][number]>(sql`
       with h as (
         select from_spot_id as spot_id, extract(epoch from departed_at - lag(departed_at) over (

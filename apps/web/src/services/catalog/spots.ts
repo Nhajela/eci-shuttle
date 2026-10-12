@@ -1,5 +1,12 @@
 /** svc-catalog: spots (SPEC §3, §7 Spots). ops+ writes, viewer+ reads. */
-import { type LatLng, SpotArchiveFields, SpotCreateFields, SpotUpdateFields, withWorkspace } from "@eci-shuttle/shared";
+import {
+  distanceM,
+  type LatLng,
+  SpotArchiveFields,
+  SpotCreateFields,
+  SpotUpdateFields,
+  withWorkspace,
+} from "@eci-shuttle/shared";
 import { and, arrayContains, asc, eq, isNull, sql } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
@@ -99,15 +106,6 @@ export async function listSpots(
 
 type Fence = LatLng & { radiusM: number };
 
-// ponytail: local haversine because shared distanceM is still a stub (another task); swap to it once implemented.
-const distM = (a: LatLng, b: LatLng): number => {
-  const rad = Math.PI / 180;
-  const h =
-    Math.sin(((b.lat - a.lat) * rad) / 2) ** 2 +
-    Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(((b.lng - a.lng) * rad) / 2) ** 2;
-  return 2 * 6_371_000 * Math.asin(Math.sqrt(h));
-};
-
 /**
  * Pure. One plain-English warning per other spot whose geofence overlaps this one (centres closer than the sum of
  * radii). Overlap is allowed (the nearest centre wins at ingest), so this only warns. `spot.id` is skipped in others.
@@ -115,7 +113,7 @@ const distM = (a: LatLng, b: LatLng): number => {
 export function overlapWarnings(spot: Fence & { id?: string }, others: (Fence & { id: string; name: string })[]) {
   return others
     .filter((o) => o.id !== spot.id)
-    .map((o) => ({ o, d: distM(spot, o) }))
+    .map((o) => ({ o, d: distanceM(spot, o) }))
     .filter(({ o, d }) => d < spot.radiusM + o.radiusM)
     .map(
       ({ o, d }) =>
