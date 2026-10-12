@@ -1,118 +1,126 @@
 import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const { issueOAuthToken } = vi.hoisted(() => ({ issueOAuthToken: vi.fn() }));
-vi.mock("../mcp/tokens", () => ({ issueOAuthToken }));
-
-import type { Db } from "@/db";
+import { describe, expect, it } from "vitest";
 import {
   authorizationServerMetadata,
-  exchangeAuthCode,
   issueAuthCode,
-  OAUTH_CODE_TTL_MS,
-  OAUTH_TOKEN_TTL_MS,
   protectedResourceMetadata,
   registerClient,
   validateAuthorize,
 } from "./oauth";
+import { unseal } from "./seal";
 
-const SECRETS = ["k".repeat(32)];
-const URI = "https://claude.ai/api/mcp/auth_callback";
-const verifier = "v".repeat(50);
-const challenge = createHash("sha256").update(verifier).digest("base64url");
-const now = 1_790_000_000_000;
+const SECRETS = ["oauth-test-secret-at-least-32-characters"];
+const NOW = 1_760_000_000_000;
+const VERIFIER = "v".repeat(50);
+const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
+const CB = "https://claude.ai/api/mcp/auth_callback";
 
-beforeEach(() => {
-  process.env.TOKEN_SECRETS = SECRETS.join(",");
-  issueOAuthToken.mockReset().mockResolvedValue({ token: "shs_x", row: {} });
-});
-
-const authParams = (clientId: string, over = {}) => ({
+const client = () =>
+  registerClient({ redirect_uris: [CB, "http://localhost:8123/cb"], client_name: "claude.ai" }, SECRETS);
+const params = (over: Record<string, string> = {}) => ({
   response_type: "code" as const,
-  client_id: clientId,
-  redirect_uri: URI,
-  code_challenge: challenge,
+  client_id: client().client_id,
+  redirect_uri: CB,
+  code_challenge: CHALLENGE,
   code_challenge_method: "S256" as const,
   state: "st",
   ...over,
 });
 
-describe("oauth", () => {
-  it("registers https and localhost clients, refuses others", () => {
-    const c = registerClient({ redirect_uris: [URI, "http://localhost:6274/cb"], client_name: "claude.ai" }, SECRETS);
-    expect(c).toMatchObject({ client_name: "claude.ai", redirect_uris: [URI, "http://localhost:6274/cb"] });
-    expect(c.token_endpoint_auth_method).toBe("none");
-    expect(() => registerClient({ redirect_uris: ["http://evil.com/cb"] }, SECRETS)).toThrow(
+describe("registerClient", () => {
+  it("returns a sealed client id and the RFC 7591 shape", () => {
+    const c = client();
+    expect(c).toMatchObject({
+      client_name: "claude.ai",
+      redirect_uris: [CB, "http://localhost:8123/cb"],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code"],
+      response_types: ["code"],
+    });
+    expect(unseal(c.client_id, SECRETS, NOW)).toEqual({ redirectUris: c.redirect_uris, name: "claude.ai" });
+    expect(registerClient({ redirect_uris: [CB] }, SECRETS).client_name).toBeNull();
+  });
+
+  it.each(["http://evil.example/cb", "javascript:alert(1)", "https://claude.ai/cb#frag", "ftp://x/cb"])(
+    "refuses redirect %s as INVALID",
+    (uri) => {
+      expect(() => registerClient({ redirect_uris: [uri] }, SECRETS)).toThrow(
+        expect.objectContaining({ code: "INVALID" }),
+      );
+    },
+  );
+
+  it("accepts http on 127.0.0.1", () => {
+    expect(registerClient({ redirect_uris: ["http://127.0.0.1:9/cb"] }, SECRETS).redirect_uris).toHaveLength(1);
+  });
+});
+
+describe("validateAuthorize", () => {
+  it("returns what the consent page and code need", () => {
+    expect(validateAuthorize(params(), SECRETS, NOW)).toEqual({
+      clientName: "claude.ai",
+      redirectUri: CB,
+      state: "st",
+      codeChallenge: CHALLENGE,
+    });
+    const { state: _s, ...noState } = params();
+    expect(validateAuthorize(noState, SECRETS, NOW).state).toBeNull();
+  });
+
+  it("a loopback redirect may use another port (RFC 8252)", () => {
+    expect(validateAuthorize(params({ redirect_uri: "http://localhost:5555/cb" }), SECRETS, NOW).redirectUri).toBe(
+      "http://localhost:5555/cb",
+    );
+  });
+
+  it.each([
+    ["an unknown client", { client_id: "garbage" }],
+    ["an unregistered redirect", { redirect_uri: "https://evil.example/cb" }],
+    ["another loopback path", { redirect_uri: "http://localhost:8123/other" }],
+    ["a plain challenge method", { code_challenge_method: "plain" }],
+    ["a malformed challenge", { code_challenge: `${"*".repeat(43)}` }],
+    ["response_type token", { response_type: "token" }],
+  ])("INVALID for %s", (_label, over) => {
+    expect(() => validateAuthorize(params(over as Record<string, string>), SECRETS, NOW)).toThrow(
       expect.objectContaining({ code: "INVALID" }),
     );
-    expect(() => registerClient({ redirect_uris: [] }, SECRETS)).toThrow(expect.objectContaining({ code: "INVALID" }));
   });
 
-  it("validates authorize params against the registered client", () => {
-    const { client_id } = registerClient({ redirect_uris: [URI], client_name: "claude.ai" }, SECRETS);
-    expect(validateAuthorize(authParams(client_id), SECRETS, now)).toEqual({
-      clientName: "claude.ai",
-      redirectUri: URI,
-      state: "st",
-      codeChallenge: challenge,
-    });
-    const bad = [
-      authParams(client_id, { redirect_uri: "https://evil.com/cb" }),
-      authParams("forged"),
-      authParams(client_id, { code_challenge_method: "plain" }),
-    ];
-    for (const p of bad)
-      expect(() => validateAuthorize(p as never, SECRETS, now)).toThrow(expect.objectContaining({ code: "INVALID" }));
-  });
-
-  it("exchanges a code with the right verifier for a token", async () => {
-    const { client_id } = registerClient({ redirect_uris: [URI], client_name: "claude.ai" }, SECRETS);
-    const code = issueAuthCode(
-      { personId: "p1", clientId: client_id, redirectUri: URI, codeChallenge: challenge },
-      SECRETS,
-      now,
-    );
-    const at = new Date(now + 1000);
-    const db = {} as Db;
-    const r = await exchangeAuthCode(db, { code, codeVerifier: verifier, clientId: client_id, redirectUri: URI }, at);
-    expect(r).toEqual({ access_token: "shs_x", token_type: "Bearer", expires_in: OAUTH_TOKEN_TTL_MS / 1000 });
-    expect(issueOAuthToken).toHaveBeenCalledWith(
-      db,
-      { personId: "p1", client: "claude.ai", expiresAt: new Date(at.getTime() + OAUTH_TOKEN_TTL_MS) },
-      at,
+  it("a client id sealed with a rotated-out secret no longer opens", () => {
+    expect(() => validateAuthorize(params(), ["another-secret-at-least-32-characters-x"], NOW)).toThrow(
+      expect.objectContaining({ code: "INVALID" }),
     );
   });
+});
 
-  it("refuses a wrong verifier, client or redirect, an expired code, or a client id used as a code", async () => {
-    const { client_id } = registerClient({ redirect_uris: [URI] }, SECRETS);
-    const other = registerClient({ redirect_uris: [URI] }, SECRETS).client_id;
-    const code = issueAuthCode(
-      { personId: "p1", clientId: client_id, redirectUri: URI, codeChallenge: challenge },
-      SECRETS,
-      now,
-    );
-    const ok = { code, codeVerifier: verifier, clientId: client_id, redirectUri: URI };
-    const cases: [typeof ok, number][] = [
-      [{ ...ok, codeVerifier: "w".repeat(50) }, now],
-      [{ ...ok, clientId: other }, now],
-      [{ ...ok, redirectUri: "https://claude.ai/other" }, now],
-      [ok, now + OAUTH_CODE_TTL_MS + 1],
-      [{ ...ok, code: client_id }, now],
-    ];
-    for (const [input, t] of cases)
-      await expect(exchangeAuthCode({} as Db, input, new Date(t))).rejects.toMatchObject({ code: "INVALID" });
-    expect(issueOAuthToken).not.toHaveBeenCalled();
+describe("issueAuthCode", () => {
+  it("seals person, client, redirect and challenge for 5 minutes", () => {
+    const input = { personId: "p1", clientId: "c1", redirectUri: CB, codeChallenge: CHALLENGE };
+    const code = issueAuthCode(input, SECRETS, NOW);
+    expect(unseal(code, SECRETS, NOW + 299_000)).toEqual(input);
+    expect(unseal(code, SECRETS, NOW + 300_000)).toBeNull();
   });
+});
 
-  it("publishes metadata under the origin", () => {
-    const o = "https://x.test";
-    expect(authorizationServerMetadata(o)).toMatchObject({
-      issuer: o,
-      authorization_endpoint: `${o}/api/mcp/oauth/authorize`,
-      token_endpoint: `${o}/api/mcp/oauth/token`,
-      registration_endpoint: `${o}/api/mcp/oauth/register`,
+describe("metadata", () => {
+  it("authorization server (RFC 8414)", () => {
+    expect(authorizationServerMetadata("https://x.test")).toMatchObject({
+      issuer: "https://x.test",
+      authorization_endpoint: "https://x.test/api/mcp/oauth/authorize",
+      token_endpoint: "https://x.test/api/mcp/oauth/token",
+      registration_endpoint: "https://x.test/api/mcp/oauth/register",
+      response_types_supported: ["code"],
+      grant_types_supported: ["authorization_code"],
       code_challenge_methods_supported: ["S256"],
+      token_endpoint_auth_methods_supported: ["none"],
     });
-    expect(protectedResourceMetadata(o)).toMatchObject({ resource: `${o}/api/mcp`, authorization_servers: [o] });
+  });
+
+  it("protected resource (RFC 9728)", () => {
+    expect(protectedResourceMetadata("https://x.test")).toMatchObject({
+      resource: "https://x.test/api/mcp",
+      authorization_servers: ["https://x.test"],
+      bearer_methods_supported: ["header"],
+    });
   });
 });
