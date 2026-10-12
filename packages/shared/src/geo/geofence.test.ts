@@ -11,7 +11,12 @@ const A: GeofenceSpot = { id: "a", lat: LAT, lng: LNG, radiusM: 50 };
 const B: GeofenceSpot = { id: "b", lat: north(1000), lng: LNG, radiusM: 50 };
 const T0 = 1_700_000_000_000;
 
-const fix = (sec: number, mNorth: number, accuracy = 10): Fix => ({ at: T0 + sec * 1000, lat: north(mNorth), lng: LNG, accuracy });
+const fix = (sec: number, mNorth: number, accuracy = 10): Fix => ({
+  at: T0 + sec * 1000,
+  lat: north(mNorth),
+  lng: LNG,
+  accuracy,
+});
 
 /** feed fixes in order from a state; returns final state and all events */
 function run(fixes: Fix[], spots: GeofenceSpot[] = [A, B], start: GeofenceState = INITIAL_GEOFENCE_STATE) {
@@ -37,7 +42,13 @@ describe("geofenceStep", () => {
   it("still inside 20 s later → arrived, at = candidateSince", () => {
     const { state, events } = run([fix(0, 10), fix(10, 20), fix(20, 0)]);
     expect(events).toEqual([{ kind: "arrived", spotId: "a", at: T0 }]);
-    expect(state).toEqual({ insideSpotId: "a", enteredAt: T0, candidateSpotId: null, candidateSince: null, lastFixAt: T0 + 20_000 });
+    expect(state).toEqual({
+      insideSpotId: "a",
+      enteredAt: T0,
+      candidateSpotId: null,
+      candidateSince: null,
+      lastFixAt: T0 + 20_000,
+    });
   });
 
   it("inside for 19 s then out → no arrival, candidate cleared", () => {
@@ -82,7 +93,12 @@ describe("geofenceStep", () => {
     const near = { ...B, lat: north(100) };
     const r = geofenceStep(insideA, fix(10, 90), [A, near]);
     expect(r.events).toEqual([{ kind: "departed", spotId: "a", at: T0 + 10_000 }]);
-    expect(r.state).toEqual({ ...INITIAL_GEOFENCE_STATE, candidateSpotId: "b", candidateSince: T0 + 10_000, lastFixAt: T0 + 10_000 });
+    expect(r.state).toEqual({
+      ...INITIAL_GEOFENCE_STATE,
+      candidateSpotId: "b",
+      candidateSince: T0 + 10_000,
+      lastFixAt: T0 + 10_000,
+    });
   });
 
   it("overlapping spots → nearest centre wins", () => {
