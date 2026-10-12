@@ -173,10 +173,12 @@ pings → dwells (arrived/left a spot) → trips (spot → spot) → departure m
 **What it powers**
 1. **The ETA, with a range.** "Here in 6 min (5–9)". It's built from segment speeds along the remaining path plus
    learned dwell times, and the range is p20–p80. When data is thin it says "about".
-2. **Expected times today, automatic.** The public schedule shows planned *and* expected times for upcoming
-   departures. If the shuttle is 10 min late, the delay carries forward:
-   expected = max(planned, expected arrival + minimum dwell). This changes no data; it's just a prediction.
-3. **"Usually" hints when there's no live data**: "Next at 9:40 · usually leaves ~9:46".
+2. **Chained predictions.** When the shuttle reaches a spot only after a later trip, the ETA chains legs and
+   dwells ("Here in 34 min"). **Attendees never see lateness.** Once there's live data the timetable doesn't
+   matter to them: a shuttle 30 min behind its timetable on a 15-min route still shows just "Here in 10 min".
+   No "late" or "behind schedule" labels, and no planned-versus-expected times in public. Punctuality is for admin Insights only.
+3. **Better guesses with no live data**: the "Next at" time uses the learned typical departure for that slot,
+   still labelled "timetable".
 4. **Continuous-loop services** (no fixed times): the schedule shows "about every 25 min" from the measured cycle
    time, and the answer is fully predictive.
 5. **Insights** (admin page + MCP `shuttle_insights`), per spot and per departure:
