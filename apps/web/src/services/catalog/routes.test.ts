@@ -53,7 +53,9 @@ describe("generatePath", () => {
     try {
       const hang = vi.fn(
         (_url: string, init?: RequestInit) =>
-          new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
+          new Promise<Response>((_, reject) =>
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+          ),
       );
       const p = generatePath([riva, circle], hang as unknown as typeof fetch);
       await vi.advanceTimersByTimeAsync(5_000);

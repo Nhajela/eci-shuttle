@@ -73,9 +73,11 @@ describe("createRoute", () => {
       [riva.id, other.riva.id],
       [riva.id, "00000000-0000-4000-8000-000000000000"],
     ]) {
-      await expect(createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds }, offline)).rejects.toMatchObject({
-        code: "INVALID",
-      });
+      await expect(createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds }, offline)).rejects.toMatchObject(
+        {
+          code: "INVALID",
+        },
+      );
     }
     expect(await db().select().from(routes).where(eq(routes.workspaceId, ws.id))).toHaveLength(0);
   });
@@ -178,9 +180,17 @@ describe("listRoutes", () => {
     const { ws, actor, riva, circle } = await setup();
     const b = await createRoute(db(), actor, { workspaceId: ws.id, name: "B", spotIds: [riva.id, circle.id] }, offline);
     await createRoute(db(), actor, { workspaceId: ws.id, name: "A", spotIds: [circle.id, riva.id] }, offline);
-    const gone = await createRoute(db(), actor, { workspaceId: ws.id, name: "C", spotIds: [riva.id, circle.id] }, offline);
+    const gone = await createRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, name: "C", spotIds: [riva.id, circle.id] },
+      offline,
+    );
     await db().update(routes).set({ archivedAt: new Date(), typicalLegS: [] }).where(eq(routes.id, gone.id));
-    await db().update(routes).set({ typicalLegS: [420] }).where(eq(routes.id, b.id));
+    await db()
+      .update(routes)
+      .set({ typicalLegS: [420] })
+      .where(eq(routes.id, b.id));
     const other = await setup();
     await createRoute(
       db(),
