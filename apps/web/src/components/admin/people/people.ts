@@ -4,9 +4,15 @@ import type { McpToken, Person } from "@/db/types";
 import { isServiceError, userMessage } from "@/services/kernel/errors";
 
 export const ROLE_LABEL: Record<Role, string> = {
-  admin: "Admin: everything, including roles, kill and revoke",
-  ops: "Ops: schedule, notices, silence, nudge, spots",
-  viewer: "Viewer: read only",
+  admin: "Admin",
+  ops: "Ops",
+  viewer: "Viewer",
+};
+
+export const ROLE_HINT: Record<Role, string> = {
+  admin: "Everything, including roles, kill and revoke",
+  ops: "Schedule, notices, silence, nudge, spots",
+  viewer: "Read only",
 };
 
 export const ALERT_KIND_LABEL: Record<AlertKind, string> = {

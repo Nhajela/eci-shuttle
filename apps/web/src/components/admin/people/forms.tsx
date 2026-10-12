@@ -27,43 +27,48 @@ export function RoleForm({ w, personId, role, isSelf }: { w: string; personId: s
   const [, run, pending] = useAction(setRoleAction);
   const [, remove, removing] = useAction(setRoleAction);
   return (
-    <div className="flex flex-col gap-2">
-      <form action={run} className="flex flex-col gap-2">
-        <input type="hidden" name="w" value={w} />
-        <input type="hidden" name="personId" value={personId} />
-        <Label className="sr-only" htmlFor={`role-${personId}`}>
-          Role
-        </Label>
-        <select id={`role-${personId}`} name="role" defaultValue={role} className={SELECT}>
-          {Role.options.map((r) => (
-            <option key={r} value={r}>
-              {ROLE_LABEL[r]}
-            </option>
-          ))}
-        </select>
-        <Button type="submit" size="lg" disabled={pending}>
-          Save role
-        </Button>
-      </form>
-      <form action={remove}>
-        <input type="hidden" name="w" value={w} />
-        <input type="hidden" name="personId" value={personId} />
-        <input type="hidden" name="role" value="" />
-        <Button
-          type="submit"
-          size="lg"
-          variant="destructive"
-          className="w-full"
-          disabled={removing}
-          onClick={(e) => {
-            if (!confirm(isSelf ? "Remove yourself from this workspace?" : "Remove this person from this workspace?"))
-              e.preventDefault();
-          }}
-        >
-          Remove from workspace
-        </Button>
-      </form>
-    </div>
+    <details>
+      <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-primary">
+        Change role
+      </summary>
+      <div className="flex flex-col gap-2 pt-1">
+        <form action={run} className="flex flex-col gap-2">
+          <input type="hidden" name="w" value={w} />
+          <input type="hidden" name="personId" value={personId} />
+          <Label className="sr-only" htmlFor={`role-${personId}`}>
+            Role
+          </Label>
+          <select id={`role-${personId}`} name="role" defaultValue={role} className={SELECT}>
+            {Role.options.map((r) => (
+              <option key={r} value={r}>
+                {ROLE_LABEL[r]}
+              </option>
+            ))}
+          </select>
+          <Button type="submit" size="lg" disabled={pending}>
+            Save role
+          </Button>
+        </form>
+        <form action={remove}>
+          <input type="hidden" name="w" value={w} />
+          <input type="hidden" name="personId" value={personId} />
+          <input type="hidden" name="role" value="" />
+          <Button
+            type="submit"
+            size="lg"
+            variant="destructive"
+            className="w-full"
+            disabled={removing}
+            onClick={(e) => {
+              if (!confirm(isSelf ? "Remove yourself from this workspace?" : "Remove this person from this workspace?"))
+                e.preventDefault();
+            }}
+          >
+            Remove from workspace
+          </Button>
+        </form>
+      </div>
+    </details>
   );
 }
 
@@ -144,7 +149,8 @@ export function AlertPrefsForm({
           </div>
         </div>
       </fieldset>
-      <div className="sticky bottom-0 -mx-4 mt-4 border-t bg-background px-4 py-3">
+      {/* Sits above the shell's 4rem bottom tab bar on phones; the Card must not clip it (overflow-visible in page.tsx). */}
+      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] -mx-(--card-spacing) mt-4 border-t bg-card px-(--card-spacing) py-3 md:bottom-0">
         <Button type="submit" size="lg" className="w-full" disabled={pending}>
           Save alert settings
         </Button>

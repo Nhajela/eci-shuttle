@@ -7,7 +7,14 @@ import {
   RevokeTokenButton,
   RoleForm,
 } from "@/components/admin/people/forms";
-import { personName, ROLE_LABEL, subscriberRows, tokenStatus, tokenUsed } from "@/components/admin/people/people";
+import {
+  personName,
+  ROLE_HINT,
+  ROLE_LABEL,
+  subscriberRows,
+  tokenStatus,
+  tokenUsed,
+} from "@/components/admin/people/people";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { db } from "@/db";
@@ -53,15 +60,14 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
             {members.map((m) => (
               <li key={m.id} className="flex flex-col gap-2 py-3 first:pt-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium break-all">{personName(m.person)}</span>
+                  <span className="font-medium break-words">{personName(m.person)}</span>
                   {m.personId === person.id && <Badge variant="secondary">You</Badge>}
                   {m.person.blockedBotAt && <Badge variant="destructive">Blocked the bot</Badge>}
                 </div>
-                {isAdmin ? (
-                  <RoleForm w={slug} personId={m.personId} role={m.role} isSelf={m.personId === person.id} />
-                ) : (
-                  <p className="text-sm text-muted-foreground">{ROLE_LABEL[m.role]}</p>
-                )}
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{ROLE_LABEL[m.role]}</span> · {ROLE_HINT[m.role]}
+                </p>
+                {isAdmin && <RoleForm w={slug} personId={m.personId} role={m.role} isSelf={m.personId === person.id} />}
               </li>
             ))}
           </ul>
@@ -74,7 +80,7 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="overflow-visible">
         <CardHeader>
           <CardTitle>Your alerts</CardTitle>
           <CardDescription>What the bot sends you for {workspace.name}. Only you see these.</CardDescription>
