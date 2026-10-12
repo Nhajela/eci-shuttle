@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 
 // Any test that touches Postgres is named *.db.test.ts and runs in the `db` project, on this worker's own clone.
 const DB_TESTS = ["**/*.db.test.ts"];
-const EXCLUDE = ["**/node_modules/**", "**/.next/**", "**/dist/**", "apps/driver/**"];
+const EXCLUDE = [".claude/**", "**/node_modules/**", "**/.next/**", "**/dist/**", "apps/driver/**"];
 
 export default defineConfig({
   resolve: {
