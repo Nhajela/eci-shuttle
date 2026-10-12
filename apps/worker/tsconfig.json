@@ -3,7 +3,7 @@
   "compilerOptions": {
     "lib": ["esnext", "dom"],
     "jsx": "react-jsx",
-    "paths": { "@/*": ["../web/src/*"] }
+    "paths": { "@/*": ["../web/src/*"], "@tests/*": ["../../tests/*"] }
   },
   "include": ["src/**/*.ts"]
 }
