@@ -7,13 +7,34 @@
  *   /api/mcp/oauth/register, /api/mcp/oauth/authorize (Telegram login, then Allow), /api/mcp/oauth/token.
  * ponytail: codes are not single-use (no table); PKCE + 5 min expiry bound the replay window.
  */
-import { notImplemented } from "@eci-shuttle/shared";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "@/db";
+import { env } from "@/lib/env";
+import { parseInput, ServiceError } from "../kernel";
+import { issueOAuthToken } from "../mcp/tokens";
+import { seal, unseal } from "./seal";
 
 export const OAUTH_CODE_TTL_MS = 5 * 60_000;
 /** Access tokens from OAuth expire; claude.ai reconnects. Personal shs_ tokens don't. */
 export const OAUTH_TOKEN_TTL_MS = 30 * 24 * 60 * 60_000;
+
+/** `k` keeps a sealed client id from passing as a sealed code and back. */
+type ClientSeal = { k: "client"; r: string[]; n: string | null };
+type CodeSeal = { k: "code"; personId: string; clientId: string; redirectUri: string; codeChallenge: string };
+
+const invalid = (msg: string) => new ServiceError("INVALID", msg);
+
+const allowedRedirect = (u: string) => {
+  const url = new URL(u);
+  return url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname));
+};
+
+const openClient = (clientId: string, secrets: string[]): ClientSeal => {
+  const c = unseal<ClientSeal>(clientId, secrets, 0);
+  if (c?.k !== "client") throw invalid("Unknown client.");
+  return c;
+};
 
 /** RFC 7591 request body. Redirect URIs must be https, or http on localhost / 127.0.0.1. */
 export const ClientRegistration = z.object({
@@ -31,7 +52,18 @@ export type RegisteredClient = {
 
 /** client_id = seal({redirectUris, name}) with no expiry. Bad redirect URI → INVALID. */
 export function registerClient(input: z.input<typeof ClientRegistration>, secrets: string[]): RegisteredClient {
-  return notImplemented(input, secrets);
+  const { redirect_uris, client_name } = parseInput(ClientRegistration, input);
+  if (!redirect_uris.every(allowedRedirect))
+    throw invalid("Redirect URIs must be https (or http on localhost / 127.0.0.1).");
+  const name = client_name || null;
+  return {
+    client_id: seal({ k: "client", r: redirect_uris, n: name } satisfies ClientSeal, secrets, null),
+    client_name: name,
+    redirect_uris,
+    token_endpoint_auth_method: "none",
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+  };
 }
 
 export const AuthorizeParams = z.object({
@@ -53,7 +85,11 @@ export function validateAuthorize(
   secrets: string[],
   now: number,
 ): { clientName: string | null; redirectUri: string; state: string | null; codeChallenge: string } {
-  return notImplemented(params, secrets, now);
+  const p = parseInput(AuthorizeParams, params);
+  const c = openClient(p.client_id, secrets);
+  if (!c.r.includes(p.redirect_uri)) throw invalid("That redirect URI isn't registered for this client.");
+  void now; // client ids never expire; kept for the contract
+  return { clientName: c.n, redirectUri: p.redirect_uri, state: p.state ?? null, codeChallenge: p.code_challenge };
 }
 
 /** After the logged-in person pressed Allow: a sealed code (OAUTH_CODE_TTL_MS) bound to person, client, URI, PKCE. */
@@ -62,7 +98,7 @@ export function issueAuthCode(
   secrets: string[],
   now: number,
 ): string {
-  return notImplemented(input, secrets, now);
+  return seal({ k: "code", ...input } satisfies CodeSeal, secrets, now + OAUTH_CODE_TTL_MS);
 }
 
 /**
@@ -75,15 +111,37 @@ export async function exchangeAuthCode(
   input: { code: string; codeVerifier: string; clientId: string; redirectUri: string },
   now: Date,
 ): Promise<{ access_token: string; token_type: "Bearer"; expires_in: number }> {
-  return notImplemented(db, input, now);
+  const secrets = env.tokenSecrets();
+  const c = unseal<CodeSeal>(input.code, secrets, now.getTime());
+  if (c?.k !== "code" || c.clientId !== input.clientId || c.redirectUri !== input.redirectUri)
+    throw invalid("Invalid or expired authorization code.");
+  const got = Buffer.from(createHash("sha256").update(input.codeVerifier).digest("base64url"));
+  const want = Buffer.from(c.codeChallenge);
+  if (got.length !== want.length || !timingSafeEqual(got, want)) throw invalid("PKCE verification failed.");
+  const { n } = openClient(c.clientId, secrets);
+  const issued = await issueOAuthToken(
+    db,
+    { personId: c.personId, client: n, expiresAt: new Date(now.getTime() + OAUTH_TOKEN_TTL_MS) },
+    now,
+  );
+  return { access_token: issued.token, token_type: "Bearer", expires_in: OAUTH_TOKEN_TTL_MS / 1000 };
 }
 
 /** RFC 8414 document for /.well-known/oauth-authorization-server (issuer = origin). */
 export function authorizationServerMetadata(origin: string): Record<string, unknown> {
-  return notImplemented(origin);
+  return {
+    issuer: origin,
+    authorization_endpoint: `${origin}/api/mcp/oauth/authorize`,
+    token_endpoint: `${origin}/api/mcp/oauth/token`,
+    registration_endpoint: `${origin}/api/mcp/oauth/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code"],
+    token_endpoint_auth_methods_supported: ["none"],
+    code_challenge_methods_supported: ["S256"],
+  };
 }
 
 /** RFC 9728 document for /.well-known/oauth-protected-resource (resource = <origin>/api/mcp). */
 export function protectedResourceMetadata(origin: string): Record<string, unknown> {
-  return notImplemented(origin);
+  return { resource: `${origin}/api/mcp`, authorization_servers: [origin], bearer_methods_supported: ["header"] };
 }
