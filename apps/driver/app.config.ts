@@ -1,7 +1,13 @@
 import type { ExpoConfig } from "expo/config";
 
-// EAS project id comes from `eas init` (needs Naman's Expo account, SPEC §10). Until then OTA url stays unset.
-const easProjectId = process.env.EAS_PROJECT_ID;
+// Paste the id from `eas init` here (needs Naman's Expo account, SPEC §10); not a secret.
+// A constant, never env: the fingerprint hashes this config, so build and `eas update` must see the same value.
+export const EAS_PROJECT_ID = "";
+const easProjectId = EAS_PROJECT_ID;
+
+if (!easProjectId && process.env.EAS_BUILD) {
+  throw new Error("EAS_PROJECT_ID is empty in apps/driver/app.config.ts: run `eas init` and commit the id, or this APK can never get OTA updates.");
+}
 
 const config: ExpoConfig = {
   name: "ECI Shuttle Driver",
