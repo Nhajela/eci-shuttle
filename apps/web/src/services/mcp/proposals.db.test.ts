@@ -1,12 +1,15 @@
 import type { McpChange } from "@eci-shuttle/shared";
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
 import { auditLog, proposals, spots } from "@/db/schema";
 import { type Actor, getInWorkspace, ServiceError } from "../kernel";
 import { confirm, PROPOSAL_TTL_MS, proposalWorkspace, propose } from "./proposals";
+
+// runs inside confirm's transaction just before the changes are applied
+const hooks = vi.hoisted(() => ({ beforeApply: null as null | (() => Promise<void>) }));
 
 // changes.ts is svc-mcp's dispatch (another task): fake it over the spots table so propose/confirm are tested alone.
 vi.mock("./changes", async (orig) => {
@@ -16,9 +19,9 @@ vi.mock("./changes", async (orig) => {
   return {
     ...(await orig<typeof import("./changes")>()),
     versionKeys: (c: McpChange) => ("spotId" in c ? [`spot:${c.spotId}`] : []),
-    loadVersions: async (db: Db, ws: string, keys: string[]) => {
+    loadVersions: async (db: Db, ws: string, keys: string[], opts: { forUpdate?: boolean } = {}) => {
       const out: Record<string, number> = {};
-      for (const key of keys) out[key] = (await k.getInWorkspace(db, spots, ws, key.slice(5), "spot")).version;
+      for (const key of keys) out[key] = (await k.getInWorkspace(db, spots, ws, key.slice(5), "spot", opts)).version;
       return out;
     },
     describeChange: async (_db: Db, _ws: string, c: McpChange) =>
@@ -26,6 +29,7 @@ vi.mock("./changes", async (orig) => {
     changeWarnings: async (_db: Db, _ws: string, cs: McpChange[]) =>
       cs.some((c) => c.kind === "spot.archive") ? ["Archiving this leaves a route without a stop"] : [],
     applyChange: async (db: Db, actor: Actor, ws: string, c: McpChange) => {
+      await hooks.beforeApply?.();
       if (c.kind === "spot.create")
         return k.mutate(db, actor, { action: "spot.create", entity: "spot", workspaceId: ws }, async (tx) => {
           const [row] = await tx
@@ -184,6 +188,27 @@ describe("confirm", () => {
         .where(and(eq(spots.workspaceId, ws.id), eq(spots.name, "Circle"))),
     ).toEqual([]);
     expect((await proposalRow(p.code)).confirmedAt).toBeNull();
+  });
+
+  it("locks the checked objects until it commits, so no one can change them between the check and the apply", async () => {
+    const { ws, actor, spot } = await setup();
+    const p = await propose(db(), actor, { workspaceId: ws.id, changes: [rename(spot.id)] }, NOW);
+    let lockErr: unknown = null;
+    hooks.beforeApply = async () => {
+      // another connection (another admin) tries to take the row
+      lockErr = await db()
+        .execute(sql`select id from spots where id = ${spot.id} for update nowait`)
+        .then(
+          () => "not locked",
+          (e: unknown) => e,
+        );
+    };
+    try {
+      await confirm(db(), actor, { code: p.code }, NOW);
+    } finally {
+      hooks.beforeApply = null;
+    }
+    expect(String((lockErr as { cause?: unknown })?.cause ?? lockErr)).toMatch(/could not obtain lock/);
   });
 
   it("is one transaction: a failing later change rolls back the earlier ones", async () => {
