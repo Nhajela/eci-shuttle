@@ -9,7 +9,7 @@ const NO_STORE = { "Cache-Control": "no-store" };
 export async function GET() {
   const code = await pendingLogin();
   if (!code) return Response.json({ status: "expired" }, { headers: NO_STORE });
-  const r = await finishLogin(db(), code, new Date());
+  const r = await finishLogin(db(), code, "poll", new Date());
   if (r.status === "ok") await startSession(r.person.id);
   if (r.status !== "pending") await clearPendingLogin();
   return Response.json({ status: r.status }, { headers: NO_STORE });

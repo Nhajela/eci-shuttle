@@ -20,8 +20,13 @@ import { mutate, ServiceError, systemActor } from "../kernel";
 export const LOGIN_CODE_TTL_MS = 10 * 60_000;
 export const MAGIC_LINK_TTL_MS = 15 * 60_000;
 
-/** 18 random bytes → 24 base64url chars, inside Telegram's /start alphabet [A-Za-z0-9_-]{1,64}. */
-const newCode = () => randomBytes(18).toString("base64url");
+/**
+ * Kind prefix + 18 random bytes (24 base64url chars), inside Telegram's /start alphabet [A-Za-z0-9_-]{1,64}.
+ * The prefix keeps a deep-link code (bound to the browser that started it) out of the magic-link path.
+ */
+export type LoginVia = "poll" | "magic";
+const PREFIX: Record<LoginVia, string> = { poll: "t", magic: "m" };
+const newCode = (via: LoginVia) => PREFIX[via] + randomBytes(18).toString("base64url");
 const later = (now: Date, ms: number) => new Date(now.getTime() + ms);
 const live = (r: LoginCode, now: Date) => r.expiresAt != null && r.expiresAt > now;
 
@@ -36,7 +41,7 @@ const personByTelegram = async (db: Db, telegramId: number) =>
  * LOGIN_CODE_TTL_MS, and its deep link https://t.me/<TELEGRAM_BOT_USERNAME>?start=<code>.
  */
 export async function startLogin(db: Db, now: Date): Promise<{ code: string; deepLink: string; expiresAt: Date }> {
-  const code = newCode();
+  const code = newCode("poll");
   const expiresAt = later(now, LOGIN_CODE_TTL_MS);
   await db.insert(loginCodes).values({ code, expiresAt });
   return { code, deepLink: `https://t.me/${env.telegramBotUsername()}?start=${code}`, expiresAt };
@@ -72,25 +77,27 @@ export async function claimLogin(
 export async function createMagicLink(db: Db, personId: string, now: Date): Promise<{ url: string; expiresAt: Date }> {
   const [p] = await db.select().from(people).where(eq(people.id, personId));
   if (!p) throw new ServiceError("NOT_FOUND", "Person not found.");
-  const code = newCode();
+  const code = newCode("magic");
   const expiresAt = later(now, MAGIC_LINK_TTL_MS);
-  await db
-    .insert(loginCodes)
-    .values({
-      code,
-      telegramId: p.telegramId,
-      username: p.username,
-      firstName: p.firstName,
-      claimedAt: now,
-      expiresAt,
-    });
+  await db.insert(loginCodes).values({
+    code,
+    telegramId: p.telegramId,
+    username: p.username,
+    firstName: p.firstName,
+    claimedAt: now,
+    expiresAt,
+  });
   return { url: `${origin()}/login/magic?code=${encodeURIComponent(code)}`, expiresAt };
 }
 
 export type LoginState = { status: "pending" } | { status: "expired" } | { status: "ready"; person: Person };
 
-/** Read-only (GET of the magic link page, "Continue as …"): never consumes the code. Unknown = expired. */
-export async function peekLogin(db: Db, code: string, now: Date): Promise<LoginState> {
+/**
+ * Read-only (GET of the magic link page, "Continue as …"): never consumes the code. Unknown, or a code of the
+ * other kind than `via` (e.g. a seen t.me deep-link code tried as a magic link) = expired.
+ */
+export async function peekLogin(db: Db, code: string, via: LoginVia, now: Date): Promise<LoginState> {
+  if (!code.startsWith(PREFIX[via])) return { status: "expired" };
   const r = await codeRow(db, code);
   if (!r || !live(r, now)) return { status: "expired" };
   if (!r.claimedAt || r.telegramId == null) return { status: "pending" };
@@ -101,14 +108,15 @@ export async function peekLogin(db: Db, code: string, now: Date): Promise<LoginS
 /**
  * Single use. A claimed, unexpired code → its person, and the row is deleted in the same transaction; audited
  * session.login (entity person, workspaceId null, actor = the person). Not claimed yet → pending (the browser
- * keeps polling). Unknown/expired → expired.
+ * keeps polling). Unknown/expired, or the other kind than `via` → expired.
  */
 export async function finishLogin(
   db: Db,
   code: string,
+  via: LoginVia,
   now: Date,
 ): Promise<{ status: "pending" } | { status: "expired" } | { status: "ok"; person: Person }> {
-  const state = await peekLogin(db, code, now);
+  const state = await peekLogin(db, code, via, now);
   if (state.status !== "ready") return state;
   const { person } = state;
   const actor = {

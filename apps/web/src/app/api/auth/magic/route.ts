@@ -10,7 +10,7 @@ export async function POST(req: Request) {
   const form = await req.formData();
   const code = String(form.get("code") ?? "");
   const next = safeNext(String(form.get("next") ?? ""));
-  const r = code ? await finishLogin(db(), code, new Date()) : { status: "expired" as const };
+  const r = code ? await finishLogin(db(), code, "magic", new Date()) : { status: "expired" as const };
   if (r.status === "ok") {
     await startSession(r.person.id);
     return new Response(null, { status: 303, headers: { Location: `${origin()}${next}` } });

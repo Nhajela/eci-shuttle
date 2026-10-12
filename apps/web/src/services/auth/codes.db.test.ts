@@ -55,13 +55,13 @@ describe("Telegram deep-link login", () => {
     expect(deepLink).toBe(`https://t.me/${process.env.TELEGRAM_BOT_USERNAME}?start=${code}`);
     expect(expiresAt).toEqual(later(LOGIN_CODE_TTL_MS));
 
-    expect(await finishLogin(db, code, later(1000))).toEqual({ status: "pending" });
+    expect(await finishLogin(db, code, "poll", later(1000))).toEqual({ status: "pending" });
 
     const user = tgUser();
     const person = await claimLogin(db, { code, user }, later(2000));
     expect(person).toMatchObject({ telegramId: user.telegramId, firstName: "Asha" });
 
-    const r = await finishLogin(db, code, later(3000));
+    const r = await finishLogin(db, code, "poll", later(3000));
     expect(r).toMatchObject({ status: "ok", person: { id: person.id } });
     expect(await db.select().from(loginCodes).where(eq(loginCodes.code, code))).toEqual([]);
     const audits = await db
@@ -71,7 +71,7 @@ describe("Telegram deep-link login", () => {
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({ entity: "person", workspaceId: null, actorId: person.id, actorKind: "admin" });
 
-    expect(await finishLogin(db, code, later(4000))).toEqual({ status: "expired" });
+    expect(await finishLogin(db, code, "poll", later(4000))).toEqual({ status: "expired" });
   });
 
   it("claim refuses unknown (NOT_FOUND), already claimed and expired (GONE)", async () => {
@@ -89,8 +89,8 @@ describe("Telegram deep-link login", () => {
 
   it("an unclaimed code expires for the polling browser", async () => {
     const { code } = await startLogin(db, t0);
-    expect(await finishLogin(db, code, later(LOGIN_CODE_TTL_MS + 1))).toEqual({ status: "expired" });
-    expect(await finishLogin(db, "unknown-code-xxxxxxxxxx", t0)).toEqual({ status: "expired" });
+    expect(await finishLogin(db, code, "poll", later(LOGIN_CODE_TTL_MS + 1))).toEqual({ status: "expired" });
+    expect(await finishLogin(db, "unknown-code-xxxxxxxxxx", "poll", t0)).toEqual({ status: "expired" });
   });
 });
 
@@ -104,31 +104,50 @@ describe("magic link", () => {
     const code = u.searchParams.get("code") as string;
 
     for (let i = 0; i < 2; i++)
-      expect(await peekLogin(db, code, later(1000))).toMatchObject({ status: "ready", person: { id: person.id } });
-    expect(await finishLogin(db, code, later(2000))).toMatchObject({ status: "ok", person: { id: person.id } });
-    expect(await peekLogin(db, code, later(3000))).toEqual({ status: "expired" });
+      expect(await peekLogin(db, code, "magic", later(1000))).toMatchObject({
+        status: "ready",
+        person: { id: person.id },
+      });
+    expect(await finishLogin(db, code, "magic", later(2000))).toMatchObject({
+      status: "ok",
+      person: { id: person.id },
+    });
+    expect(await peekLogin(db, code, "magic", later(3000))).toEqual({ status: "expired" });
   });
 
   it("expires after MAGIC_LINK_TTL_MS", async () => {
     const person = await makePerson(db);
     const code = new URL((await createMagicLink(db, person.id, t0)).url).searchParams.get("code") as string;
-    expect(await peekLogin(db, code, later(MAGIC_LINK_TTL_MS))).toEqual({ status: "expired" });
-    expect(await finishLogin(db, code, later(MAGIC_LINK_TTL_MS))).toEqual({ status: "expired" });
+    expect(await peekLogin(db, code, "magic", later(MAGIC_LINK_TTL_MS))).toEqual({ status: "expired" });
+    expect(await finishLogin(db, code, "magic", later(MAGIC_LINK_TTL_MS))).toEqual({ status: "expired" });
   });
 
   it("peek: pending for an unclaimed code, expired for unknown; unknown person → NOT_FOUND", async () => {
     const { code } = await startLogin(db, t0);
-    expect(await peekLogin(db, code, t0)).toEqual({ status: "pending" });
-    expect(await peekLogin(db, "zzzzzzzzzzzzzzzzzzzzzzzz", t0)).toEqual({ status: "expired" });
+    expect(await peekLogin(db, code, "poll", t0)).toEqual({ status: "pending" });
+    expect(await peekLogin(db, "zzzzzzzzzzzzzzzzzzzzzzzz", "magic", t0)).toEqual({ status: "expired" });
     await expect(createMagicLink(db, "00000000-0000-0000-0000-000000000000", t0)).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
   });
 
+  it("a claimed deep-link code is refused on the magic path, and a magic code on the poll path", async () => {
+    const { code } = await startLogin(db, t0);
+    await claimLogin(db, { code, user: tgUser() }, later(1000));
+    expect(await peekLogin(db, code, "magic", later(2000))).toEqual({ status: "expired" });
+    expect(await finishLogin(db, code, "magic", later(2000))).toEqual({ status: "expired" });
+    expect(await finishLogin(db, code, "poll", later(3000))).toMatchObject({ status: "ok" });
+
+    const person = await makePerson(db);
+    const magic = new URL((await createMagicLink(db, person.id, t0)).url).searchParams.get("code") as string;
+    expect(await finishLogin(db, magic, "poll", later(1000))).toEqual({ status: "expired" });
+    expect(await finishLogin(db, magic, "magic", later(2000))).toMatchObject({ status: "ok" });
+  });
+
   it("only one of two concurrent finishes wins", async () => {
     const person = await makePerson(db);
     const code = new URL((await createMagicLink(db, person.id, t0)).url).searchParams.get("code") as string;
-    const rs = await Promise.all([finishLogin(db, code, t0), finishLogin(db, code, t0)]);
+    const rs = await Promise.all([finishLogin(db, code, "magic", t0), finishLogin(db, code, "magic", t0)]);
     expect(rs.map((r) => r.status).sort()).toEqual(["expired", "ok"]);
     expect(await db.select().from(people).where(eq(people.id, person.id))).toHaveLength(1);
   });

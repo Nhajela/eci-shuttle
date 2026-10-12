@@ -20,7 +20,10 @@ export default async function MagicLinkPage({
 }) {
   const { code = "", next: rawNext } = await searchParams;
   const next = safeNext(rawNext);
-  const [state, current] = await Promise.all([code ? peekLogin(db(), code, new Date()) : null, currentPerson()]);
+  const [state, current] = await Promise.all([
+    code ? peekLogin(db(), code, "magic", new Date()) : null,
+    currentPerson(),
+  ]);
   const target = state?.status === "ready" ? state.person : null;
   if (target && current?.id === target.id) redirect(next);
 
