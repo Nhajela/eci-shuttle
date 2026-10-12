@@ -33,7 +33,14 @@ describe("expandServiceDepartures", () => {
   it("every 20 min 08:00–10:00 → 08:00 … 09:40 (end exclusive)", () => {
     const out = expandServiceDepartures(svc(), [], D);
     expect(out.map((d) => d.planned)).toEqual(["08:00", "08:20", "08:40", "09:00", "09:20", "09:40"]);
-    expect(out[0]).toEqual({ serviceId: "s1", date: D, at: ist(D, "08:00"), planned: "08:00", shiftedMin: 0, added: false });
+    expect(out[0]).toEqual({
+      serviceId: "s1",
+      date: D,
+      at: ist(D, "08:00"),
+      planned: "08:00",
+      shiftedMin: 0,
+      added: false,
+    });
   });
 
   it("explicit times are sorted and kept only inside the window", () => {
@@ -94,7 +101,14 @@ describe("expandServiceDepartures", () => {
       D,
     );
     expect(out.map((d) => d.planned)).toEqual(["08:00", "08:20", "08:40", "08:50", "09:00", "09:20", "09:40", "12:15"]);
-    expect(out[3]).toEqual({ serviceId: "s1", date: D, at: ist(D, "08:50"), planned: "08:50", shiftedMin: 0, added: true });
+    expect(out[3]).toEqual({
+      serviceId: "s1",
+      date: D,
+      at: ist(D, "08:50"),
+      planned: "08:50",
+      shiftedMin: 0,
+      added: true,
+    });
   });
 
   it("exception for another service or another date is ignored", () => {
@@ -122,7 +136,11 @@ describe("expandServiceDepartures", () => {
   });
 
   it("cross-midnight explicit times and added after-midnight departures land on date+1", () => {
-    const s = svc({ startTime: "22:00", endTime: "02:00", pattern: { kind: "times", times: ["00:30", "22:15", "03:00"] } });
+    const s = svc({
+      startTime: "22:00",
+      endTime: "02:00",
+      pattern: { kind: "times", times: ["00:30", "22:15", "03:00"] },
+    });
     const out = expandServiceDepartures(s, [ex({ type: "add_departure", departure: "01:45" })], D);
     expect(out.map((d) => d.planned)).toEqual(["22:15", "00:30", "01:45"]);
     expect(out[1]?.at).toBe(ist("2026-10-13", "00:30"));
