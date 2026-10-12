@@ -1,9 +1,9 @@
-import { and, asc, eq, lte, notInArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "@/db";
-import { outbox } from "@/db/schema";
+import { devices, outbox } from "@/db/schema";
 import { deliverTelegram } from "@/services/bot/deliver";
 import { deliverPush } from "@/services/devices/push";
-import type { DeliveryResult, OutboxJob } from "@/services/kernel";
+import { type DeliveryResult, enqueue, type OutboxJob } from "@/services/kernel";
 import type { Job } from "../job";
 
 export const MAX_ATTEMPTS = 8;
@@ -53,11 +53,14 @@ export type DrainDeps = {
 
 const realDeliverers: Deliverers = { telegram: (db, j) => deliverTelegram(db, j), push: (db, j) => deliverPush(db, j) };
 
+/** How long a claimed row stays invisible to other ticks; a crash mid-tick re-sends unsent rows after this. */
+export const LEASE_MS = 120_000;
+
 /**
- * Drain due outbox rows until nothing is due or the budget is spent. Rows are claimed with
- * FOR UPDATE SKIP LOCKED and delivered with `db` (not the claim transaction), so a deliverer's own writes
- * (telegram_messages, blocked_bot_at) never roll back with the bookkeeping. Telegram rows over the pacing limits
- * stay pending; push rows are never held back by them.
+ * Drain due outbox rows until nothing is due or the budget is spent. A short transaction claims a batch with
+ * FOR UPDATE SKIP LOCKED and leases it (run_after = now + 2 min); then each row is delivered with `db` and its result
+ * written at once, so a crash or a failed write re-sends at most the row in flight. Telegram rows over the pacing
+ * limits get their original run_after back; push rows are never held back by them.
  */
 export async function drainQueue(db: Db, now: Date, deps: DrainDeps = {}) {
   const deliver = deps.deliver ?? realDeliverers;
@@ -70,15 +73,17 @@ export async function drainQueue(db: Db, now: Date, deps: DrainDeps = {}) {
   const outOfTime = () => clock() - t0 >= budget;
 
   const stats = { sent: 0, retried: 0, dead: 0, paced: 0 };
-  // this tick only: chat-paced rows wait for the next tick; globally paced rows wait for the window to free up
-  const chatPaced = new Set<number>();
-  let globalPaced = new Set<number>();
+  // rows handed back this tick, so the next claim does not pick them up again
+  const released = new Set<number>();
+  const release = (row: OutboxJob) => {
+    released.add(row.id);
+    return db.update(outbox).set({ runAfter: row.runAfter }).where(eq(outbox.id, row.id));
+  };
 
   while (!outOfTime()) {
-    const skip = [...chatPaced, ...globalPaced];
-    let progressed = false;
-    await db.transaction(async (tx) => {
-      const rows = await tx
+    const skip = [...released];
+    const rows = await db.transaction(async (tx) => {
+      const due = await tx
         .select()
         .from(outbox)
         .where(
@@ -91,64 +96,101 @@ export async function drainQueue(db: Db, now: Date, deps: DrainDeps = {}) {
         .orderBy(asc(outbox.runAfter), asc(outbox.id))
         .limit(BATCH)
         .for("update", { skipLocked: true });
-
-      for (const row of rows) {
-        if (outOfTime()) break;
-        const t = at();
-        if (row.kind === "telegram") {
-          const chatId = Number((row.payload as { chatId?: unknown }).chatId);
-          if (!pacer.chatReady(chatId, t.getTime())) {
-            chatPaced.add(row.id);
-            stats.paced++;
-            continue;
-          }
-          if (pacer.globalWaitMs(t.getTime()) > 0) {
-            globalPaced.add(row.id);
-            continue;
-          }
-          pacer.record(chatId, t.getTime());
-        }
-        progressed = true;
-        const fn = row.kind === "telegram" || row.kind === "push" ? deliver[row.kind] : null;
-        let r: DeliveryResult;
-        try {
-          r = fn ? await fn(db, row) : { ok: false, retry: false, error: `unknown outbox kind ${row.kind}` };
-        } catch (e) {
-          r = { ok: false, retry: true, error: e instanceof Error ? e.message : String(e) };
-        }
-        const done = at();
-        // bookkeeping, not audited (CONTRACTS: outbox status)
-        if (r.ok) {
-          await tx.update(outbox).set({ status: "sent", sentAt: done, error: null }).where(eq(outbox.id, row.id));
-          stats.sent++;
-        } else {
-          const attempts = row.attempts + 1;
-          const dead = !r.retry || attempts >= MAX_ATTEMPTS;
-          await tx
-            .update(outbox)
-            .set({
-              attempts,
-              error: r.error,
-              ...(dead
-                ? { status: "dead" as const }
-                : { runAfter: new Date(done.getTime() + backoffMs(row.attempts)) }),
-            })
-            .where(eq(outbox.id, row.id));
-          stats[dead ? "dead" : "retried"]++;
-        }
+      if (due.length) {
+        const lease = new Date(at().getTime() + LEASE_MS);
+        await tx
+          .update(outbox)
+          .set({ runAfter: lease })
+          .where(
+            inArray(
+              outbox.id,
+              due.map((r) => r.id),
+            ),
+          );
       }
+      return due; // original run_after values, for release()
     });
+    if (rows.length === 0) break;
 
-    if (progressed) continue;
-    // nothing sendable: done, unless rows are only waiting for the 25/s window
-    if (globalPaced.size === 0) break;
-    const wait = pacer.globalWaitMs(at().getTime());
-    if (clock() - t0 + wait > budget) break;
-    await sleep(wait);
-    globalPaced = new Set();
+    for (const row of rows) {
+      if (outOfTime()) {
+        await release(row);
+        continue;
+      }
+      if (row.kind === "telegram") {
+        const chatId = Number((row.payload as { chatId?: unknown }).chatId);
+        const wait = pacer.globalWaitMs(at().getTime());
+        if (!pacer.chatReady(chatId, at().getTime()) || clock() - t0 + wait > budget) {
+          await release(row);
+          stats.paced++;
+          continue;
+        }
+        if (wait > 0) await sleep(wait);
+        pacer.record(chatId, at().getTime());
+      }
+      const fn = row.kind === "telegram" || row.kind === "push" ? deliver[row.kind] : null;
+      let r: DeliveryResult;
+      try {
+        r = fn ? await fn(db, row) : { ok: false, retry: false, error: `unknown outbox kind ${row.kind}` };
+      } catch (e) {
+        r = { ok: false, retry: true, error: e instanceof Error ? e.message : String(e) };
+      }
+      const done = at();
+      // bookkeeping, not audited (CONTRACTS: outbox status)
+      if (r.ok) {
+        await db.update(outbox).set({ status: "sent", sentAt: done, error: null }).where(eq(outbox.id, row.id));
+        stats.sent++;
+      } else {
+        const attempts = row.attempts + 1;
+        const dead = !r.retry || attempts >= MAX_ATTEMPTS;
+        await db
+          .update(outbox)
+          .set({
+            attempts,
+            error: r.error,
+            ...(dead ? { status: "dead" as const } : { runAfter: new Date(done.getTime() + backoffMs(row.attempts)) }),
+          })
+          .where(eq(outbox.id, row.id));
+        stats[dead ? "dead" : "retried"]++;
+      }
+    }
   }
-  stats.paced += globalPaced.size;
   return stats;
+}
+
+/** Re-push is checked about once a minute; one re-push per device per config version per 10 min. */
+const REPUSH_BUCKET_MS = 600_000;
+const SYNC_GRACE_MS = 120_000;
+
+/**
+ * Phones behind on config (SPEC §2b): Expo may accept a push the phone never acts on (Doze, app swiped away), so
+ * queue another "sync now" for every live phone whose reported config is behind and that has not synced for 2 min.
+ */
+export async function repushBehind(db: Db, now: Date) {
+  const behind = await db
+    .select({ id: devices.id, workspaceId: devices.workspaceId, configVersion: devices.configVersion })
+    .from(devices)
+    .where(
+      and(
+        isNull(devices.revokedAt),
+        isNotNull(devices.pushToken),
+        sql`${devices.reportedConfigVersion} is distinct from ${devices.configVersion}`,
+        or(isNull(devices.lastSyncAt), lt(devices.lastSyncAt, new Date(now.getTime() - SYNC_GRACE_MS))),
+      ),
+    );
+  const bucket = Math.floor(now.getTime() / REPUSH_BUCKET_MS);
+  let queued = 0;
+  for (const d of behind) {
+    const job = await enqueue(db, {
+      kind: "push",
+      workspaceId: d.workspaceId,
+      payload: { deviceId: d.id, reason: "config_behind" },
+      dedupeKey: `repush:${d.id}:${d.configVersion}:${bucket}`,
+      runAfter: now,
+    });
+    if (job) queued++;
+  }
+  return queued;
 }
 
 const defaultPacer = new Pacer();
@@ -159,14 +201,18 @@ const defaultPacer = new Pacer();
  * batches, deliver with bot/deliver.deliverTelegram (kind telegram) or devices/push.deliverPush (kind push), then:
  * ok → status sent, sent_at; retry → attempts+1, run_after = now + backoff (5 s · 2^attempts, max 10 min), dead
  * after 8 attempts; retry false → dead with the error. Pacing: ≤ 25 Telegram sends/s overall and ≤ 1/s per chat
- * (Telegram limits); paced broadcasts just stay pending for the next tick. Outbox status columns are bookkeeping,
+ * (Telegram limits); paced broadcasts just stay pending for the next tick. About once a minute it also
+ * re-pushes phones still behind on config (repushBehind). Outbox status columns are bookkeeping,
  * not audited.
  */
 export const queue: Job = {
   name: "queue",
   schedule: "*/2 * * * * *",
   run: async ({ db, now, log }) => {
+    // about once a minute (the tick is every 2 s)
+    const repushed = now.getSeconds() < 2 ? await repushBehind(db, now) : 0;
     const s = await drainQueue(db, now);
+    if (repushed) log(`re-pushed ${repushed} phones behind on config`);
     if (s.sent + s.retried + s.dead > 0) log(`sent ${s.sent}, retry ${s.retried}, dead ${s.dead}, paced ${s.paced}`);
     return s;
   },

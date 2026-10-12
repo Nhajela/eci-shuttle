@@ -1,9 +1,10 @@
+import { makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { outbox } from "@/db/schema";
+import { devices, outbox } from "@/db/schema";
 import type { DeliveryResult, OutboxJob } from "@/services/kernel";
-import { type Deliverers, drainQueue, Pacer } from "./queue";
+import { type Deliverers, drainQueue, LEASE_MS, Pacer, repushBehind } from "./queue";
 
 const NOW = new Date("2026-10-12T04:10:00Z");
 
@@ -117,5 +118,79 @@ describe("drainQueue", () => {
     const h = harness();
     await drainQueue(testDb(), NOW, { ...h.deps, budgetMs: 500 });
     expect(await get(p.id)).toMatchObject({ status: "sent" });
+  });
+
+  it("a crash mid-tick keeps earlier sends sent and leases the unfinished row instead of re-sending it", async () => {
+    const one = await push();
+    const two = await push();
+    let crashed = false;
+    const h = harness((j) => {
+      if (j.id === two.id) crashed = true;
+      return { ok: true };
+    });
+    // the clock blows up on the first read after row 2's send: like a failed write or a SIGTERM
+    const clock = () => {
+      if (crashed) throw new Error("killed");
+      return 0;
+    };
+    await expect(drainQueue(testDb(), NOW, { ...h.deps, clock })).rejects.toThrow("killed");
+    expect(await get(one.id)).toMatchObject({ status: "sent" });
+    expect(await get(two.id)).toMatchObject({ status: "pending", runAfter: new Date(NOW.getTime() + LEASE_MS) });
+
+    const next = harness();
+    await drainQueue(testDb(), new Date(NOW.getTime() + 2_000), next.deps);
+    expect(next.delivered.map((j) => j.id)).not.toContain(two.id);
+    await drainQueue(testDb(), new Date(NOW.getTime() + LEASE_MS), next.deps);
+    expect(next.delivered.map((j) => j.id)).toContain(two.id);
+    expect(await get(two.id)).toMatchObject({ status: "sent" });
+  });
+});
+
+describe("repushBehind", () => {
+  async function device(over: Partial<typeof devices.$inferInsert>) {
+    const ws = await makeWorkspace(testDb());
+    const [d] = await testDb()
+      .insert(devices)
+      .values({
+        workspaceId: ws.id,
+        label: "phone",
+        tokenHash: crypto.randomUUID(),
+        pushToken: "ExponentPushToken[x]",
+        configVersion: 3,
+        reportedConfigVersion: 2,
+        lastSyncAt: new Date(NOW.getTime() - 5 * 60_000),
+        ...over,
+      })
+      .returning();
+    return d as typeof devices.$inferSelect;
+  }
+  const pushesFor = (deviceId: string) =>
+    testDb()
+      .select()
+      .from(outbox)
+      .where(and(eq(outbox.kind, "push"), sql`${outbox.payload}->>'deviceId' = ${deviceId}`));
+
+  it("queues one push per behind phone per version per 10 min", async () => {
+    const behind = await device({});
+    const never = await device({ reportedConfigVersion: null, lastSyncAt: null });
+    const current = await device({ reportedConfigVersion: 3 });
+    const fresh = await device({ lastSyncAt: new Date(NOW.getTime() - 30_000) });
+    const revoked = await device({ revokedAt: NOW });
+    const noToken = await device({ pushToken: null });
+
+    await repushBehind(testDb(), NOW);
+    const rows = await pushesFor(behind.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "pending", workspaceId: behind.workspaceId });
+    expect(rows[0]?.payload).toEqual({ deviceId: behind.id, reason: "config_behind" });
+    expect(await pushesFor(never.id)).toHaveLength(1);
+    for (const d of [current, fresh, revoked, noToken]) expect(await pushesFor(d.id)).toHaveLength(0);
+
+    // a minute later, same 10-min bucket: nothing new
+    await repushBehind(testDb(), new Date(NOW.getTime() + 60_000));
+    expect(await pushesFor(behind.id)).toHaveLength(1);
+    // the next bucket re-pushes once more
+    await repushBehind(testDb(), new Date(NOW.getTime() + 600_000));
+    expect(await pushesFor(behind.id)).toHaveLength(2);
   });
 });
