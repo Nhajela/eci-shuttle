@@ -54,7 +54,8 @@ export function AdminShell({
   const moreActive = MORE.some((i) => isActive(pathname, i.href));
 
   return (
-    <div className="flex min-h-full flex-1 md:flex-row">
+    // --admin-tabbar: the phone tab bar's height, so pages' sticky Save (nav.STICKY_SAVE) sits above it
+    <div className="flex min-h-full flex-1 [--admin-tabbar:calc(3.5rem+1px+env(safe-area-inset-bottom))] md:flex-row md:[--admin-tabbar:0px]">
       <aside className="hidden w-56 shrink-0 flex-col gap-1 border-r p-3 md:flex">
         <p className="px-3 pb-2 font-semibold">ECI Shuttle</p>
         {[...TABS, ...MORE].map((item) => (
@@ -62,7 +63,7 @@ export function AdminShell({
         ))}
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0">
+      <div className="flex min-w-0 flex-1 flex-col pb-[var(--admin-tabbar)]">
         <header className="sticky top-0 z-30 border-b bg-background">
           <div className="flex min-h-14 items-center gap-2 px-4">
             <WorkspaceSwitcher workspaces={workspaces} current={current} pathname={pathname} />
