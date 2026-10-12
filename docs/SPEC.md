@@ -57,7 +57,13 @@ service layer takes `workspaceId` on every call.
 | `services` | id, name, kind (`regular`, `special`), route_id, public, colour, valid_from, valid_to, days_of_week, start_time, end_time, pattern (`every N min` or explicit departure times) | The schedule. Regular = the daily Riva↔Circle loop. Special = "Party shuttle, Sat 22:00–02:00". |
 | `service_exceptions` | service_id, date, kind (`cancel_day`, `cancel_departure`, `add_departure`, `shift_minutes`), note | Edits to one day without touching the pattern. |
 | `service_vehicles` | service_id, vehicle_id, starts_at, ends_at | Which vehicle runs which service, and when. A vehicle used for a party is moved here, and drops out of the Riva↔Circle ETA for those hours. |
-| `notices` | text, starts_at, ends_at, spot_ids? | Banner on the public page ("Last shuttle tonight 21:30"). |
+| `notices` | text, severity (info / heads-up / urgent), pinned, sort, starts_at, ends_at, placements[], channels[] | One notice, shown in many places. See §6b. |
+| `people` | telegram_id, username, first_name, blocked_bot_at | Anyone who has logged in or messaged the bot. |
+| `memberships` | person_id, workspace_id, role (admin / ops / viewer) | Admin access. |
+| `subscriptions` | person_id, kind (`arrival_alert` one-shot / `notices` for a spot or all), spot_id?, service_id?, lead_min, expires_at | Attendee alerts from the bot. |
+| `alert_prefs` | person_id, workspace_id, kinds[], quiet_hours | Which ops alerts each admin gets. |
+| `telegram_messages` | chat_id, kind, text, ok, message_id, error | Every message sent, as in Travel CoOp. |
+| `login_codes` | code, telegram_id, claimed_at, expires_at | Telegram login, copied from Travel CoOp. |
 | `device_assignments` | device_id, vehicle_id, starts_at, ends_at | Time-bound. Reassign = close row + open row. |
 | `directives` | target (device or vehicle), kind (`active_window`, `silence_until`, `force_active`), starts_at, ends_at, interval_s | **Overrides only.** The default tracking windows come from `service_vehicles` (each service window ±15 min), so editing the schedule automatically changes when phones track. |
 | `pings` | device_id, vehicle_id (resolved at ingest), recorded_at, lat, lng, accuracy, speed, heading, battery | Partition-free; tiny volume. |
@@ -122,9 +128,17 @@ Later, optional: `/shuttle` in a Telegram bot that answers with the same line, a
 - ETA: project the position onto the route polyline, remaining distance ÷ median speed from past trips.
   Dwell time at each end is learned the same way.
 
-## 7. Admin (comprehensive, usability first, desktop and phone)
+## 7. Admin (comprehensive, usability first, **phone-first**)
 
-Telegram login, with an allowlist per workspace. A workspace switcher sits at the top.
+Telegram login (§6c), with roles per workspace. A workspace switcher sits at the top.
+
+**Phone-responsive is a requirement, not a nice-to-have.** Admins will mostly use it on their phones, standing at Riva.
+- It's designed at 390px first. Desktop gets more columns, never more features.
+- On a phone: a bottom tab bar (Live · Schedule · Notices · Phones · More). Every table becomes a list of cards.
+  Every map has a list view beside it. Tap targets are at least 44px. Forms are one column, with sticky Save.
+- Time and date inputs use native pickers. Spot pins can be placed by tapping the map or with "Use my current location".
+- The common actions take at most 2 taps from the Live board: silence, nudge, post a notice, cancel the next departure.
+- Playwright end-to-end tests run every admin page at 390×844 and fail on horizontal scroll or clipped controls.
 
 | Section | What you can do |
 |---|---|
@@ -134,11 +148,57 @@ Telegram login, with an allowlist per workspace. A workspace switcher sits at th
 | **Schedule** | A week view of every service. Create a regular or special service (route, days, hours, "every 20 min" or exact times, public on/off). Edit one day: cancel, add or shift a departure, cancel the whole day. Assign vehicles to services for time ranges. "Duplicate as special" for one-offs like a party run. |
 | **Vehicles** | CRUD, the current phone, the current service, trip history. |
 | **Phones** | Pair (QR + code), label, assign to a vehicle, health, kill / revoke / nudge, silence until, force active for N hours, move to another workspace. |
-| **Notices** | Banners on the public page, with a start and end time, optionally only for some spots. |
+| **Notices** | Write once, place on any of everywhere / a spot / a service / the schedule / admin. Pin, severity, start and end times. Optionally send to subscribers and post or pin in the group. A preview shows exactly how it looks on each page. |
+| **People** | Admins and roles per workspace, alert settings, MCP tokens. Attendee subscriber counts. |
 | **Activity** | The audit log, filterable by entity. Each object page also shows its own timeline from it. |
 | **Workspaces** | Create test workspaces, start or stop a simulated device. |
 
 Watchdog (QStash, every minute): a vehicle expected active but silent for >5 min, or a phone below 15% battery → Telegram DM to ops.
+
+## 6b. Notices, pinned where they matter
+
+A notice is written once and placed in one or more spots on the site, with start and end times:
+
+| Placement | Where it shows |
+|---|---|
+| `everywhere` | Top of the public page, whatever spot is picked |
+| `spot:<id>` | Only when that spot is picked ("I'm at Riva" → "Pickup is at the side gate today") |
+| `service:<id>` | On that service's lines and schedule ("Party shuttle: last run back 02:00") |
+| `schedule` | Above the schedule list |
+| `admin` | Admin home only (notes between ops) |
+
+- **Pinned** notices stay at the top of their placement in `sort` order until `ends_at`. Unpinned ones show newest first.
+  Severity sets the colour and the order. Urgent always comes first.
+- **Channels**, on top of the page: send to Telegram subscribers of those spots, and/or post to the main
+  group (optionally pinned there, and unpinned automatically when the notice ends).
+- Expired notices disappear by themselves, and stay in the audit log and the notices history.
+- They can be created from admin, MCP (`notice.create`) or the bot (`/notice` for admins, which walks through placement and duration with buttons).
+
+## 6c. Telegram bot (new bot, e.g. @eci_shuttle_bot)
+
+One bot handles login, admin alerts and attendee communication. It reuses Travel CoOp's patterns:
+a webhook with a secret header, a message log, a dev outbox in tests, paced broadcasts, and remembering who blocked the bot.
+
+**Login, same as Travel CoOp.** "Log in with Telegram" → `t.me/<bot>?start=<code>` → the browser polls until
+the bot confirms. Messaging the bot directly gets you a magic link, which opens a "Continue as …" page so a link
+preview can't log anyone in. A signed session cookie lasts 60 days. Only admin needs login. The public page stays open.
+
+**For admins (you and the ops team):**
+- Alerts, depending on each admin's settings: a vehicle silent or off route, low battery, a permission lost, a phone told
+  to do one thing and doing another, kill or resume events, changes made by other admins (optional), and a nightly digest of
+  insights and timetable suggestions.
+- Each alert has buttons for the obvious next step: *Nudge phone* · *Silence 1h* · *Open in admin*.
+  Destructive buttons (kill, cancel a day) ask "Are you sure?" with a second button first. Button presses go through the
+  service layer with `channel: telegram` and are audited like everything else.
+- Quick commands: `/status`, `/today`, `/notice`, `/silence <vehicle> <until>`. Anything bigger is done in admin or by MCP.
+- Each workspace has its own alert list, so test alerts never reach the real ops team.
+
+**For attendees:**
+- `/shuttle` (or just "riva" / "circle") → the same answer as the page ("Here in 6 min · live"), with spot buttons.
+- **"Tell me when it's close"**: a one-shot alert: "Message me when the shuttle is 5 min from Riva".
+  The ETA engine fires it once, then it expires (after at most 2h).
+- **Notices**: subscribe for one spot or all of them. Urgent notices for a spot go to its subscribers.
+- In the group, the bot posts and pins notices when that channel is chosen on the notice.
 
 ## 6a. Learning and adaptive schedule
 
