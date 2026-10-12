@@ -50,7 +50,8 @@ export function PathEditor({
     import("leaflet").then((Lmod) => {
       if (cancelled || !box.current) return;
       const Lf = (Lmod as unknown as { default?: typeof L }).default ?? (Lmod as unknown as typeof L);
-      m = Lf.map(box.current, { scrollWheelZoom: false });
+      // no one-finger panning until editing, so a swipe over the map scrolls the page on phones (pinch and +/- still zoom)
+      m = Lf.map(box.current, { scrollWheelZoom: false, dragging: false });
       Lf.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -108,11 +109,13 @@ export function PathEditor({
   useEffect(() => {
     const m = map.current?.map;
     if (!m || !editing) return;
+    m.dragging.enable();
     const onClick = (e: L.LeafletMouseEvent) =>
       setDraft((d) => insertVertex(d, { lat: e.latlng.lat, lng: e.latlng.lng }));
     m.on("click", onClick);
     return () => {
       m.off("click", onClick);
+      m.dragging.disable();
     };
   }, [ready, editing]);
 
