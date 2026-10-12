@@ -1,5 +1,7 @@
 import type { LatLng, PathProjection } from "../contracts";
-import { notImplemented } from "../notImplemented";
+
+const R = 6_371_000;
+const RAD = Math.PI / 180;
 
 /**
  * Project a point onto a polyline (the route path). Pure.
@@ -13,15 +15,50 @@ import { notImplemented } from "../notImplemented";
  * - Zero-length segments (repeated points) are skipped without dividing by zero.
  */
 export function projectOntoPath(path: LatLng[], point: LatLng): PathProjection {
-  return notImplemented(path, point);
+  const first = path[0];
+  if (!first) throw new Error("projectOntoPath: empty path");
+  // local planar metres around the point
+  const kx = R * RAD * Math.cos(point.lat * RAD);
+  const ky = R * RAD;
+  const xy = (q: LatLng) => [(q.lng - point.lng) * kx, (q.lat - point.lat) * ky] as const;
+
+  let best = { alongM: 0, offsetM: distanceM(point, first), segmentIndex: 0, point: first };
+  let bestPlanar = Math.hypot(...xy(first));
+  let before = 0;
+  for (let i = 0; i + 1 < path.length; i++) {
+    const a = path[i] as LatLng;
+    const b = path[i + 1] as LatLng;
+    const segM = distanceM(a, b);
+    const [ax, ay] = xy(a);
+    const [bx, by] = xy(b);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    if (len2 > 0) {
+      const t = Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2));
+      const planar = Math.hypot(ax + t * dx, ay + t * dy);
+      if (planar < bestPlanar - 1e-9) {
+        const foot = t === 0 ? a : t === 1 ? b : { lat: a.lat + t * (b.lat - a.lat), lng: a.lng + t * (b.lng - a.lng) };
+        bestPlanar = planar;
+        best = { alongM: before + t * segM, offsetM: distanceM(point, foot), segmentIndex: i, point: foot };
+      }
+    }
+    before += segM;
+  }
+  return { ...best, totalM: before };
 }
 
 /** Great-circle (haversine) distance in metres. */
 export function distanceM(a: LatLng, b: LatLng): number {
-  return notImplemented(a, b);
+  const h =
+    Math.sin(((b.lat - a.lat) * RAD) / 2) ** 2 +
+    Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(((b.lng - a.lng) * RAD) / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
 /** Total length of a polyline in metres. */
 export function pathLengthM(path: LatLng[]): number {
-  return notImplemented(path);
+  let m = 0;
+  for (let i = 0; i + 1 < path.length; i++) m += distanceM(path[i] as LatLng, path[i + 1] as LatLng);
+  return m;
 }
