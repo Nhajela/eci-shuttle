@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { PairPanel } from "@/components/admin/phones/pair-panel";
 import { PhoneCard } from "@/components/admin/phones/phone-card";
 import { RolloutPanel } from "@/components/admin/phones/rollout-panel";
-import { phoneProblems } from "@/components/admin/phones/view";
+import { phoneProblems, toPhoneView } from "@/components/admin/phones/view";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { listVehicles } from "@/services/catalog/vehicles";
@@ -18,18 +18,19 @@ export default async function PhonesPage({ searchParams }: { searchParams: Promi
   const { actor, workspace, role } = await requireAdmin({ w });
   const now = new Date();
   const isAdmin = role === "admin";
-  const [phones, vehicles, mine] = await Promise.all([
+  const [all, vehicles, mine] = await Promise.all([
     listPhones(db(), actor, { workspaceId: workspace.id }, now),
     listVehicles(db(), actor, { workspaceId: workspace.id }),
     isAdmin ? listMyWorkspaces(db(), actor) : Promise.resolve([]),
   ]);
+  const phones = all.map(toPhoneView); // strips tokenHash/pushToken before anything reaches the client
   // move needs admin in both workspaces (the service checks it again)
   const moveTargets = mine
     .filter((x) => x.id !== workspace.id && x.role === "admin")
     .map((x) => ({ id: x.id, name: x.name }));
   const vehicleOptions = vehicles.filter((v) => v.active).map((v) => ({ id: v.id, name: v.name }));
   const live = phones.filter((h) => !h.device.revokedAt);
-  const withProblems = live.filter((h) => phoneProblems(h).length > 0).length;
+  const withProblems = phones.filter((h) => phoneProblems(h, now.getTime()).length > 0).length;
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-4 pb-24">

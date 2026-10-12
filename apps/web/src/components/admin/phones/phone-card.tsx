@@ -20,10 +20,18 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { PhoneHealth } from "@/services/devices/phones";
 import { ConfirmButton } from "./confirm-button";
 import { useAction } from "./use-action";
-import { agoText, directiveText, istInputValue, istWhen, phoneProblems, phoneStatus, type Tone } from "./view";
+import {
+  agoText,
+  directiveText,
+  istInputValue,
+  istWhen,
+  type PhoneView,
+  phoneProblems,
+  phoneStatus,
+  type Tone,
+} from "./view";
 
 type Option = { id: string; name: string };
 
@@ -46,7 +54,7 @@ export function PhoneCard({
   moveTargets,
   workspaceTarget,
 }: {
-  h: PhoneHealth;
+  h: PhoneView;
   now: number;
   w: string;
   role: Role;
@@ -55,8 +63,8 @@ export function PhoneCard({
   workspaceTarget: string | null;
 }) {
   const d = h.device;
-  const status = phoneStatus(h);
-  const problems = phoneProblems(h);
+  const status = phoneStatus(h, now);
+  const problems = phoneProblems(h, now);
   const { pending, run } = useAction();
   const canOps = role !== "viewer" && !d.revokedAt;
   const isAdmin = role === "admin" && !d.revokedAt;

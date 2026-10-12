@@ -6,15 +6,17 @@ import {
   directiveText,
   istInputToIso,
   istInputValue,
+  type PhoneView,
   phoneProblems,
   phoneStatus,
+  toPhoneView,
   untilFromHours,
 } from "./view";
 
 // 2026-10-12 10:00 IST
 const NOW = Date.parse("2026-10-12T04:30:00Z");
 
-function health(over: Partial<PhoneHealth> = {}, dev: Partial<Device> = {}): PhoneHealth {
+function health(over: Partial<PhoneView> = {}, dev: Partial<Device> = {}): PhoneView {
   return {
     device: {
       id: "d1",
@@ -26,7 +28,7 @@ function health(over: Partial<PhoneHealth> = {}, dev: Partial<Device> = {}): Pho
       killedAt: null,
       revokedAt: null,
       ...dev,
-    } as Device,
+    } as PhoneView["device"],
     vehicle: null,
     desiredMode: "active",
     modeMismatch: false,
@@ -43,37 +45,56 @@ function health(over: Partial<PhoneHealth> = {}, dev: Partial<Device> = {}): Pho
 
 describe("phoneStatus", () => {
   it("revoked wins over everything", () => {
-    expect(phoneStatus(health({}, { revokedAt: new Date(NOW), killedAt: new Date(NOW) }))).toEqual({
+    expect(
+      phoneStatus(health({}, { revokedAt: new Date(NOW), killedAt: new Date(NOW), reportedMode: "revoked" }), NOW),
+    ).toEqual({
       label: "Revoked",
       tone: "muted",
     });
   });
   it("killed", () => {
-    expect(phoneStatus(health({}, { killedAt: new Date(NOW) }))).toEqual({ label: "Killed", tone: "bad" });
+    expect(phoneStatus(health({}, { killedAt: new Date(NOW), reportedMode: "killed" }), NOW)).toEqual({
+      label: "Killed",
+      tone: "bad",
+    });
+  });
+  it("killed once the phone has synced after the kill, even if it last reported active", () => {
+    const d = { killedAt: new Date(NOW - 60_000), lastSyncAt: new Date(NOW) };
+    expect(phoneStatus(health({}, d), NOW)).toEqual({ label: "Killed", tone: "bad" });
+  });
+  it("kill pending while the phone hasn't synced since", () => {
+    const d = { killedAt: new Date(NOW), lastSyncAt: new Date(NOW - 3_600_000) };
+    expect(phoneStatus(health({}, d), NOW)).toEqual({ label: "Kill pending", tone: "warn" });
+  });
+  it("revoke pending while the phone hasn't synced since", () => {
+    expect(phoneStatus(health({}, { revokedAt: new Date(NOW), lastSyncAt: null }), NOW)).toEqual({
+      label: "Revoke pending",
+      tone: "warn",
+    });
   });
   it("tracking when reported active", () => {
-    expect(phoneStatus(health())).toEqual({ label: "Tracking", tone: "ok" });
+    expect(phoneStatus(health(), NOW)).toEqual({ label: "Tracking", tone: "ok" });
   });
   it("idle", () => {
-    expect(phoneStatus(health({ desiredMode: "idle" }, { reportedMode: "idle" }))).toEqual({
+    expect(phoneStatus(health({ desiredMode: "idle" }, { reportedMode: "idle" }), NOW)).toEqual({
       label: "Idle",
       tone: "ok",
     });
   });
   it("never synced", () => {
-    expect(phoneStatus(health({ lastSyncAgoS: null }, { reportedMode: null }))).toEqual({
+    expect(phoneStatus(health({ lastSyncAgoS: null }, { reportedMode: null }), NOW)).toEqual({
       label: "Never synced",
       tone: "warn",
     });
   });
   it("any problem turns an ok status into warn", () => {
-    expect(phoneStatus(health({ updateFailed: true })).tone).toBe("warn");
+    expect(phoneStatus(health({ updateFailed: true }), NOW).tone).toBe("warn");
   });
 });
 
 describe("phoneProblems", () => {
   it("none for a healthy phone", () => {
-    expect(phoneProblems(health())).toEqual([]);
+    expect(phoneProblems(health(), NOW)).toEqual([]);
   });
   it("lists reported vs desired, config, OTA, battery and permissions", () => {
     const p = phoneProblems(
@@ -94,6 +115,7 @@ describe("phoneProblems", () => {
         },
         { reportedMode: "idle", battery: 9, charging: false },
       ),
+      NOW,
     );
     expect(p).toEqual([
       "Told active, reports idle",
@@ -105,10 +127,41 @@ describe("phoneProblems", () => {
     ]);
   });
   it("low battery while charging is fine; silent tracker is flagged", () => {
-    expect(phoneProblems(health({ lastSyncAgoS: 600 }, { battery: 9, charging: true }))).toEqual(["Silent for 10 min"]);
+    expect(phoneProblems(health({ lastSyncAgoS: 600 }, { battery: 9, charging: true }), NOW)).toEqual([
+      "Silent for 10 min",
+    ]);
   });
-  it("killed or revoked phones report no problems", () => {
-    expect(phoneProblems(health({ modeMismatch: true }, { revokedAt: new Date(NOW) }))).toEqual([]);
+  it("confirmed killed or revoked phones report no problems", () => {
+    expect(
+      phoneProblems(health({ modeMismatch: true }, { revokedAt: new Date(NOW), reportedMode: "revoked" }), NOW),
+    ).toEqual([]);
+    expect(
+      phoneProblems(health({ modeMismatch: true }, { killedAt: new Date(NOW), reportedMode: "killed" }), NOW),
+    ).toEqual([]);
+  });
+  it("a pending kill is flagged with when it was sent (IST)", () => {
+    // 09:00 IST, the phone last synced at 08:00 IST and is still tracking
+    const d = { killedAt: new Date("2026-10-12T03:30:00Z"), lastSyncAt: new Date("2026-10-12T02:30:00Z") };
+    expect(phoneProblems(health({ modeMismatch: true }, d), NOW)).toEqual([
+      "Kill sent, phone hasn't synced since 09:00",
+    ]);
+  });
+  it("a pending revoke is flagged", () => {
+    const d = { revokedAt: new Date("2026-10-11T03:30:00Z"), lastSyncAt: null };
+    expect(phoneProblems(health({}, d), NOW)).toEqual(["Revoke sent, phone hasn't synced since Sun 11 Oct, 09:00"]);
+  });
+});
+
+describe("toPhoneView", () => {
+  it("never passes the token hash or push token to the client", () => {
+    const full = {
+      ...health({ vehicle: { id: "v1", name: "Bus 1" } as PhoneView["vehicle"] }),
+      device: { ...health().device, tokenHash: "secret-hash", pushToken: "ExponentPushToken[x]" },
+    } as unknown as PhoneHealth;
+    const v = toPhoneView(full);
+    expect(JSON.stringify(v)).not.toMatch(/secret-hash|ExponentPushToken/);
+    expect(v.device.label).toBe("Raju's phone");
+    expect(v.vehicle).toEqual({ id: "v1", name: "Bus 1" });
   });
 });
 

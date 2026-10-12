@@ -1,6 +1,6 @@
 /** admin-phones: pure display rules for a phone card. Times are IST; `now` is epoch ms. */
 import { formatIst, istDate, istHHMM, istToEpoch } from "@eci-shuttle/shared";
-import type { Directive } from "@/db/types";
+import type { Device, Directive } from "@/db/types";
 import type { PhoneHealth } from "@/services/devices/phones";
 
 export type Tone = "ok" | "warn" | "bad" | "muted";
@@ -9,12 +9,51 @@ const SILENT_AFTER_S = 5 * 60; // SPEC §7 watchdog: expected active but silent 
 const LOW_BATTERY = 15;
 const MAX_HOURS = 48; // the device schedule only covers 48h
 
+/** Device fields the card may see. Never tokenHash or pushToken: this goes into the client payload for viewers too. */
+const DEVICE_FIELDS = [
+  "id",
+  "label",
+  "model",
+  "appVersion",
+  "updateId",
+  "targetUpdateId",
+  "battery",
+  "charging",
+  "lastSyncAt",
+  "reportedMode",
+  "reportedConfigVersion",
+  "configVersion",
+  "killedAt",
+  "revokedAt",
+] as const;
+export type PhoneView = Omit<PhoneHealth, "device" | "vehicle"> & {
+  device: Pick<Device, (typeof DEVICE_FIELDS)[number]>;
+  vehicle: { id: string; name: string } | null;
+};
+
+/** Server → client: keep only what the card shows. */
+export function toPhoneView(h: PhoneHealth): PhoneView {
+  const device = Object.fromEntries(DEVICE_FIELDS.map((k) => [k, h.device[k]])) as PhoneView["device"];
+  return { ...h, device, vehicle: h.vehicle && { id: h.vehicle.id, name: h.vehicle.name } };
+}
+
+/** Kill/revoke reach the phone in a sync response; until it syncs again (or reports the mode) it is still running. */
+function pendingSince(d: PhoneView["device"], at: Date | null, mode: "killed" | "revoked"): Date | null {
+  if (!at || d.reportedMode === mode || (d.lastSyncAt && d.lastSyncAt >= at)) return null;
+  return at;
+}
+
 const MODE_LABEL: Record<string, string> = { active: "Tracking", idle: "Idle", unpaired: "Unpaired" };
 
-/** Plain-English problems, in the order an admin should look at them. None for killed/revoked phones. */
-export function phoneProblems(h: PhoneHealth): string[] {
+/** Plain-English problems, in the order an admin should look at them. None for confirmed killed/revoked phones. */
+export function phoneProblems(h: PhoneView, now: number): string[] {
   const d = h.device;
-  if (d.killedAt || d.revokedAt) return [];
+  const revokePending = pendingSince(d, d.revokedAt, "revoked");
+  if (revokePending) return [`Revoke sent, phone hasn't synced since ${istWhen(revokePending, now)}`];
+  if (d.revokedAt) return [];
+  const killPending = pendingSince(d, d.killedAt, "killed");
+  if (killPending) return [`Kill sent, phone hasn't synced since ${istWhen(killPending, now)}`];
+  if (d.killedAt) return [];
   const out: string[] = [];
   if (h.desiredMode === "active" && h.lastSyncAgoS !== null && h.lastSyncAgoS > SILENT_AFTER_S)
     out.push(`Silent for ${Math.floor(h.lastSyncAgoS / 60)} min`);
@@ -36,13 +75,19 @@ export function phoneProblems(h: PhoneHealth): string[] {
   return out;
 }
 
-export function phoneStatus(h: PhoneHealth): { label: string; tone: Tone } {
+export function phoneStatus(h: PhoneView, now: number): { label: string; tone: Tone } {
   const d = h.device;
-  if (d.revokedAt) return { label: "Revoked", tone: "muted" };
-  if (d.killedAt) return { label: "Killed", tone: "bad" };
+  if (d.revokedAt)
+    return pendingSince(d, d.revokedAt, "revoked")
+      ? { label: "Revoke pending", tone: "warn" }
+      : { label: "Revoked", tone: "muted" };
+  if (d.killedAt)
+    return pendingSince(d, d.killedAt, "killed")
+      ? { label: "Kill pending", tone: "warn" }
+      : { label: "Killed", tone: "bad" };
   if (h.lastSyncAgoS === null) return { label: "Never synced", tone: "warn" };
   const label = MODE_LABEL[d.reportedMode ?? ""] ?? "Unknown";
-  return { label, tone: phoneProblems(h).length ? "warn" : "ok" };
+  return { label, tone: phoneProblems(h, now).length ? "warn" : "ok" };
 }
 
 export function agoText(s: number | null): string {
