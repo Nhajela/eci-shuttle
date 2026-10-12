@@ -185,6 +185,19 @@ describe("assignmentRange", () => {
       endsAt: "2026-11-01T02:00:00+05:30",
     });
   });
+  it("spans many days when given a last day", () => {
+    expect(assignmentRange("2026-10-11", "07:00", "21:00", "2026-11-01")).toEqual({
+      startsAt: "2026-10-11T07:00:00+05:30",
+      endsAt: "2026-11-01T21:00:00+05:30",
+    });
+    expect(assignmentRange("2026-10-11", "22:00", "02:00", "2026-10-13")).toEqual({
+      startsAt: "2026-10-11T22:00:00+05:30",
+      endsAt: "2026-10-14T02:00:00+05:30",
+    });
+  });
+  it("ignores a last day before the first day", () => {
+    expect(assignmentRange("2026-10-12", "08:00", "13:00", "2026-10-10").endsAt).toBe("2026-10-12T13:00:00+05:30");
+  });
 });
 
 describe("formatRange", () => {

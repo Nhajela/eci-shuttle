@@ -68,7 +68,7 @@ export async function assignVehicleAction(_: ActionState, fd: FormData): Promise
       workspaceId,
       serviceId: str(fd, "serviceId"),
       vehicleId: str(fd, "vehicleId"),
-      ...assignmentRange(str(fd, "date"), str(fd, "start"), str(fd, "end")),
+      ...assignmentRange(str(fd, "date"), str(fd, "start"), str(fd, "end"), str(fd, "lastDate") || undefined),
     }),
   );
 }

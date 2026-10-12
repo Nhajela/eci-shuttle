@@ -98,9 +98,10 @@ export function exceptionFormToInput(fd: FormData) {
   };
 }
 
-/** IST start/end timestamps for a staffing range on `date`; an end at or before the start is the next day. */
-export function assignmentRange(date: IsoDate, start: HHMM, end: HHMM) {
-  const endDate = end <= start ? addDays(date, 1) : date;
+/** IST start/end timestamps for staffing from `date` to `lastDate` (default `date`); an end at or before the start is the day after. */
+export function assignmentRange(date: IsoDate, start: HHMM, end: HHMM, lastDate?: IsoDate) {
+  const last = lastDate && lastDate > date ? lastDate : date;
+  const endDate = end <= start ? addDays(last, 1) : last;
   return { startsAt: `${date}T${start}:00+05:30`, endsAt: `${endDate}T${end}:00+05:30` };
 }
 

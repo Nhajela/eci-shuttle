@@ -238,6 +238,17 @@ export default async function SchedulePage({
                             <input type="time" name="end" required defaultValue={service.endTime} className={field} />
                           </label>
                         </div>
+                        <label className="flex flex-col gap-1 text-sm">
+                          Last day
+                          <input
+                            type="date"
+                            name="lastDate"
+                            required
+                            min={day}
+                            defaultValue={service.kind === "regular" && service.validTo > day ? service.validTo : day}
+                            className={field}
+                          />
+                        </label>
                         <Button type="submit" size="lg">
                           Assign
                         </Button>
@@ -267,7 +278,17 @@ export default async function SchedulePage({
         <h2 className="font-semibold">Services this week</h2>
         {services.length === 0 && <p className="text-sm text-muted-foreground">No services this week.</p>}
         {services.map((s) => (
-          <ServiceCard key={s.id} s={s} w={w} day={day} canEdit={canEdit} routes={routeOptions} />
+          <ServiceCard
+            key={s.id}
+            s={s}
+            w={w}
+            day={day}
+            canEdit={canEdit}
+            // keep an archived current route selectable, or the select silently picks another route on save
+            routes={routes
+              .filter((r) => !r.archivedAt || r.id === s.routeId)
+              .map((r) => ({ id: r.id, name: r.archivedAt ? `${r.name} (archived)` : r.name }))}
+          />
         ))}
         {canEdit && (
           <details className="rounded-lg border p-3">
