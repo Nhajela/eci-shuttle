@@ -4,7 +4,7 @@
  * force active, nudge = ops+; kill, revoke, move workspace = admin.
  */
 import {
-  notImplemented,
+  type DirectiveKind,
   type Permissions,
   PhoneAssignFields,
   PhoneForceActiveFields,
@@ -14,12 +14,26 @@ import {
   PhoneNudgeFields,
   PhoneRevokeFields,
   PhoneSilenceFields,
+  resolveMode,
   withWorkspace,
 } from "@eci-shuttle/shared";
+import { and, asc, eq, gt, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
+import { deviceAssignments, devices, directives, memberships, vehicles, workspaces } from "@/db/schema";
 import type { Device, DeviceAssignment, Directive, Vehicle } from "@/db/types";
-import type { Actor } from "../kernel";
+import {
+  type Actor,
+  enqueue,
+  getInWorkspace,
+  inWorkspace,
+  mutate,
+  parseInput,
+  readable,
+  requireRole,
+  ServiceError,
+} from "../kernel";
+import { bumpConfigs, desiredConfig } from "./config";
 
 export const LabelPhoneInput = withWorkspace(PhoneLabelFields);
 export const AssignPhoneInput = withWorkspace(PhoneAssignFields);
@@ -30,8 +44,44 @@ export const KillPhoneInput = withWorkspace(PhoneKillFields);
 export const RevokePhoneInput = withWorkspace(PhoneRevokeFields);
 export const MovePhoneInput = withWorkspace(PhoneMoveWorkspaceFields);
 
+/** Row version + updated_at for any admin edit of a device. */
+const edited = () => ({ version: sql`${devices.version} + 1`, updatedAt: new Date() });
+
+/** The phone, locked when in a transaction. Revoked phones can only be listed (re-pair instead). */
+async function livePhone(db: Db, workspaceId: string, deviceId: string, forUpdate = false): Promise<Device> {
+  const d = await getInWorkspace(db, devices, workspaceId, deviceId, "phone", { forUpdate });
+  if (d.revokedAt) throw new ServiceError("INVALID", "This phone is revoked. Pair it again to use it.", { deviceId });
+  return d;
+}
+
+/** Closes the open assignments matching `where` at `now`; returns the closed rows. */
+const closeAssignments = (tx: Db, where: SQL, now: Date) =>
+  tx
+    .update(deviceAssignments)
+    .set({ endsAt: now })
+    .where(and(where, isNull(deviceAssignments.endsAt)))
+    .returning();
+
+const openAssignment = async (db: Db, deviceId: string): Promise<DeviceAssignment | null> =>
+  (
+    await db
+      .select()
+      .from(deviceAssignments)
+      .where(and(eq(deviceAssignments.deviceId, deviceId), isNull(deviceAssignments.endsAt)))
+  )[0] ?? null;
+
 export async function labelPhone(db: Db, actor: Actor, input: z.input<typeof LabelPhoneInput>): Promise<Device> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId, label } = parseInput(LabelPhoneInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return mutate(db, actor, { action: "phone.label", entity: "device", entityId: deviceId, workspaceId }, async (tx) => {
+    const before = await getInWorkspace(tx, devices, workspaceId, deviceId, "phone", { forUpdate: true });
+    const [after] = await tx
+      .update(devices)
+      .set({ label, ...edited() })
+      .where(eq(devices.id, deviceId))
+      .returning();
+    return { before, after, result: after };
+  });
 }
 
 /** Closes the open assignment (ends_at = now) and opens one for vehicleId (null = just unassign). A vehicle
@@ -41,41 +91,157 @@ export async function assignPhone(
   actor: Actor,
   input: z.input<typeof AssignPhoneInput>,
 ): Promise<DeviceAssignment | null> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId, vehicleId } = parseInput(AssignPhoneInput, input);
+  requireRole(actor, workspaceId, "ops");
+  await livePhone(db, workspaceId, deviceId);
+  const open = await openAssignment(db, deviceId);
+  if ((open?.vehicleId ?? null) === vehicleId) return open; // already so: write nothing
+
+  return mutate(
+    db,
+    actor,
+    { action: "phone.assign", entity: "device", entityId: deviceId, workspaceId },
+    async (tx) => {
+      await livePhone(tx, workspaceId, deviceId, true);
+      if (vehicleId) await getInWorkspace(tx, vehicles, workspaceId, vehicleId, "vehicle", { forUpdate: true });
+      const now = new Date();
+      const closed = await closeAssignments(tx, eq(deviceAssignments.deviceId, deviceId), now);
+      let created: DeviceAssignment | null = null;
+      let displaced: string[] = [];
+      if (vehicleId) {
+        displaced = (await closeAssignments(tx, eq(deviceAssignments.vehicleId, vehicleId), now)).map(
+          (a) => a.deviceId,
+        );
+        [created] = await tx
+          .insert(deviceAssignments)
+          .values({ workspaceId, deviceId, vehicleId, startsAt: now })
+          .returning();
+      }
+      await bumpConfigs(tx, { deviceIds: [deviceId, ...displaced] }, "phone.assign");
+      return {
+        before: { vehicleId: closed[0]?.vehicleId ?? null },
+        after: { vehicleId, ...(displaced.length ? { displacedDeviceIds: displaced } : {}) },
+        result: created,
+      };
+    },
+  );
+}
+
+async function addDirective(
+  db: Db,
+  actor: Actor,
+  workspaceId: string,
+  deviceId: string,
+  kind: DirectiveKind,
+  until: string,
+  intervalS: number | null,
+): Promise<Directive> {
+  const endsAt = new Date(until);
+  const action = kind === "silence_until" ? "phone.silence" : "phone.force_active";
+  return mutate(db, actor, { action, entity: "directive", workspaceId }, async (tx) => {
+    await livePhone(tx, workspaceId, deviceId, true);
+    const startsAt = new Date();
+    if (endsAt <= startsAt) throw new ServiceError("INVALID", "Pick a time in the future.", { until });
+    const [d] = await tx
+      .insert(directives)
+      .values({ workspaceId, deviceId, kind, startsAt, endsAt, intervalS })
+      .returning();
+    await bumpConfigs(tx, { deviceIds: [deviceId] }, action);
+    return { before: null, after: d, result: d };
+  });
 }
 
 /** A silence_until directive [now, until): idle even inside windows. */
 export async function silencePhone(db: Db, actor: Actor, input: z.input<typeof SilencePhoneInput>): Promise<Directive> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId, until } = parseInput(SilencePhoneInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return addDirective(db, actor, workspaceId, deviceId, "silence_until", until, null);
 }
 
 /** A force_active directive [now, until) with optional intervalS. */
 export async function forceActive(db: Db, actor: Actor, input: z.input<typeof ForceActiveInput>): Promise<Directive> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId, until, intervalS } = parseInput(ForceActiveInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return addDirective(db, actor, workspaceId, deviceId, "force_active", until, intervalS);
 }
 
-/** Cancel a silence/force directive early. */
+/** Cancel a silence/force directive early. Already cancelled or ended: nothing to do. */
 export async function cancelDirective(
   db: Db,
   actor: Actor,
   input: { workspaceId: string; directiveId: string },
 ): Promise<void> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, directiveId } = input;
+  requireRole(actor, workspaceId, "ops");
+  const d = await getInWorkspace(db, directives, workspaceId, directiveId, "directive");
+  if (d.cancelledAt || d.endsAt <= new Date()) return;
+  await mutate(db, actor, { action: "directive.cancel", entity: "directive", workspaceId }, async (tx) => {
+    const before = await getInWorkspace(tx, directives, workspaceId, directiveId, "directive", { forUpdate: true });
+    const [after] = await tx
+      .update(directives)
+      .set({ cancelledAt: new Date(), version: sql`${directives.version} + 1` })
+      .where(eq(directives.id, directiveId))
+      .returning();
+    // the check constraint guarantees exactly one target
+    const target = before.deviceId ? { deviceIds: [before.deviceId] } : { vehicleIds: [before.vehicleId as string] };
+    await bumpConfigs(tx, target, "directive.cancel");
+    return { before, after, result: undefined };
+  });
 }
 
 /** Push "sync now" without changing config (queues a push; audited phone.nudge). */
 export async function nudgePhone(db: Db, actor: Actor, input: z.input<typeof NudgePhoneInput>): Promise<void> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId } = parseInput(NudgePhoneInput, input);
+  requireRole(actor, workspaceId, "ops");
+  await mutate(db, actor, { action: "phone.nudge", entity: "device", entityId: deviceId, workspaceId }, async (tx) => {
+    await livePhone(tx, workspaceId, deviceId);
+    await enqueue(tx, { kind: "push", payload: { deviceId, reason: "nudge" }, workspaceId });
+    return { before: null, after: null, result: undefined };
+  });
 }
 
 /** admin. Sets killed_at; the phone latches killed on next sync. Only the driver's Resume clears it. */
 export async function killPhone(db: Db, actor: Actor, input: z.input<typeof KillPhoneInput>): Promise<Device> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId } = parseInput(KillPhoneInput, input);
+  requireRole(actor, workspaceId, "admin");
+  const phone = await livePhone(db, workspaceId, deviceId);
+  if (phone.killedAt) return phone;
+  return mutate(db, actor, { action: "phone.kill", entity: "device", entityId: deviceId, workspaceId }, async (tx) => {
+    const before = await livePhone(tx, workspaceId, deviceId, true);
+    await tx
+      .update(devices)
+      .set({ killedAt: new Date(), ...edited() })
+      .where(eq(devices.id, deviceId));
+    await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.kill");
+    const after = await getInWorkspace(tx, devices, workspaceId, deviceId, "phone");
+    return { before, after, result: after };
+  });
 }
 
 /** admin. Sets revoked_at, closes assignments; the token stops working after the next sync tells it so. */
 export async function revokePhone(db: Db, actor: Actor, input: z.input<typeof RevokePhoneInput>): Promise<Device> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, deviceId } = parseInput(RevokePhoneInput, input);
+  requireRole(actor, workspaceId, "admin");
+  const phone = await getInWorkspace(db, devices, workspaceId, deviceId, "phone");
+  if (phone.revokedAt) return phone;
+  return mutate(
+    db,
+    actor,
+    { action: "phone.revoke", entity: "device", entityId: deviceId, workspaceId },
+    async (tx) => {
+      const before = await livePhone(tx, workspaceId, deviceId, true);
+      const now = new Date();
+      await closeAssignments(tx, eq(deviceAssignments.deviceId, deviceId), now);
+      // bump before revoking: bumpConfigs skips revoked devices, and the phone must sync once more to learn it
+      await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.revoke");
+      const [after] = await tx
+        .update(devices)
+        .set({ revokedAt: now, ...edited() })
+        .where(eq(devices.id, deviceId))
+        .returning();
+      return { before, after, result: after };
+    },
+  );
 }
 
 /**
@@ -83,8 +249,50 @@ export async function revokePhone(db: Db, actor: Actor, input: z.input<typeof Re
  * moves the device (and nothing else), bumps config. A simulated device can't move into the live workspace
  * (INVALID).
  */
-export async function movePhoneToWorkspace(db: Db, actor: Actor, input: z.input<typeof MovePhoneInput>): Promise<Device> {
-  return notImplemented(db, actor, input);
+export async function movePhoneToWorkspace(
+  db: Db,
+  actor: Actor,
+  input: z.input<typeof MovePhoneInput>,
+): Promise<Device> {
+  const { workspaceId, deviceId, toWorkspaceId } = parseInput(MovePhoneInput, input);
+  requireRole(actor, workspaceId, "admin");
+  if (toWorkspaceId === workspaceId) throw new ServiceError("INVALID", "The phone is already in this workspace.");
+  if (actor.kind !== "system") {
+    const [m] = await db
+      .select()
+      .from(memberships)
+      .where(and(eq(memberships.personId, actor.id), eq(memberships.workspaceId, toWorkspaceId)));
+    if (m?.role !== "admin")
+      throw new ServiceError("FORBIDDEN", "You need the admin role in the workspace you're moving the phone to.", {
+        workspaceId: toWorkspaceId,
+      });
+  }
+  const [to] = await db.select().from(workspaces).where(eq(workspaces.id, toWorkspaceId));
+  if (!to) throw new ServiceError("NOT_FOUND", "No such workspace.", { entity: "workspace", id: toWorkspaceId });
+
+  return mutate(
+    db,
+    actor,
+    { action: "phone.move_workspace", entity: "device", entityId: deviceId, workspaceId },
+    async (tx) => {
+      const before = await livePhone(tx, workspaceId, deviceId, true);
+      if (before.simulated && to.isLive)
+        throw new ServiceError("INVALID", "A simulated phone can't join the live workspace.", { deviceId });
+      const now = new Date();
+      await closeAssignments(tx, eq(deviceAssignments.deviceId, deviceId), now);
+      await tx
+        .update(directives)
+        .set({ cancelledAt: now, version: sql`${directives.version} + 1` })
+        .where(and(eq(directives.deviceId, deviceId), isNull(directives.cancelledAt), gt(directives.endsAt, now)));
+      await tx
+        .update(devices)
+        .set({ workspaceId: toWorkspaceId, ...edited() })
+        .where(eq(devices.id, deviceId));
+      await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.move_workspace");
+      const after = await getInWorkspace(tx, devices, toWorkspaceId, deviceId, "phone");
+      return { before, after, result: after };
+    },
+  );
 }
 
 export type PhoneHealth = {
@@ -102,6 +310,19 @@ export type PhoneHealth = {
   activeDirectives: Directive[];
 };
 
+/** Dotted-number compare, so "1.10.0" is not below "1.4.0". */
+export function versionBelow(v: string, min: string): boolean {
+  const a = v.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const b = min.split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
+  }
+  return false;
+}
+
+const permissionsOk = (p: Permissions | null) =>
+  !!p && p.location === "always" && p.preciseLocation && p.notifications && p.batteryOptimizationExempt;
+
 /** viewer+. The Phones page and MCP shuttle_phones. Revoked phones last. */
 export async function listPhones(
   db: Db,
@@ -109,5 +330,58 @@ export async function listPhones(
   input: { workspaceId: string },
   now: Date,
 ): Promise<PhoneHealth[]> {
-  return notImplemented(db, actor, input, now);
+  const { workspaceId } = input;
+  readable(actor, workspaceId);
+  const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+  if (!ws) throw new ServiceError("NOT_FOUND", "No such workspace.", { entity: "workspace", id: workspaceId });
+  const phones = await db.select().from(devices).where(inWorkspace(devices, workspaceId)).orderBy(asc(devices.label));
+  if (!phones.length) return [];
+  const assigned = await db
+    .select({ deviceId: deviceAssignments.deviceId, vehicle: vehicles })
+    .from(deviceAssignments)
+    .innerJoin(vehicles, eq(vehicles.id, deviceAssignments.vehicleId))
+    .where(and(inWorkspace(deviceAssignments, workspaceId), isNull(deviceAssignments.endsAt)));
+  const vehicleOf = new Map(assigned.map((a) => [a.deviceId, a.vehicle]));
+  const vehicleIds = assigned.map((a) => a.vehicle.id);
+  // not cancelled and not yet over (includes ones that start later)
+  const dirs = await db
+    .select()
+    .from(directives)
+    .where(
+      and(
+        inWorkspace(directives, workspaceId),
+        isNull(directives.cancelledAt),
+        gt(directives.endsAt, now),
+        or(
+          inArray(
+            directives.deviceId,
+            phones.map((p) => p.id),
+          ),
+          vehicleIds.length ? inArray(directives.vehicleId, vehicleIds) : sql`false`,
+        ),
+      ),
+    )
+    .orderBy(asc(directives.startsAt));
+
+  const out: PhoneHealth[] = [];
+  for (const device of phones) {
+    const vehicle = vehicleOf.get(device.id) ?? null;
+    const revoked = !!device.revokedAt;
+    // ponytail: one desiredConfig per phone (N queries); fine for a handful of phones
+    const desiredMode = revoked ? "revoked" : resolveMode(await desiredConfig(db, device.id, now), now.getTime()).mode;
+    out.push({
+      device,
+      vehicle,
+      desiredMode,
+      modeMismatch: !revoked && device.reportedMode != null && device.reportedMode !== desiredMode,
+      configBehind: !revoked && (device.reportedConfigVersion ?? 0) < device.configVersion,
+      lastSyncAgoS: device.lastSyncAt ? Math.floor((now.getTime() - device.lastSyncAt.getTime()) / 1000) : null,
+      needsNewApk: !!(ws.minAppVersion && device.appVersion && versionBelow(device.appVersion, ws.minAppVersion)),
+      updateFailed: !!device.updateFailedAt,
+      permissionsOk: permissionsOk(device.permissions),
+      permissions: device.permissions,
+      activeDirectives: dirs.filter((d) => d.deviceId === device.id || (vehicle && d.vehicleId === vehicle.id)),
+    });
+  }
+  return out.sort((a, b) => Number(!!a.device.revokedAt) - Number(!!b.device.revokedAt));
 }

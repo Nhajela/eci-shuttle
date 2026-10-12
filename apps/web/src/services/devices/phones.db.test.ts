@@ -13,8 +13,8 @@ import {
   cancelDirective,
   forceActive,
   killPhone,
-  listPhones,
   labelPhone,
+  listPhones,
   movePhoneToWorkspace,
   nudgePhone,
   revokePhone,
@@ -82,7 +82,9 @@ const openAssignments = (deviceId: string) =>
     .from(deviceAssignments)
     .where(and(eq(deviceAssignments.deviceId, deviceId), isNull(deviceAssignments.endsAt)));
 
-beforeEach(() => vi.mocked(bumpConfigs).mockClear());
+beforeEach(() => {
+  vi.mocked(bumpConfigs).mockClear();
+});
 
 describe("labelPhone", () => {
   it("renames the phone, bumps version, audits phone.label; ops may do it", async () => {
@@ -98,16 +100,18 @@ describe("labelPhone", () => {
   it("viewers can't; another workspace's phone is NOT_FOUND; bad input is INVALID", async () => {
     const { ws, phone } = await setup();
     const { actor: viewer } = await makeAdmin(db(), ws.id, "viewer");
-    await expect(labelPhone(db(), viewer, { workspaceId: ws.id, deviceId: phone.id, label: "x" })).rejects.toMatchObject({
+    await expect(
+      labelPhone(db(), viewer, { workspaceId: ws.id, deviceId: phone.id, label: "x" }),
+    ).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
     const other = await setup();
     await expect(
       labelPhone(db(), other.actor, { workspaceId: other.ws.id, deviceId: phone.id, label: "x" }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    await expect(labelPhone(db(), other.actor, { workspaceId: other.ws.id, deviceId: phone.id, label: "" })).rejects.toMatchObject(
-      { code: "INVALID" },
-    );
+    await expect(
+      labelPhone(db(), other.actor, { workspaceId: other.ws.id, deviceId: phone.id, label: "" }),
+    ).rejects.toMatchObject({ code: "INVALID" });
   });
 });
 
@@ -267,7 +271,8 @@ describe("movePhoneToWorkspace", () => {
   async function twoWorkspaces(targetRole: Role | null = "admin", over: Partial<typeof devices.$inferInsert> = {}) {
     const s = await setup("admin", over);
     const to = await makeWorkspace(db());
-    if (targetRole) await db().insert(memberships).values({ personId: s.person.id, workspaceId: to.id, role: targetRole });
+    if (targetRole)
+      await db().insert(memberships).values({ personId: s.person.id, workspaceId: to.id, role: targetRole });
     return { ...s, to };
   }
 
@@ -334,7 +339,12 @@ describe("listPhones", () => {
       reportedMode: "active",
       killedAt: now,
       updateFailedAt: now,
-      permissions: { location: "foreground", preciseLocation: true, notifications: true, batteryOptimizationExempt: true },
+      permissions: {
+        location: "foreground",
+        preciseLocation: true,
+        notifications: true,
+        batteryOptimizationExempt: true,
+      },
     });
     await db().insert(deviceAssignments).values({ workspaceId: ws.id, deviceId: ok.id, vehicleId: v.id });
     await db()
@@ -376,6 +386,8 @@ describe("listPhones", () => {
   it("needs viewer in the workspace", async () => {
     const ws = await makeWorkspace(db());
     const { actor } = await makeAdmin(db(), (await makeWorkspace(db())).id, "admin");
-    await expect(listPhones(db(), actor, { workspaceId: ws.id }, new Date())).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(listPhones(db(), actor, { workspaceId: ws.id }, new Date())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 });
