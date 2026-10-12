@@ -1,5 +1,11 @@
 /** svc-catalog: spots (SPEC §3, §7 Spots). ops+ writes, viewer+ reads. */
-import { notImplemented, SpotArchiveFields, SpotCreateFields, SpotUpdateFields, withWorkspace } from "@eci-shuttle/shared";
+import {
+  notImplemented,
+  SpotArchiveFields,
+  SpotCreateFields,
+  SpotUpdateFields,
+  withWorkspace,
+} from "@eci-shuttle/shared";
 import type { z } from "zod";
 import type { Db } from "@/db";
 import type { Spot } from "@/db/types";

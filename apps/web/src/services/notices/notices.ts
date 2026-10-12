@@ -1,8 +1,8 @@
 /** svc-notices: notices, placed and pinned (SPEC §6b). ops+ writes, viewer+ admin reads, public reads via activeNotices. */
 import {
-  type NoticePlacement,
   NoticeCreateFields,
   NoticeEndFields,
+  type NoticePlacement,
   notImplemented,
   withWorkspace,
 } from "@eci-shuttle/shared";

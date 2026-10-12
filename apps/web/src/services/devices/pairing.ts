@@ -1,5 +1,11 @@
 /** svc-devices: pairing codes and pairing (SPEC §4 pair, §5 first run, §7 Phones). */
-import { notImplemented, PairingCodeCreateFields, type PairRequest, type PairResponse, withWorkspace } from "@eci-shuttle/shared";
+import {
+  notImplemented,
+  PairingCodeCreateFields,
+  type PairRequest,
+  type PairResponse,
+  withWorkspace,
+} from "@eci-shuttle/shared";
 import type { z } from "zod";
 import type { Db } from "@/db";
 import type { Actor } from "../kernel";

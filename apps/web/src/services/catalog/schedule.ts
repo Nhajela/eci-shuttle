@@ -59,7 +59,11 @@ export async function addException(
 }
 
 /** ops+. Undo a one-day edit. Audited service.exception_remove. */
-export async function removeException(db: Db, actor: Actor, input: z.input<typeof RemoveExceptionInput>): Promise<void> {
+export async function removeException(
+  db: Db,
+  actor: Actor,
+  input: z.input<typeof RemoveExceptionInput>,
+): Promise<void> {
   return notImplemented(db, actor, input);
 }
 

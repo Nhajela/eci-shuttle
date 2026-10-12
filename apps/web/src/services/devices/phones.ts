@@ -83,7 +83,11 @@ export async function revokePhone(db: Db, actor: Actor, input: z.input<typeof Re
  * moves the device (and nothing else), bumps config. A simulated device can't move into the live workspace
  * (INVALID).
  */
-export async function movePhoneToWorkspace(db: Db, actor: Actor, input: z.input<typeof MovePhoneInput>): Promise<Device> {
+export async function movePhoneToWorkspace(
+  db: Db,
+  actor: Actor,
+  input: z.input<typeof MovePhoneInput>,
+): Promise<Device> {
   return notImplemented(db, actor, input);
 }
 
