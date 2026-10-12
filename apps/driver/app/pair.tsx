@@ -15,15 +15,15 @@ export default function Pair() {
   const scanning = useRef(false);
 
   async function submit(raw: string) {
-    const input = parsePairingInput(raw);
-    if (!input) {
-      setError("That isn't a pairing code. Scan the QR from the shuttle team, or type its 6 digits.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
     try {
-      await pair(input.code, input.origin, Date.now());
+      const input = parsePairingInput(raw);
+      if (!input) {
+        setError("That isn't a pairing code. Scan the QR from the shuttle team, or type its 6 digits.");
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      await pair(input.code, input.origin);
       router.replace("/");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
