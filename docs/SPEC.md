@@ -39,8 +39,7 @@ Everything runs on Coolify on our Mumbai VPS, close to Goa:
 | `worker` | The same image, running `node worker.js` |
 | `postgres` | Postgres 18 with a persistent volume. Not exposed publicly. `web` and `worker` reach it on the Coolify network |
 
-- **Backups**: Coolify's scheduled Postgres backups, every 6h, to off-box S3-compatible storage (e.g. Cloudflare R2),
-  kept for 14 days. A restore is tested once before the event. *The VPS must never hold the only copy.*
+- **Backups**: the whole VPS is backed up by the provider. On top of that, Coolify runs a nightly `pg_dump`, kept on the box for 7 days, for quick point-in-time restores of just this database.
 - **Later**: one shared Postgres with a database per app. For now it's its own container, so moving it later is a dump and restore.
 - **Dev**: local Docker Postgres for dev and tests. A `test` workspace on prod for real-world testing. No Neon.
 - **Cloudflare proxied** in front: TLS, and it caches the public status for 5s (`Cache-Control: s-maxage=5`), so crowds
