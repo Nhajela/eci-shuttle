@@ -7,6 +7,7 @@ import type { ActorChannel, ActorKind, Role } from "@eci-shuttle/shared";
  * - admin: a person (id = people.id) acting in `workspaceId` with their `role` there.
  * - device: a phone (id = devices.id) acting on itself (sync, resume, permission changes).
  * - system: a worker job or bootstrap (id = job name, e.g. "watchdog"); bypasses role checks.
+ * - attendee: a person using the bot without a role (id = people.id); may only touch their own subscriptions.
  */
 export type Actor = {
   kind: ActorKind;

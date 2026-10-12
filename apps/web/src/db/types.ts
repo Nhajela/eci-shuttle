@@ -1,0 +1,35 @@
+/** Row types (select shape) for every table. Frozen with the schema. */
+import type * as s from "./schema";
+
+export type Workspace = typeof s.workspaces.$inferSelect;
+export type Device = typeof s.devices.$inferSelect;
+export type Vehicle = typeof s.vehicles.$inferSelect;
+export type Spot = typeof s.spots.$inferSelect;
+export type Route = typeof s.routes.$inferSelect;
+export type Service = typeof s.services.$inferSelect;
+export type ServiceException = typeof s.serviceExceptions.$inferSelect;
+export type ServiceVehicle = typeof s.serviceVehicles.$inferSelect;
+export type Notice = typeof s.notices.$inferSelect;
+export type DeviceAssignment = typeof s.deviceAssignments.$inferSelect;
+export type Directive = typeof s.directives.$inferSelect;
+export type PairingCode = typeof s.pairingCodes.$inferSelect;
+export type PingRow = typeof s.pings.$inferSelect;
+export type VehicleState = typeof s.vehicleState.$inferSelect;
+export type Dwell = typeof s.dwells.$inferSelect;
+export type Trip = typeof s.trips.$inferSelect;
+export type DepartureMatchRow = typeof s.departureMatches.$inferSelect;
+export type LegStat = typeof s.legStats.$inferSelect;
+export type SegmentSpeed = typeof s.segmentSpeeds.$inferSelect;
+export type Suggestion = typeof s.suggestions.$inferSelect;
+export type LearningExclusion = typeof s.learningExclusions.$inferSelect;
+export type Person = typeof s.people.$inferSelect;
+export type Membership = typeof s.memberships.$inferSelect;
+export type Subscription = typeof s.subscriptions.$inferSelect;
+export type AlertPrefs = typeof s.alertPrefs.$inferSelect;
+export type TelegramMessage = typeof s.telegramMessages.$inferSelect;
+export type LoginCode = typeof s.loginCodes.$inferSelect;
+export type McpToken = typeof s.mcpTokens.$inferSelect;
+export type Proposal = typeof s.proposals.$inferSelect;
+export type WorkerHeartbeat = typeof s.workerHeartbeat.$inferSelect;
+export type OutboxRow = typeof s.outbox.$inferSelect;
+export type AuditRow = typeof s.auditLog.$inferSelect;

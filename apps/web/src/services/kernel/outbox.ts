@@ -25,6 +25,14 @@ export type TelegramPayload = {
   ref?: { kind: "notice_group_post"; noticeId: string };
 };
 
+/** What a deliverer (deliverPush, deliverTelegram) tells the worker queue job. */
+export type DeliveryResult =
+  | { ok: true }
+  /** retry later with backoff (network, 5xx, 429) */
+  | { ok: false; retry: true; error: string }
+  /** give up: mark the job dead (no token, blocked bot, DeviceNotRegistered) */
+  | { ok: false; retry: false; error: string };
+
 /** "Sync now" (data-only Expo push), delivered by svc-devices' deliverPush. */
 export type PushPayload = { deviceId: string; reason: string };
 

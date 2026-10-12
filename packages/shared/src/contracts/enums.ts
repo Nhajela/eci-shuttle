@@ -13,7 +13,8 @@ export const Role = z.enum(["viewer", "ops", "admin"]);
 export type Role = z.infer<typeof Role>;
 export const ROLE_RANK: Record<Role, number> = { viewer: 0, ops: 1, admin: 2 };
 
-export const ActorKind = z.enum(["admin", "device", "system"]);
+/** attendee = a person using the bot without a role (subscriptions); admin = a person acting with a role. */
+export const ActorKind = z.enum(["admin", "device", "system", "attendee"]);
 export type ActorKind = z.infer<typeof ActorKind>;
 
 /** Which adapter a call came through. Stored on every audit row. */
