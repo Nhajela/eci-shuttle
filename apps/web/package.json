@@ -35,6 +35,8 @@
     "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "playwright-core": "^1.64.0",
+    "postcss": "^8.5.29",
     "tailwindcss": "^4",
     "tsx": "4.23.15",
     "typescript": "^5.9.3"

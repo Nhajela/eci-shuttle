@@ -103,9 +103,9 @@ export function StatusView({
                 <ToggleGroupItem
                   key={s.spotId}
                   value={s.spotId}
-                  className="h-12 flex-1 text-base data-pressed:bg-ink data-pressed:text-paper"
+                  className="h-12 min-w-0 flex-1 shrink text-base data-pressed:bg-ink data-pressed:text-paper"
                 >
-                  {s.shortName || s.name}
+                  <span className="truncate">{s.shortName || s.name}</span>
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
