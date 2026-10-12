@@ -7,6 +7,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, outbox, vehicleState, vehicles, workspaces } from "@/db/schema";
 import { encodeCallback } from "@/services/bot/callbacks";
+import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { desiredConfig } from "@/services/devices/config";
 import { refreshPhases } from "@/services/ingest/ingest";
 import { adminButton, alertAdminChanges, escapeHtml, raiseAlert } from "./alerts";
@@ -166,7 +167,7 @@ export async function runWatchdog(
   db: Db,
   now: Date,
 ): Promise<{ workspaces: number; problems: number; alerted: number }> {
-  const all = await db.select({ id: workspaces.id }).from(workspaces);
+  const all = await listAllWorkspaces(db);
   let problems = 0;
   let alerted = 0;
   for (const { id } of all) {

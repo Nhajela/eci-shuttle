@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, memberships, workspaces } from "@/db/schema";
 import { bumpConfigs } from "@/services/devices/config";
 import { type Actor, systemActor } from "../kernel";
-import { createWorkspace, listMyWorkspaces, updateWorkspace, workspaceBySlug } from "./workspaces";
+import { createWorkspace, listAllWorkspaces, listMyWorkspaces, updateWorkspace, workspaceBySlug } from "./workspaces";
 
 // svc-devices owns bumpConfigs; here we only check that we call it, in the caller's transaction
 vi.mock("@/services/devices/config", () => ({ bumpConfigs: vi.fn(async () => []) }));
@@ -162,6 +162,16 @@ describe("updateWorkspace", () => {
     await expect(updateWorkspace(db(), actor, { workspaceId: ws.id, activeIntervalS: 2 })).rejects.toMatchObject({
       code: "INVALID",
     });
+  });
+});
+
+describe("listAllWorkspaces", () => {
+  it("lists every workspace, oldest first", async () => {
+    const a = await makeWorkspace(db());
+    const b = await makeWorkspace(db());
+    const ids = (await listAllWorkspaces(db())).map((w) => w.id);
+    expect(ids.indexOf(a.id)).toBeGreaterThanOrEqual(0);
+    expect(ids.indexOf(b.id)).toBeGreaterThan(ids.indexOf(a.id));
   });
 });
 

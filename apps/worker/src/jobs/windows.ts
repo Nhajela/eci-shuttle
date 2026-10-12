@@ -1,5 +1,5 @@
 import type { Window } from "@eci-shuttle/shared";
-import { workspaces } from "@/db/schema";
+import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { bumpConfigs, desiredConfig } from "@/services/devices/config";
 import { listPhones } from "@/services/devices/phones";
 import { refreshPhases } from "@/services/ingest/ingest";
@@ -31,8 +31,7 @@ export const windows: Job = {
     // a cursor at or past `to` (same-minute rerun, clock step back) falls back to one tick
     const from = lastTo !== undefined && lastTo < to ? Math.max(lastTo, to - CATCH_UP_MS) : to - TICK_MS;
     const prev = new Date(from);
-    // ponytail: no service lists every workspace yet (contract request: catalog listAllWorkspaces)
-    const all = await db.select({ id: workspaces.id }).from(workspaces);
+    const all = await listAllWorkspaces(db);
     const errors: string[] = [];
     let bumped = 0;
     for (const { id: workspaceId } of all) {

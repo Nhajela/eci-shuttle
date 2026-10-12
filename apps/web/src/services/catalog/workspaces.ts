@@ -106,6 +106,11 @@ export async function workspaceBySlug(db: Db, slug: string | null): Promise<Work
   return w ?? null;
 }
 
+/** System read for worker jobs (no actor): every workspace, oldest first. */
+export async function listAllWorkspaces(db: Db): Promise<Workspace[]> {
+  return db.select().from(workspaces).orderBy(asc(workspaces.createdAt));
+}
+
 /** Workspaces the person behind `actor` is a member of, with their role, for the admin switcher. */
 export async function listMyWorkspaces(
   db: Db,

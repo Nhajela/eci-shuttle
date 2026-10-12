@@ -1,5 +1,5 @@
-import { workspaces } from "@/db/schema";
 import { sendDigest } from "@/services/alerts/alerts";
+import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { recomputeAll } from "@/services/learning/learning";
 import type { Job, JobContext } from "../job";
 
@@ -9,8 +9,7 @@ import type { Job, JobContext } from "../job";
  */
 export async function runLearning(ctx: JobContext, svc = { recomputeAll, sendDigest }): Promise<{ failed: number }> {
   const { db, now, log } = ctx;
-  // ponytail: direct read, no "list every workspace" system service exists yet (contract request)
-  const all = await db.select({ id: workspaces.id, slug: workspaces.slug }).from(workspaces);
+  const all = await listAllWorkspaces(db);
   let failed = 0;
   for (const w of all) {
     // separate tries: the digest (yesterday's insights) is still worth sending when recompute fails

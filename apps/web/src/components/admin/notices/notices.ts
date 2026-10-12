@@ -69,7 +69,8 @@ export function untilLabel(n: Pick<Notice, "endsAt" | "endedAt">): string {
 
 /**
  * Display order (SPEC §6b), the same as svc-notices' activeNotices: pinned first by sort, then severity (urgent
- * first), then newest. ponytail: copied because the frozen notices stub exports no comparator; import it once it does.
+ * first), then newest. ponytail: mirrors services/notices compareNotices, which client code can't import (it pulls
+ * in the DB); move both to @eci-shuttle/shared if the order ever changes.
  */
 export function compareNotices(a: Shown, b: Shown): number {
   return (
