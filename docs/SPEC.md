@@ -106,7 +106,21 @@ are only tracked inside windows, and pings are deleted after the event.
   battery-optimisation exemption, OEM autostart deep links) → green "All set" screen. After that the app is passive.
 - Screen: current mode, next window, assigned vehicle, last successful sync, Resume (when killed).
 - A foreground service with `foregroundServiceType=location` runs in active and idle, and restarts after reboot.
-- EAS Update pinned to `runtimeVersion`: JS updates go over the air, native changes need a new APK.
+- **Over-the-air updates, controlled by the server** (EAS Update):
+  - Expo's default (check at launch, apply at the *next* launch) doesn't work for an app that never restarts.
+    So the automatic check is turned off and the server decides.
+  - Two EAS channels: `test` and `live`. Test workspace phones get an update first, live phones after you promote it.
+  - Each sync response includes `targetUpdateId` for that phone. When it differs from what's running, the app downloads it
+    in the background (`fetchUpdateAsync`), then **applies it only while idle** (`reloadAsync`), never during an
+    active window. The JS reload is about 1 second, and the foreground service keeps running.
+  - Admin: Phones shows each phone's running update. "Roll out update X to the test phones / all live phones",
+    plus a per-phone "update now" (sends a push).
+  - Safety: if an update crashes on start, expo-updates falls back to the bundled version, the phone reports it,
+    and admin shows "update failed". Rolling back means setting the previous update as the target again.
+  - **Native changes** (the location service, permissions, the Expo SDK) can't go over the air. They change the
+    `runtimeVersion`, so old APKs ignore the update. The phone shows up in admin as "needs new APK".
+    The app can then show the driver "New version: tap to install" (a download link to the APK). Android still makes
+    the driver confirm the install once. Keep native changes rare, and do them before the event starts.
 
 ## 6. Attendee surfaces
 
