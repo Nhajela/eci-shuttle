@@ -31,7 +31,10 @@ async function makeSpot(workspaceId: string, name = "Riva") {
 
 async function makeService(workspaceId: string) {
   const s = await makeSpot(workspaceId);
-  const [r] = await db().insert(routes).values({ workspaceId, name: "Loop", spotIds: [s.id] }).returning();
+  const [r] = await db()
+    .insert(routes)
+    .values({ workspaceId, name: "Loop", spotIds: [s.id] })
+    .returning();
   const [svc] = await db()
     .insert(services)
     .values({
@@ -62,7 +65,11 @@ async function raw(workspaceId: string, over: Partial<typeof notices.$inferInser
 describe("createNotice", () => {
   it("creates a notice with defaults, audited as notice.create", async () => {
     const { ws, actor, person } = await setup();
-    const n = await createNotice(db(), actor, { workspaceId: ws.id, text: "  Side gate today ", placements: ["everywhere"] });
+    const n = await createNotice(db(), actor, {
+      workspaceId: ws.id,
+      text: "  Side gate today ",
+      placements: ["everywhere"],
+    });
     expect(n).toMatchObject({
       text: "Side gate today",
       severity: "info",
@@ -109,10 +116,21 @@ describe("createNotice", () => {
     const { ws, actor } = await setup();
     const t = new Date(Date.now() + H);
     await expect(
-      createNotice(db(), actor, { workspaceId: ws.id, text: "x", placements: ["admin"], startsAt: iso(t), endsAt: iso(t) }),
+      createNotice(db(), actor, {
+        workspaceId: ws.id,
+        text: "x",
+        placements: ["admin"],
+        startsAt: iso(t),
+        endsAt: iso(t),
+      }),
     ).rejects.toMatchObject({ code: "INVALID" });
     await expect(
-      createNotice(db(), actor, { workspaceId: ws.id, text: "x", placements: ["admin"], endsAt: iso(new Date(Date.now() - H)) }),
+      createNotice(db(), actor, {
+        workspaceId: ws.id,
+        text: "x",
+        placements: ["admin"],
+        endsAt: iso(new Date(Date.now() - H)),
+      }),
     ).rejects.toMatchObject({ code: "INVALID" });
     await expect(createNotice(db(), actor, { workspaceId: ws.id, text: "x", placements: [] })).rejects.toMatchObject({
       code: "INVALID",
@@ -160,14 +178,20 @@ describe("updateNotice", () => {
     const { ws, actor } = await setup();
     const other = await setup();
     const n = await createNotice(db(), actor, { workspaceId: ws.id, text: "a", placements: ["everywhere"] });
-    await expect(updateNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id, version: 99, text: "b" })).rejects.toMatchObject({
+    await expect(
+      updateNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id, version: 99, text: "b" }),
+    ).rejects.toMatchObject({
       code: "STALE_VERSION",
     });
     await expect(
       updateNotice(db(), other.actor, { workspaceId: other.ws.id, noticeId: n.id, text: "b" }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
-      updateNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id, endsAt: iso(new Date(n.startsAt.getTime() - H)) }),
+      updateNotice(db(), actor, {
+        workspaceId: ws.id,
+        noticeId: n.id,
+        endsAt: iso(new Date(n.startsAt.getTime() - H)),
+      }),
     ).rejects.toMatchObject({ code: "INVALID" });
   });
 
@@ -194,14 +218,18 @@ describe("endNotice", () => {
       .from(auditLog)
       .where(and(eq(auditLog.entityId, n.id), eq(auditLog.action, "notice.end")));
     expect(audit).toHaveLength(1);
-    await expect(endNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id })).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(endNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id })).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
   });
 
   it("needs ops", async () => {
     const { ws } = await setup();
     const { actor } = await makeAdmin(db(), ws.id, "viewer");
     const n = await raw(ws.id);
-    await expect(endNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(endNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 });
 
@@ -273,7 +301,9 @@ describe("listNotices", () => {
       old.id,
     ]);
     const stranger = await setup();
-    await expect(listNotices(db(), stranger.actor, { workspaceId: ws.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(listNotices(db(), stranger.actor, { workspaceId: ws.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 });
 
@@ -310,11 +340,15 @@ describe("runNoticeLifecycle", () => {
     await raw(ws.id, { text: "future", startsAt: new Date(now.getTime() + H), channels: ["group"] });
     await raw(ws.id, { text: "no channels", startsAt: new Date(now.getTime() - H) });
 
-    expect(await runNoticeLifecycle(db(), now)).toMatchObject({ sent: 1 });
+    // the job is global: other tests' rows in this worker's database may be processed too
+    expect((await runNoticeLifecycle(db(), now)).sent).toBeGreaterThanOrEqual(1);
     const jobs = await jobsFor(ws.id);
     const chats = jobs.map((j) => (j.payload as { chatId: number }).chatId).sort();
     expect(chats).toEqual([rivaSub.telegramId, allSub.telegramId, -100123].sort());
-    const group = jobs.find((j) => (j.payload as { chatId: number }).chatId === -100123)?.payload as Record<string, unknown>;
+    const group = jobs.find((j) => (j.payload as { chatId: number }).chatId === -100123)?.payload as Record<
+      string,
+      unknown
+    >;
     expect(group).toMatchObject({ pin: true, kind: "notice", ref: { kind: "notice_group_post", noticeId: n.id } });
     expect(group.html).toContain("Side gate &lt;today&gt;");
     expect(group.html).toContain("14:00"); // ends 08:30 UTC = 14:00 IST
@@ -343,25 +377,40 @@ describe("runNoticeLifecycle", () => {
 
   it("does not send notices that already ended", async () => {
     const ws = await makeWorkspace(db(), { groupChatId: -1 });
-    await raw(ws.id, { startsAt: new Date(now.getTime() - 2 * H), endsAt: new Date(now.getTime() - H), channels: ["group"] });
-    expect(await runNoticeLifecycle(db(), now)).toMatchObject({ sent: 0 });
+    await raw(ws.id, {
+      startsAt: new Date(now.getTime() - 2 * H),
+      endsAt: new Date(now.getTime() - H),
+      channels: ["group"],
+    });
+    await runNoticeLifecycle(db(), now);
     expect(await jobsFor(ws.id)).toEqual([]);
   });
 
   it("unpins a group-pinned notice once it ended or expired, once", async () => {
     const ws = await makeWorkspace(db(), { groupChatId: -100999 });
-    const base = { channels: ["group_pin"] as ("group_pin")[], sentAt: new Date(now.getTime() - 2 * H) };
-    const expired = await raw(ws.id, { ...base, startsAt: new Date(now.getTime() - 2 * H), endsAt: now, groupMessageId: 41 });
-    await raw(ws.id, { ...base, startsAt: new Date(now.getTime() - 2 * H), endsAt: new Date(now.getTime() + H), groupMessageId: 42 });
+    const base = { channels: ["group_pin"] as "group_pin"[], sentAt: new Date(now.getTime() - 2 * H) };
+    const expired = await raw(ws.id, {
+      ...base,
+      startsAt: new Date(now.getTime() - 2 * H),
+      endsAt: now,
+      groupMessageId: 41,
+    });
+    await raw(ws.id, {
+      ...base,
+      startsAt: new Date(now.getTime() - 2 * H),
+      endsAt: new Date(now.getTime() + H),
+      groupMessageId: 42,
+    });
     await raw(ws.id, { ...base, startsAt: new Date(now.getTime() - 2 * H), endedAt: now, groupMessageId: 43 });
     await raw(ws.id, { ...base, startsAt: new Date(now.getTime() - 2 * H), endedAt: now }); // never posted
-    expect(await runNoticeLifecycle(db(), now)).toMatchObject({ unpinned: 2 });
+    expect((await runNoticeLifecycle(db(), now)).unpinned).toBeGreaterThanOrEqual(2);
     const unpins = (await jobsFor(ws.id)).map((j) => j.payload as { chatId: number; unpinMessageId: number });
     expect(unpins.map((p) => p.unpinMessageId).sort()).toEqual([41, 43]);
     expect(unpins.every((p) => p.chatId === -100999)).toBe(true);
     const [e] = await db().select().from(notices).where(eq(notices.id, expired.id));
     expect(e.unpinnedAt?.getTime()).toBe(now.getTime());
-    expect(await runNoticeLifecycle(db(), now)).toMatchObject({ unpinned: 0 });
+    await runNoticeLifecycle(db(), now);
+    expect(await jobsFor(ws.id)).toHaveLength(2);
   });
 });
 
@@ -377,4 +426,3 @@ describe("recordGroupPost", () => {
     await expect(recordGroupPost(db(), randomUUID(), 1)).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
-
