@@ -31,7 +31,7 @@ local Docker Postgres (template DB, clone per worker). Admin login via Telegram,
 
 ## 2a. Own domain, host-portable
 
-Everything is served from our own domain (e.g. `shuttle.<domain>`, DNS on Cloudflare), never a `*.vercel.app`
+Everything is served from our own domain **`https://eci-shuttle.positivesumcompany.com`** (DNS on Cloudflare, like eci-events), never a `*.vercel.app`
 address, so the host can change later without touching phones, links or bots.
 
 - **One origin, set by `PUBLIC_ORIGIN`.** It's used for the public page, `/admin`, `/api/*`, `/api/mcp`, the OAuth issuer,
