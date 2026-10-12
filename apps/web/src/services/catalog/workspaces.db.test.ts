@@ -1,6 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, memberships, workspaces } from "@/db/schema";
@@ -63,9 +63,9 @@ describe("createWorkspace", () => {
   it("an admin actor whose membership is not admin in the DB is refused", async () => {
     const ws = await makeWorkspace(db());
     const { actor } = await makeAdmin(db(), ws.id, "viewer");
-    await expect(
-      createWorkspace(db(), { ...actor, role: "admin" }, { slug: slug(), name: "X" }),
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(createWorkspace(db(), { ...actor, role: "admin" }, { slug: slug(), name: "X" })).rejects.toMatchObject(
+      { code: "FORBIDDEN" },
+    );
   });
 
   it("system may create one (no membership row)", async () => {
@@ -77,9 +77,9 @@ describe("createWorkspace", () => {
   it("a taken slug is CONFLICT and writes nothing", async () => {
     const taken = await makeWorkspace(db());
     const before = await db().select().from(auditLog);
-    await expect(
-      createWorkspace(db(), systemActor("seed"), { slug: taken.slug, name: "Dup" }),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(createWorkspace(db(), systemActor("seed"), { slug: taken.slug, name: "Dup" })).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
     expect(await db().select().from(auditLog)).toHaveLength(before.length);
   });
 
