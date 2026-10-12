@@ -150,8 +150,12 @@ describe("etaToSpot", () => {
   });
 
   it("not loop and target behind → null", () => {
-    expect(etaToSpot(line({ vehicle: { kind: "en_route", legIndex: 1, alongLegM: 10 }, targetSpotId: "riva" }))).toBeNull();
-    expect(etaToSpot(line({ vehicle: { kind: "at_spot", spotIndex: 2, since: NOW }, targetSpotId: "circle" }))).toBeNull();
+    expect(
+      etaToSpot(line({ vehicle: { kind: "en_route", legIndex: 1, alongLegM: 10 }, targetSpotId: "riva" })),
+    ).toBeNull();
+    expect(
+      etaToSpot(line({ vehicle: { kind: "at_spot", spotIndex: 2, since: NOW }, targetSpotId: "circle" })),
+    ).toBeNull();
   });
 
   it("target not on the route → null", () => {
@@ -168,7 +172,10 @@ describe("etaToSpot", () => {
 
   it("lo ≤ minutes ≤ hi, built from p20 / p80", () => {
     const r = etaToSpot({
-      legs: [{ ...leg("a", "b", 600), estimate: est(600, 480, 900) }, { ...leg("b", "c", 600), estimate: est(600, 540, 720) }],
+      legs: [
+        { ...leg("a", "b", 600), estimate: est(600, 480, 900) },
+        { ...leg("b", "c", 600), estimate: est(600, 540, 720) },
+      ],
       dwells: { b: est(120, 60, 240) },
       vehicle: { kind: "en_route", legIndex: 0, alongLegM: 500 },
       targetSpotId: "c",
@@ -188,15 +195,15 @@ describe("etaToSpot", () => {
       now: NOW,
     });
     expect(r2).toMatchObject({ seconds: 630, lo: 8, hi: 18 });
-    expect(r2!.lo).toBeLessThanOrEqual(r2!.minutes);
-    expect(r2!.minutes).toBeLessThanOrEqual(r2!.hi);
+    expect(r2 && r2.lo <= r2.minutes && r2.minutes <= r2.hi).toBe(true);
   });
 
   it("any thin estimate → basis estimate; all solid → learned", () => {
     expect(etaToSpot(line())?.basis).toBe("learned");
     expect(etaToSpot(line({ dwells: { circle: est(120, 120, 120, true) } }))?.basis).toBe("estimate");
-    const thinLeg = line();
-    thinLeg.legs[1] = { ...thinLeg.legs[1]!, estimate: est(1200, 1200, 1200, true) };
+    const thinLeg = line({
+      legs: [leg("riva", "circle", 600), { ...leg("circle", "market", 1200), estimate: est(1200, 1200, 1200, true) }],
+    });
     expect(etaToSpot(thinLeg)?.basis).toBe("estimate");
     // a missing dwell falls back to the baseline dwell (180 s), which is thin
     const r = etaToSpot(line({ dwells: {} }));
