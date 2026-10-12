@@ -13,10 +13,12 @@
   "dependencies": {
     "@eci-shuttle/shared": "workspace:*",
     "expo": "57.0.28",
+    "expo-battery": "~57.0.3",
     "expo-camera": "~57.0.6",
     "expo-constants": "~57.0.21",
     "expo-dev-client": "~57.0.20",
     "expo-device": "~57.0.2",
+    "expo-intent-launcher": "~57.0.1",
     "expo-linking": "~57.0.12",
     "expo-location": "~57.0.21",
     "expo-notifications": "~57.0.22",
