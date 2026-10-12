@@ -183,6 +183,28 @@ describe("detectProblems", () => {
     expect(problems.find((p) => p.deviceId === behind.id)?.message).toBe("B hasn't picked up its new settings");
   });
 
+  it("mode_mismatch compares the report with what the phone was told at its last sync", async () => {
+    const ws = await makeWorkspace(db());
+    const ended = (min: number): Window[] => [{ ...activeSince(60)[0], endsAt: ago(min).getTime() }];
+    // window ended 1 min ago; the phone synced inside it reporting active: it was right
+    const justEnded = await makeDevice(db(), ws.id, { label: "J", reportedMode: "active", lastSyncAt: ago(2) });
+    schedules.set(justEnded.id, ended(1));
+    // window ended 10 min ago; the phone synced since then and still reports active
+    const stuck = await makeDevice(db(), ws.id, { label: "S", reportedMode: "active", lastSyncAt: ago(1) });
+    schedules.set(stuck.id, ended(10));
+
+    expect(await detectProblems(db(), ws.id, NOW)).toEqual([
+      {
+        kind: "mode_mismatch",
+        workspaceId: ws.id,
+        vehicleId: null,
+        deviceId: stuck.id,
+        since: ago(10),
+        message: "S reports active but should be idle",
+      },
+    ]);
+  });
+
   it("update_failed when the phone isn't running its target after a failed update; revoked phones are ignored", async () => {
     const ws = await makeWorkspace(db(), { targetUpdateId: "u2" });
     const failed = await makeDevice(db(), ws.id, { updateId: "u1", updateFailedAt: ago(7) });
@@ -197,6 +219,40 @@ describe("detectProblems", () => {
         deviceId: failed.id,
         since: ago(7),
         message: "Ravi's phone failed to install the app update",
+      },
+    ]);
+  });
+
+  it("update pending when the phone synced > 2 min after the target was pushed but isn't running it", async () => {
+    const ws = await makeWorkspace(db(), { targetUpdateId: "u2" });
+    const pending = await makeDevice(db(), ws.id, {
+      configVersion: 4,
+      reportedConfigVersion: 4,
+      updateId: "u1",
+      lastSyncAt: ago(1),
+    });
+    const synced = { configVersion: 4, reportedConfigVersion: 4, updateId: "u1" };
+    const soon = await makeDevice(db(), ws.id, { label: "Soon", ...synced, lastSyncAt: ago(4) });
+    const done = await makeDevice(db(), ws.id, { label: "Done", ...synced, updateId: "u2", lastSyncAt: ago(1) });
+    await db()
+      .insert(outbox)
+      .values(
+        [pending, soon, done].map((d) => ({
+          workspaceId: ws.id,
+          kind: "push" as const,
+          payload: {},
+          dedupeKey: `push:${d.id}:4`,
+          createdAt: ago(5),
+        })),
+      );
+    expect(await detectProblems(db(), ws.id, NOW)).toEqual([
+      {
+        kind: "update_failed",
+        workspaceId: ws.id,
+        vehicleId: null,
+        deviceId: pending.id,
+        since: ago(5),
+        message: "Ravi's phone hasn't installed the app update",
       },
     ]);
   });
@@ -230,5 +286,39 @@ describe("runWatchdog", () => {
 
     await runWatchdog(db(), new Date(NOW.getTime() + 60_000));
     expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(1);
+  });
+
+  it("one workspace failing does not stop the others", async () => {
+    const bad = await makeWorkspace(db());
+    const ws = await makeWorkspace(db());
+    await makeAdmin(db(), ws.id);
+    const { device } = await makeAssignedDevice(db(), ws.id, { state: { lastPingAt: ago(6) } });
+    schedules.set(device.id, activeSince(30));
+    vi.mocked(refreshPhases).mockImplementation(async (_db, id) => {
+      if (id === bad.id) throw new Error("odd data");
+      return [];
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let logged: unknown[][];
+    try {
+      await runWatchdog(db(), NOW);
+    } finally {
+      logged = [...err.mock.calls];
+      vi.mocked(refreshPhases).mockImplementation(async () => []);
+      err.mockRestore();
+    }
+    expect(logged).toContainEqual([expect.stringContaining(bad.id), expect.any(Error)]);
+    expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(1);
+  });
+
+  it("keys phone problems on the phone, so a swapped-in phone on the same vehicle still alerts", async () => {
+    const ws = await makeWorkspace(db());
+    const { person } = await makeAdmin(db(), ws.id);
+    const { device } = await makeAssignedDevice(db(), ws.id, {
+      device: { permissions: { ...OK, notifications: false } },
+    });
+    await runWatchdog(db(), NOW);
+    const [job] = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
+    expect(job.dedupeKey).toBe(`alert:permission_lost:${device.id}:${DAY_START.getTime()}:${person.id}`);
   });
 });

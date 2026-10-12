@@ -36,8 +36,9 @@ export type Problem = {
  * Open problems of a workspace at `now` (no actor: callers check access):
  * silent (inside its tracking window, last ping > SILENT_AFTER_MS ago), off_route (vehicle_state.off_route),
  * low_battery (< LOW_BATTERY_PCT and not charging), permission_lost (location not "always", or notifications
- * off), mode_mismatch (reported mode ≠ resolveMode on the desired config, or reported config version behind for
- * > 2 min after a push), update_failed (update_failed_at after the target was set). Killed/revoked phones
+ * off), mode_mismatch (reported mode ≠ what it was told at its last sync while that is still desired, or reported
+ * config version behind for > 2 min after a push), update_failed (update_failed_at after the target was set, or
+ * still not on the target after syncing > 2 min past its push). Killed/revoked phones
  * only show as mode_mismatch while their kill is pending.
  */
 export async function detectProblems(db: Db, workspaceId: string, now: Date): Promise<Problem[]> {
@@ -74,7 +75,8 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
       continue;
     }
 
-    const desired = resolveMode(await desiredConfig(db, d.id, now), t);
+    const config = await desiredConfig(db, d.id, now);
+    const desired = resolveMode(config, t);
     const windowStart = desired.window ? new Date(desired.window.startsAt) : null;
 
     if (v && desired.mode === "active" && windowStart) {
@@ -92,12 +94,18 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     ].filter(Boolean);
     if (lost.length) add("permission_lost", dayStart, `: ${lost.join(", ")}`);
 
-    const mismatchSince = windowStart ?? dayStart;
+    // When the desired mode began: its window's start, or (idle) the end of the last window.
+    // ponytail: the schedule only holds windows still ending in the next 48h, so long idle falls back to the IST day.
+    const lastEnd = Math.max(...(config?.schedule ?? []).map((w) => w.endsAt).filter((e) => e <= t));
+    const mismatchSince = windowStart ?? (Number.isFinite(lastEnd) ? new Date(lastEnd) : dayStart);
     const pushedAt = await pushedAtFor(db, d.id, d.configVersion);
+    // Judge the report against what the phone was told at its last sync, and only while that is still desired.
+    const told = d.lastSyncAt && resolveMode(config, d.lastSyncAt.getTime()).mode;
     if (
       d.reportedMode &&
-      d.reportedMode !== desired.mode &&
       d.lastSyncAt &&
+      d.reportedMode !== told &&
+      told === desired.mode &&
       d.lastSyncAt.getTime() - mismatchSince.getTime() > GRACE_MS
     )
       add("mode_mismatch", mismatchSince, ` reports ${d.reportedMode} but should be ${desired.mode}`);
@@ -112,6 +120,18 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     const target = d.targetUpdateId ?? ws.targetUpdateId;
     if (d.updateFailedAt && target && d.updateId !== target)
       add("update_failed", d.updateFailedAt, " failed to install the app update");
+    // Setting a target bumps configVersion, so its push time is when the phone was told to update.
+    // ponytail: the contract has no update_pending AlertKind, so this shares update_failed (and its admin pref).
+    else if (
+      target &&
+      d.updateId !== target &&
+      pushedAt &&
+      d.reportedConfigVersion !== null &&
+      d.reportedConfigVersion >= d.configVersion &&
+      d.lastSyncAt &&
+      d.lastSyncAt.getTime() - pushedAt.getTime() > GRACE_MS
+    )
+      add("update_failed", pushedAt, " hasn't installed the app update");
   }
   return problems;
 }
@@ -150,29 +170,42 @@ export async function runWatchdog(
   let problems = 0;
   let alerted = 0;
   for (const { id } of all) {
-    await refreshPhases(db, id, now);
-    const found = await detectProblems(db, id, now);
-    problems += found.length;
-    for (const p of found) {
-      const buttons = [[await adminButton(db, id, p.vehicleId ? "live" : "phones")]];
-      if (p.deviceId)
-        buttons.unshift([
-          { text: "Nudge phone", callbackData: encodeCallback({ action: "nudge", args: [p.deviceId] }) },
-          { text: "Silence 1h", callbackData: encodeCallback({ action: "sil1h", args: [p.deviceId] }) },
-        ]);
-      alerted += await raiseAlert(
-        db,
-        {
-          workspaceId: id,
-          kind: p.kind,
-          key: `${p.kind}:${p.vehicleId ?? p.deviceId}:${p.since.getTime()}`,
-          html: `<b>${escapeHtml(p.message)}</b>\nSince ${istHHMM(p.since)}`,
-          buttons,
-        },
-        now,
-      );
+    // One workspace's bad data must not stop alerts for the others.
+    try {
+      await refreshPhases(db, id, now);
+      const found = await detectProblems(db, id, now);
+      problems += found.length;
+      alerted += await alertProblems(db, id, found, now);
+      alerted += await alertAdminChanges(db, id, new Date(now.getTime() - 2 * 60_000), now);
+    } catch (e) {
+      console.error(`watchdog: workspace ${id} failed`, e);
     }
-    alerted += await alertAdminChanges(db, id, new Date(now.getTime() - 2 * 60_000), now);
   }
   return { workspaces: all.length, problems, alerted };
+}
+
+async function alertProblems(db: Db, id: string, found: Problem[], now: Date): Promise<number> {
+  let alerted = 0;
+  for (const p of found) {
+    const buttons = [[await adminButton(db, id, p.vehicleId ? "live" : "phones")]];
+    if (p.deviceId)
+      buttons.unshift([
+        { text: "Nudge phone", callbackData: encodeCallback({ action: "nudge", args: [p.deviceId] }) },
+        { text: "Silence 1h", callbackData: encodeCallback({ action: "sil1h", args: [p.deviceId] }) },
+      ]);
+    // Vehicle problems follow the vehicle; phone problems follow the phone, so a swapped-in phone alerts afresh.
+    const subject = p.kind === "silent" || p.kind === "off_route" ? p.vehicleId : p.deviceId;
+    alerted += await raiseAlert(
+      db,
+      {
+        workspaceId: id,
+        kind: p.kind,
+        key: `${p.kind}:${subject}:${p.since.getTime()}`,
+        html: `<b>${escapeHtml(p.message)}</b>\nSince ${istHHMM(p.since)}`,
+        buttons,
+      },
+      now,
+    );
+  }
+  return alerted;
 }
