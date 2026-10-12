@@ -44,7 +44,7 @@ export function expandServiceDepartures(
   const crosses = rawEnd < start;
   const end = crosses ? rawEnd + 1440 : rawEnd;
   // minutes since the service day's midnight; after-midnight times of a cross-midnight service go past 1440
-  const onServiceDay = (t: HHMM) => (crosses && toMin(t) < start ? toMin(t) + 1440 : toMin(t));
+  const onServiceDay = (t: HHMM) => (crosses && toMin(t) <= rawEnd ? toMin(t) + 1440 : toMin(t));
 
   let mins: number[] = [];
   const p = service.pattern;

@@ -147,6 +147,13 @@ describe("expandServiceDepartures", () => {
     expect(out[2]?.at).toBe(ist("2026-10-13", "01:45"));
   });
 
+  it("cross-midnight: an added run in the gap before start stays on the service date, sorted first", () => {
+    const s = svc({ startTime: "22:00", endTime: "02:00", pattern: { kind: "every", everyMin: 60 } });
+    const out = expandServiceDepartures(s, [ex({ type: "add_departure", departure: "21:30" })], D);
+    expect(out.map((d) => d.planned)).toEqual(["21:30", "22:00", "23:00", "00:00", "01:00"]);
+    expect(out[0]?.at).toBe(ist(D, "21:30"));
+  });
+
   it("`at` is IST: 08:00 IST on 2026-10-12 == 2026-10-12T02:30:00Z", () => {
     expect(expandServiceDepartures(svc(), [], D)[0]?.at).toBe(Date.parse("2026-10-12T02:30:00Z"));
   });
