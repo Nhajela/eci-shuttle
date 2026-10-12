@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { otaStep } from "./ota";
 
-const base = { targetUpdateId: "u2", runningUpdateId: "u1", downloadedUpdateId: null, mode: "idle" as const };
+const base = { targetUpdateId: "u2", runningUpdateId: "u1", downloadedUpdateId: null, lastAttemptedTargetId: null, mode: "idle" as const };
 
 describe("otaStep (SPEC §5: server-controlled OTA, apply only while idle)", () => {
   it("does nothing when the server sets no target", () => {
@@ -36,5 +36,17 @@ describe("otaStep (SPEC §5: server-controlled OTA, apply only while idle)", () 
 
   it("treats the embedded bundle (null running id) as different from any target", () => {
     expect(otaStep({ ...base, runningUpdateId: null })).toBe("download");
+  });
+
+  it("stops once a fetch for this target produced a different id (rollback, newer update, other runtime)", () => {
+    // fetchUpdateAsync only gets the newest compatible update on the channel, never a chosen id
+    expect(otaStep({ ...base, lastAttemptedTargetId: "u2", downloadedUpdateId: "u3" })).toBe("none");
+    expect(otaStep({ ...base, lastAttemptedTargetId: "u2", downloadedUpdateId: null })).toBe("none");
+  });
+
+  it("tries again when the server moves to a new target after a failed one", () => {
+    expect(otaStep({ ...base, targetUpdateId: "u4", lastAttemptedTargetId: "u2", downloadedUpdateId: "u3" })).toBe(
+      "download",
+    );
   });
 });
