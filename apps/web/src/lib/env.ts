@@ -24,6 +24,8 @@ const Env = z.object({
     ),
   /** optional: Expo push works without it unless "enhanced push security" is on */
   EXPO_ACCESS_TOKEN: z.string().optional(),
+  /** optional IST date: from this day on the cleanup job deletes raw pings (after the event, SPEC §4) */
+  PINGS_DELETE_AFTER: z.iso.date().optional(),
 });
 export type Env = z.infer<typeof Env>;
 
@@ -42,6 +44,7 @@ export const env = {
   sessionSecret: () => read("SESSION_SECRET"),
   tokenSecrets: () => read("TOKEN_SECRETS"),
   expoAccessToken: () => read("EXPO_ACCESS_TOKEN"),
+  pingsDeleteAfter: () => read("PINGS_DELETE_AFTER"),
 };
 
 /** PUBLIC_ORIGIN without a trailing slash, e.g. https://eci-shuttle.positivesumcompany.com */

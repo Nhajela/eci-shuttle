@@ -22,6 +22,15 @@ describe("env", () => {
     expect(() => env.sessionSecret()).toThrow(/SESSION_SECRET/);
   });
 
+  it("PINGS_DELETE_AFTER is an optional IST date", () => {
+    delete process.env.PINGS_DELETE_AFTER;
+    expect(env.pingsDeleteAfter()).toBeUndefined();
+    process.env.PINGS_DELETE_AFTER = "2026-11-02";
+    expect(env.pingsDeleteAfter()).toBe("2026-11-02");
+    process.env.PINGS_DELETE_AFTER = "after the event";
+    expect(() => env.pingsDeleteAfter()).toThrow(/PINGS_DELETE_AFTER/);
+  });
+
   it("EXPO_ACCESS_TOKEN is optional", () => {
     delete process.env.EXPO_ACCESS_TOKEN;
     expect(env.expoAccessToken()).toBeUndefined();
