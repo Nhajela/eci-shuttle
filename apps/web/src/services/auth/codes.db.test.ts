@@ -1,7 +1,7 @@
 import { makePerson } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { auditLog, loginCodes, people } from "@/db/schema";
 import {
   claimLogin,
@@ -12,31 +12,6 @@ import {
   peekLogin,
   startLogin,
 } from "./codes";
-
-// ponytail: svc-people's upsertPersonFromTelegram may still be a stub on this branch; fall back to a plain upsert
-// only while it throws "not implemented", so the real one is used as soon as it is merged.
-vi.mock("@/services/catalog/people", async (importOriginal) => {
-  const m = await importOriginal<typeof import("@/services/catalog/people")>();
-  const { people: p } = await import("@/db/schema");
-  return {
-    ...m,
-    upsertPersonFromTelegram: async (...args: Parameters<typeof m.upsertPersonFromTelegram>) => {
-      try {
-        return await m.upsertPersonFromTelegram(...args);
-      } catch (e) {
-        if (!String(e).includes("not implemented")) throw e;
-        const [db, , { telegramId, username = null, firstName = null, lastName = null }] = args;
-        const names = { username, firstName, lastName };
-        const [row] = await db
-          .insert(p)
-          .values({ telegramId, ...names })
-          .onConflictDoUpdate({ target: p.telegramId, set: names })
-          .returning();
-        return row;
-      }
-    },
-  };
-});
 
 const db = testDb();
 const t0 = new Date("2026-10-15T04:30:00Z");

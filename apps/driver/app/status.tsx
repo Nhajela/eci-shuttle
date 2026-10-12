@@ -5,8 +5,8 @@ import { useEffect, useState } from "react";
 import { Linking, StyleSheet, Text, View } from "react-native";
 import { appVersion, refresh, resume, useDevice } from "../src/screens/device";
 import { statusView } from "../src/screens/status";
-import { serverNow } from "../src/screens/syncStub";
 import { Button, colors, Screen, s } from "../src/screens/ui";
+import { serverNow } from "../src/sync/sync";
 
 const TONE = {
   active: { bg: colors.greenBg, fg: colors.green },

@@ -3,7 +3,7 @@ import type { ServicePattern } from "@eci-shuttle/shared";
 import { makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   auditLog,
   departureMatches,
@@ -22,81 +22,6 @@ import {
   vehicles,
 } from "@/db/schema";
 import { loadEstimates, onTripClosed, recomputeAll } from "./learning";
-
-// ponytail: stand-ins for shared geo functions still stubbed on main (task/geo-leg, task/geo-path); the real ones
-// are used as soon as they stop throwing, so this block can go once those branches merge.
-vi.mock("@eci-shuttle/shared", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@eci-shuttle/shared")>();
-  type Fn = (...a: never[]) => unknown;
-  const or =
-    (f: Fn, g: Fn) =>
-    (...a: never[]) => {
-      try {
-        return f(...a);
-      } catch {
-        return g(...a);
-      }
-    };
-  type P = { lat: number; lng: number };
-  const RAD = Math.PI / 180;
-  const dist = (a: P, b: P) =>
-    2 *
-    6_371_000 *
-    Math.asin(
-      Math.sqrt(
-        Math.sin(((b.lat - a.lat) * RAD) / 2) ** 2 +
-          Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(((b.lng - a.lng) * RAD) / 2) ** 2,
-      ),
-    );
-  const len = (p: P[]) => p.slice(1).reduce((m, q, i) => m + dist(p[i] as P, q), 0);
-  const project = (path: P[], pt: P) => {
-    let best = { alongM: 0, offsetM: Infinity, segmentIndex: 0, point: path[0] as P };
-    let before = 0;
-    for (let i = 0; i + 1 < path.length; i++) {
-      const a = path[i] as P;
-      const b = path[i + 1] as P;
-      const k = Math.cos(pt.lat * RAD);
-      const [dx, dy] = [(b.lng - a.lng) * k, b.lat - a.lat];
-      const l2 = dx * dx + dy * dy;
-      const t = l2 ? Math.min(1, Math.max(0, ((pt.lng - a.lng) * k * dx + (pt.lat - a.lat) * dy) / l2)) : 0;
-      const foot = { lat: a.lat + t * (b.lat - a.lat), lng: a.lng + t * (b.lng - a.lng) };
-      const off = dist(pt, foot);
-      if (off < best.offsetM - 1e-9)
-        best = { alongM: before + t * dist(a, b), offsetM: off, segmentIndex: i, point: foot };
-      before += dist(a, b);
-    }
-    return { ...best, totalM: before };
-  };
-  const leg = (samples: { durationS: number; at: number }[], o: { hourBucket: number; pathM: number; now: number }) => {
-    const recent = samples
-      .map((s) => ({ ...s, w: 7 - (o.now - s.at) / 864e5 }))
-      .filter((s) => s.w > 0 && s.at <= o.now);
-    const inHour = recent.filter((s) => new Date(s.at + 19_800_000).getUTCHours() === o.hourBucket);
-    const [used, level] = inHour.length >= 5 ? [inHour, "leg_hour"] : recent.length ? [recent, "leg_day"] : [];
-    if (!used) {
-      const v = o.pathM > 0 ? o.pathM / (25 / 3.6) : 180;
-      return { medianS: v, p20S: v, p80S: v, n: 0, level: "baseline", thin: true };
-    }
-    used.sort((a, b) => a.durationS - b.durationS);
-    const total = used.reduce((t, s) => t + s.w, 0);
-    const q = (p: number) => {
-      let c = 0;
-      for (const s of used) {
-        c += s.w;
-        if (c >= p * total * (1 - 1e-9)) return s.durationS;
-      }
-      return (used.at(-1) as { durationS: number }).durationS;
-    };
-    return { medianS: q(0.5), p20S: q(0.2), p80S: q(0.8), n: used.length, level, thin: used.length < 5 };
-  };
-  return {
-    ...real,
-    distanceM: or(real.distanceM, dist),
-    pathLengthM: or(real.pathLengthM, len),
-    projectOntoPath: or(real.projectOntoPath, project),
-    legEstimate: or(real.legEstimate, leg),
-  };
-});
 
 const db = () => testDb();
 /** IST wall clock → Date */

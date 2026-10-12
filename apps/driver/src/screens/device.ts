@@ -1,46 +1,20 @@
 /**
- * Native wiring for the screens: the same file + SecureStore KVs as task/driver-store's native.ts
- * (token in SecureStore, everything else in JSON files), so pairing done here is what the background sync reads.
- * ponytail: on merge of driver-store/driver-sync, replace `store`/`files` with `deviceStore` from "../store/native"
- * and `syncNow` with driver-sync's trigger; the screens keep using this module unchanged.
+ * Native wiring for the screens over the app's one device store (store/native), so pairing done here is what the
+ * background sync reads, and a new pairing clears the ping queue.
+ * ponytail: `syncNow` is a no-op until the app has a runtime that drives driver-sync's syncOnce (no composition
+ * root yet); the screens keep using this module unchanged when it lands.
  */
 import Constants from "expo-constants";
 import * as Device from "expo-device";
-import { File, Paths } from "expo-file-system";
-import * as SecureStore from "expo-secure-store";
 import * as Updates from "expo-updates";
 import { useEffect, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
+import { fileKV, deviceStore as store } from "../store/native";
 import { createScreenDevice, type ScreenSnapshot } from "./deviceCore";
-import { createDeviceStore } from "./deviceStore";
-import type { KV } from "./storeKv";
-
-const fileKV: KV = {
-  async get(key) {
-    const f = new File(Paths.document, `${key}.json`);
-    return f.exists ? f.text() : null;
-  },
-  async set(key, value) {
-    const tmp = new File(Paths.document, `${key}.json.tmp`);
-    tmp.write(value);
-    tmp.moveSync(new File(Paths.document, `${key}.json`), { overwrite: true });
-  },
-  async del(key) {
-    const f = new File(Paths.document, `${key}.json`);
-    if (f.exists) f.delete();
-  },
-};
-
-const secureKV: KV = {
-  get: (k) => SecureStore.getItemAsync(k),
-  set: (k, v) => SecureStore.setItemAsync(k, v),
-  del: (k) => SecureStore.deleteItemAsync(k),
-};
 
 const builtInOrigin: string = Constants.expoConfig?.extra?.apiOrigin ?? "https://eci-shuttle.positivesumcompany.com";
-const store = createDeviceStore({ files: fileKV, secure: secureKV, builtInOrigin });
 
-// ponytail: no-op until driver-sync's client lands; resumePending is still sent by the next background sync.
+// no-op until the runtime lands (see above); resumePending is still sent by the next sync.
 const syncNow = async () => {};
 
 const device = createScreenDevice({ store, files: fileKV, syncNow, fetch: (u, i) => fetch(u, i), builtInOrigin });

@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Db } from "@/db";
 import { memberships } from "@/db/schema";
 import type { Person } from "@/db/types";
 import { NO_WORKSPACES } from "@/mcp/text";
@@ -17,14 +15,6 @@ import { POST as token } from "./token/route";
 process.env.TOKEN_SECRETS = "oauth-route-test-secret-at-least-32-chars";
 const session = vi.hoisted(() => ({ person: null as Person | null }));
 vi.mock("@/lib/session", () => ({ currentPerson: async () => session.person }));
-// ponytail: stand-in for svc-auth's resolveWorkspace (still a stub): any membership → that workspace, none → null
-vi.mock("@/services/auth/actor", () => ({
-  resolveWorkspace: async (d: Db, personId: string) => {
-    const [m] = await d.select().from(memberships).where(eq(memberships.personId, personId));
-    return m ? { workspace: { id: m.workspaceId }, role: m.role } : null;
-  },
-}));
-
 const O = "http://localhost:3000";
 const CB = "https://claude.ai/api/mcp/auth_callback";
 const VERIFIER = "x".repeat(60);

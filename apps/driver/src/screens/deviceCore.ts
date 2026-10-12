@@ -3,9 +3,9 @@
  * Pure: storage, fetch and the sync trigger are passed in; native wiring is in ./device.
  */
 import { type DeviceConfig, PairResponse, type SyncResponse } from "@eci-shuttle/shared/contracts";
-import type { DeviceStore } from "./deviceStore";
-import { type KV, parseJson } from "./storeKv";
-import { initialSyncState, type SyncState } from "./syncStub";
+import type { DeviceStore } from "../store/deviceStore";
+import { type KV, parseJson } from "../store/kv";
+import { initialSyncState, type SyncState } from "../sync/sync";
 
 /** Screen-owned keys, next to the store's in the same file KV. */
 const SCREENS_KEY = "screens-state";

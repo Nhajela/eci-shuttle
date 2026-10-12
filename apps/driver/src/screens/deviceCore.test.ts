@@ -1,9 +1,9 @@
 import type { PairResponse, SyncResponse } from "@eci-shuttle/shared/contracts";
 import { describe, expect, it, vi } from "vitest";
+import { createDeviceStore } from "../store/deviceStore";
+import { memoryKV } from "../store/kv";
+import { buildSyncRequest, initialSyncState, type SyncState } from "../sync/sync";
 import { createScreenDevice } from "./deviceCore";
-import { createDeviceStore } from "./deviceStore";
-import { memoryKV } from "./storeKv";
-import { buildSyncRequest, initialSyncState, type SyncState } from "./syncStub";
 
 const NOW = Date.UTC(2026, 9, 14, 4, 0);
 const ORIGIN = "https://eci-shuttle.example.com";
@@ -37,7 +37,7 @@ const config = (over: Partial<SyncResponse> = {}): SyncResponse => ({
 function setup() {
   const files = memoryKV();
   const secure = memoryKV();
-  const store = createDeviceStore({ files, secure, builtInOrigin: ORIGIN });
+  const store = createDeviceStore({ files, secure, builtInOrigin: ORIGIN, queue: { clear: async () => {} } });
   const syncNow = vi.fn(async () => {});
   const fetch = vi.fn(async (_url: string, _init?: RequestInit) =>
     Response.json({ deviceId: DEVICE_ID, token: "tok-123", config: config() } satisfies PairResponse),
@@ -119,7 +119,7 @@ describe("load", () => {
     await dev.acceptConsent(NOW);
     await dev.finishSetup(NOW + 1);
     const again = createScreenDevice({
-      store: createDeviceStore({ files, secure, builtInOrigin: ORIGIN }),
+      store: createDeviceStore({ files, secure, builtInOrigin: ORIGIN, queue: { clear: async () => {} } }),
       files,
       syncNow: async () => {},
       fetch: async () => new Response(),

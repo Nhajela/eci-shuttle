@@ -7,7 +7,7 @@ import type { KV } from "./kv";
 import { createPingQueue } from "./pingQueue";
 
 /** JSON files in the app's document directory. Writes go to a temp file then rename, so a crash never leaves half a file. */
-const fileKV: KV = {
+export const fileKV: KV = {
   async get(key) {
     const f = new File(Paths.document, `${key}.json`);
     return f.exists ? f.text() : null;
