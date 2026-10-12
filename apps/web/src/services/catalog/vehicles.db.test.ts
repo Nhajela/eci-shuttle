@@ -34,7 +34,9 @@ describe("createVehicle", () => {
 
   it("rejects invalid input and viewers", async () => {
     const { ws, actor } = await setup();
-    await expect(createVehicle(db(), actor, { workspaceId: ws.id, name: "" })).rejects.toMatchObject({ code: "INVALID" });
+    await expect(createVehicle(db(), actor, { workspaceId: ws.id, name: "" })).rejects.toMatchObject({
+      code: "INVALID",
+    });
     const viewer = await makeAdmin(db(), ws.id, "viewer");
     await expect(createVehicle(db(), viewer.actor, { workspaceId: ws.id, name: "X" })).rejects.toMatchObject({
       code: "FORBIDDEN",
