@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ServiceError } from "@/services/kernel/errors";
 
 const actor = { kind: "admin", id: "p1", workspaceId: "ws1", role: "ops", channel: "web" };
@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   acceptSuggestion: vi.fn(),
   dismissSuggestion: vi.fn(),
   confirm: vi.fn(),
+  excludeDay: vi.fn(),
 }));
 
 vi.mock("@/lib/session", () => ({ requireAdmin: m.requireAdmin }));
@@ -14,10 +15,13 @@ vi.mock("@/db", () => ({ db: () => "DB" }));
 vi.mock("@/services/learning/insights", () => ({
   acceptSuggestion: m.acceptSuggestion,
   dismissSuggestion: m.dismissSuggestion,
+  excludeDay: m.excludeDay,
 }));
 vi.mock("@/services/mcp/proposals", () => ({ confirm: m.confirm }));
 
-const { acceptSuggestionAction, confirmProposalAction, dismissSuggestionAction } = await import("./actions");
+const { acceptSuggestionAction, confirmProposalAction, dismissSuggestionAction, excludeDayAction } = await import(
+  "./actions"
+);
 
 const form = (fields: Record<string, string>) => {
   const f = new FormData();
@@ -44,6 +48,7 @@ describe("acceptSuggestionAction", () => {
     expect(await acceptSuggestionAction(null, form({ suggestionId: "s1" }))).toEqual({
       ok: false,
       error: "Already accepted.",
+      code: "CONFLICT",
     });
     expect(m.requireAdmin).toHaveBeenCalledWith({ w: null, minRole: "ops" });
   });
@@ -54,6 +59,7 @@ describe("acceptSuggestionAction", () => {
       ok: false,
       error: "Something went wrong. Try again.",
     });
+    expect(await acceptSuggestionAction(null, form({ suggestionId: "s1" }))).not.toHaveProperty("code");
   });
 });
 
@@ -80,6 +86,30 @@ describe("confirmProposalAction", () => {
     expect(await confirmProposalAction(null, form({ code: "P-OLD" }))).toEqual({
       ok: false,
       error: "That proposal expired.",
+      code: "GONE",
     });
+  });
+});
+
+describe("excludeDayAction", () => {
+  it("marks the day in the actor's workspace, blank reason as null", async () => {
+    m.excludeDay.mockResolvedValue({});
+    expect(await excludeDayAction(null, form({ w: "test", date: "2026-10-12", reason: " " }))).toEqual({
+      ok: true,
+      date: "2026-10-12",
+    });
+    expect(m.requireAdmin).toHaveBeenCalledWith({ w: "test", minRole: "ops" });
+    expect(m.excludeDay).toHaveBeenCalledWith("DB", actor, { workspaceId: "ws1", date: "2026-10-12", reason: null });
+  });
+
+  it("passes the reason through and maps validation errors", async () => {
+    m.excludeDay.mockRejectedValue(new ServiceError("INVALID", "Pick a date."));
+    const r = await excludeDayAction(null, form({ date: "", reason: "Road closed at Arambol" }));
+    expect(m.excludeDay).toHaveBeenCalledWith("DB", actor, {
+      workspaceId: "ws1",
+      date: "",
+      reason: "Road closed at Arambol",
+    });
+    expect(r).toEqual({ ok: false, error: "Pick a date.", code: "INVALID" });
   });
 });
