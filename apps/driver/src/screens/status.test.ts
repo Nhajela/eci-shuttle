@@ -134,7 +134,8 @@ describe("statusView", () => {
   });
 
   it("last sync reads in minutes, hours or 'just now'", () => {
-    const v = (lastSyncAt: number) => statusView({ ...base, lastSyncAt, config: config(), resolution: res({}) }).lastSync;
+    const v = (lastSyncAt: number) =>
+      statusView({ ...base, lastSyncAt, config: config(), resolution: res({}) }).lastSync;
     expect(v(NOW - 125 * MIN)).toBe("2 h ago (06:55)");
     expect(v(NOW - 10_000)).toBe("just now (08:59)");
   });

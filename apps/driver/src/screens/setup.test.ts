@@ -15,7 +15,12 @@ describe("nextRoute", () => {
 });
 
 describe("checklist", () => {
-  const ok = { location: "always", preciseLocation: true, notifications: true, batteryOptimizationExempt: true } as const;
+  const ok = {
+    location: "always",
+    preciseLocation: true,
+    notifications: true,
+    batteryOptimizationExempt: true,
+  } as const;
   it("is all set when location is always + precise, notifications on and battery exempt", () => {
     const c = checklist(ok);
     expect(c.allSet).toBe(true);
