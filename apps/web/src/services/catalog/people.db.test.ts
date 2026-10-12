@@ -18,13 +18,19 @@ import {
 } from "./people";
 
 const db = () => testDb();
+const must = <T>(v: T | null): T => {
+  if (v === null) throw new Error("expected a row");
+  return v;
+};
 const sys = systemActor("auth-bot", "telegram");
 const tgId = () => Math.floor(Math.random() * 1e12);
 const audits = (entityId: string, action?: string) =>
   db()
     .select()
     .from(auditLog)
-    .where(action ? and(eq(auditLog.entityId, entityId), eq(auditLog.action, action)) : eq(auditLog.entityId, entityId));
+    .where(
+      action ? and(eq(auditLog.entityId, entityId), eq(auditLog.action, action)) : eq(auditLog.entityId, entityId),
+    );
 
 describe("upsertPersonFromTelegram", () => {
   it("creates a person once, audited person.create with no workspace", async () => {
@@ -33,7 +39,12 @@ describe("upsertPersonFromTelegram", () => {
     expect(p).toMatchObject({ telegramId, username: "riya", firstName: "Riya", lastName: null });
     const rows = await audits(p.id);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ action: "person.create", entity: "person", workspaceId: null, actorKind: "system" });
+    expect(rows[0]).toMatchObject({
+      action: "person.create",
+      entity: "person",
+      workspaceId: null,
+      actorKind: "system",
+    });
   });
 
   it("refreshes names on a later call without auditing", async () => {
@@ -101,7 +112,12 @@ describe("membershipsOf", () => {
     const { person } = await makeAdmin(db(), w1.id);
     await db().insert(memberships).values({ personId: person.id, workspaceId: w2.id, role: "viewer" });
     const ms = await membershipsOf(db(), person.id);
-    expect(ms.map((m) => [m.workspaceId, m.role]).sort()).toEqual([[w1.id, "admin"], [w2.id, "viewer"]].sort());
+    expect(ms.map((m) => [m.workspaceId, m.role]).sort()).toEqual(
+      [
+        [w1.id, "admin"],
+        [w2.id, "viewer"],
+      ].sort(),
+    );
   });
 });
 
@@ -111,9 +127,13 @@ describe("setRole", () => {
     const { actor } = await makeAdmin(db(), ws.id);
     const name = `u${randomUUID().slice(0, 8)}`;
     const p = await makePerson(db(), { username: name });
-    const m = await setRole(db(), actor, { workspaceId: ws.id, person: { username: `@${name.toUpperCase()}` }, role: "ops" });
+    const m = await setRole(db(), actor, {
+      workspaceId: ws.id,
+      person: { username: `@${name.toUpperCase()}` },
+      role: "ops",
+    });
     expect(m).toMatchObject({ personId: p.id, workspaceId: ws.id, role: "ops" });
-    const rows = await audits(m!.id, "membership.set");
+    const rows = await audits(must(m).id, "membership.set");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ workspaceId: ws.id, entity: "membership", before: null });
   });
@@ -124,10 +144,10 @@ describe("setRole", () => {
     const p = await makePerson(db());
     const m1 = await setRole(db(), actor, { workspaceId: ws.id, person: { personId: p.id }, role: "viewer" });
     const m2 = await setRole(db(), actor, { workspaceId: ws.id, person: { personId: p.id }, role: "ops" });
-    expect(m2).toMatchObject({ id: m1!.id, role: "ops", version: m1!.version + 1 });
+    expect(m2).toMatchObject({ id: must(m1).id, role: "ops", version: must(m1).version + 1 });
     expect(await setRole(db(), actor, { workspaceId: ws.id, person: { personId: p.id }, role: null })).toBeNull();
     expect(await membershipsOf(db(), p.id)).toEqual([]);
-    expect(await audits(m1!.id, "membership.set")).toHaveLength(3);
+    expect(await audits(must(m1).id, "membership.set")).toHaveLength(3);
   });
 
   it("no-ops are not audited", async () => {
@@ -137,7 +157,7 @@ describe("setRole", () => {
     expect(await setRole(db(), actor, { workspaceId: ws.id, person: { personId: p.id }, role: null })).toBeNull();
     const m = await setRole(db(), actor, { workspaceId: ws.id, person: { personId: p.id }, role: "ops" });
     await setRole(db(), actor, { workspaceId: ws.id, person: { personId: p.id }, role: "ops" });
-    expect(await audits(m!.id)).toHaveLength(1);
+    expect(await audits(must(m).id)).toHaveLength(1);
   });
 
   it("refuses non-admins and admins of another workspace", async () => {
@@ -230,7 +250,13 @@ describe("alert prefs", () => {
       quietTo: "07:00",
     });
     expect(p).toMatchObject({ kinds: ["silent", "digest"], quietFrom: "22:00", quietTo: "07:00", version: 1 });
-    const p2 = await setAlertPrefs(db(), actor, { workspaceId: ws.id, version: 1, kinds: [], quietFrom: null, quietTo: null });
+    const p2 = await setAlertPrefs(db(), actor, {
+      workspaceId: ws.id,
+      version: 1,
+      kinds: [],
+      quietFrom: null,
+      quietTo: null,
+    });
     expect(p2).toMatchObject({ id: p.id, kinds: [], quietFrom: null, version: 2 });
     expect(await audits(p.id, "alert_prefs.set")).toHaveLength(2);
     expect(await getAlertPrefs(db(), actor, { workspaceId: ws.id })).toMatchObject({ id: p.id, kinds: [] });
@@ -246,9 +272,9 @@ describe("alert prefs", () => {
     await expect(
       setAlertPrefs(db(), actor, { workspaceId: ws.id, kinds: [], quietFrom: "25:00", quietTo: "07:00" }),
     ).rejects.toMatchObject({ code: "INVALID" });
-    await expect(setAlertPrefs(db(), actor, { workspaceId: ws.id, kinds: [], quietFrom: "22:00" })).rejects.toMatchObject(
-      { code: "INVALID" },
-    );
+    await expect(
+      setAlertPrefs(db(), actor, { workspaceId: ws.id, kinds: [], quietFrom: "22:00" }),
+    ).rejects.toMatchObject({ code: "INVALID" });
     await expect(setAlertPrefs(db(), actor, { workspaceId: ws.id, kinds: ["nope" as never] })).rejects.toMatchObject({
       code: "INVALID",
     });
@@ -264,7 +290,12 @@ describe("alert prefs", () => {
     const ws = await makeWorkspace(db());
     const a = await makeAdmin(db(), ws.id); // no prefs: defaults
     const b = await makeAdmin(db(), ws.id, "ops");
-    await setAlertPrefs(db(), b.actor, { workspaceId: ws.id, kinds: ["admin_changes"], quietFrom: "22:00", quietTo: "07:00" });
+    await setAlertPrefs(db(), b.actor, {
+      workspaceId: ws.id,
+      kinds: ["admin_changes"],
+      quietFrom: "22:00",
+      quietTo: "07:00",
+    });
     const c = await makeAdmin(db(), ws.id, "viewer");
     await markBlockedBot(db(), sys, { personId: c.person.id, at: new Date() });
     await makeAdmin(db(), (await makeWorkspace(db())).id); // other workspace
