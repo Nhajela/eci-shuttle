@@ -5,6 +5,7 @@
  */
 import {
   type DirectiveKind,
+  IST_TZ,
   type Permissions,
   PhoneAssignFields,
   PhoneForceActiveFields,
@@ -17,7 +18,7 @@ import {
   resolveMode,
   withWorkspace,
 } from "@eci-shuttle/shared";
-import { and, asc, eq, gt, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, directives, memberships, vehicles, workspaces } from "@/db/schema";
@@ -142,12 +143,39 @@ async function addDirective(
     await livePhone(tx, workspaceId, deviceId, true);
     const startsAt = new Date();
     if (endsAt <= startsAt) throw new ServiceError("INVALID", "Pick a time in the future.", { until });
+    const open = (k: DirectiveKind) =>
+      and(eq(directives.kind, k), isNull(directives.cancelledAt), gt(directives.endsAt, startsAt));
+    if (kind === "force_active") {
+      // silence beats active (resolveMode), so a vehicle-wide silence would make this force do nothing
+      const vehicleId = (await openAssignment(tx, deviceId))?.vehicleId;
+      const [vs] = vehicleId
+        ? await tx
+            .select()
+            .from(directives)
+            .where(and(eq(directives.vehicleId, vehicleId), open("silence_until"), lt(directives.startsAt, endsAt)))
+            .orderBy(desc(directives.endsAt))
+            .limit(1)
+        : [];
+      if (vs) {
+        const hhmm = vs.endsAt.toLocaleTimeString("en-GB", { timeZone: IST_TZ, hour: "2-digit", minute: "2-digit" });
+        throw new ServiceError("INVALID", `This vehicle is silenced until ${hhmm} IST. Cancel that first.`, {
+          directiveId: vs.id,
+        });
+      }
+    }
+    // the newest instruction wins: end the phone's open opposite directive
+    const cancelled = await tx
+      .update(directives)
+      .set({ cancelledAt: startsAt, version: sql`${directives.version} + 1` })
+      .where(and(eq(directives.deviceId, deviceId), open(kind === "force_active" ? "silence_until" : "force_active")))
+      .returning({ id: directives.id });
     const [d] = await tx
       .insert(directives)
       .values({ workspaceId, deviceId, kind, startsAt, endsAt, intervalS })
       .returning();
     await bumpConfigs(tx, { deviceIds: [deviceId] }, action);
-    return { before: null, after: d, result: d };
+    const after = cancelled.length ? { ...d, cancelledDirectiveIds: cancelled.map((c) => c.id) } : d;
+    return { before: null, after, result: d };
   });
 }
 
@@ -286,7 +314,8 @@ export async function movePhoneToWorkspace(
         .where(and(eq(directives.deviceId, deviceId), isNull(directives.cancelledAt), gt(directives.endsAt, now)));
       await tx
         .update(devices)
-        .set({ workspaceId: toWorkspaceId, ...edited() })
+        // drop the per-phone OTA pin: a test update must not follow the phone into live (SPEC §5)
+        .set({ workspaceId: toWorkspaceId, targetUpdateId: null, ...edited() })
         .where(eq(devices.id, deviceId));
       await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.move_workspace");
       const after = await getInWorkspace(tx, devices, toWorkspaceId, deviceId, "phone");

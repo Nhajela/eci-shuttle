@@ -194,6 +194,30 @@ describe("directives", () => {
     expect((await audits(d.id))[0].action).toBe("phone.force_active");
   });
 
+  it("force active cancels the phone's open silence, and silence cancels an open force", async () => {
+    const { ws, actor, phone } = await setup("ops");
+    const s = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+    const f = await forceActive(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later(2 * HOUR) });
+    const row = async (id: string) => (await db().select().from(directives).where(eq(directives.id, id)))[0];
+    expect((await row(s.id)).cancelledAt).toBeInstanceOf(Date);
+    expect((await audits(f.id))[0].after).toMatchObject({ cancelledDirectiveIds: [s.id] });
+    const s2 = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+    expect((await row(f.id)).cancelledAt).toBeInstanceOf(Date);
+    expect((await row(s2.id)).cancelledAt).toBeNull();
+  });
+
+  it("force active on a phone whose vehicle is silenced is INVALID", async () => {
+    const { ws, actor, phone } = await setup("ops");
+    const v = await makeVehicle(ws.id);
+    await assignPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, vehicleId: v.id });
+    await db()
+      .insert(directives)
+      .values({ workspaceId: ws.id, vehicleId: v.id, kind: "silence_until", endsAt: new Date(Date.now() + HOUR) });
+    await expect(
+      forceActive(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later(2 * HOUR) }),
+    ).rejects.toMatchObject({ code: "INVALID", message: expect.stringMatching(/silenced until \d\d:\d\d IST/) });
+  });
+
   it("refuses an until in the past, and a viewer", async () => {
     const { ws, actor, phone } = await setup();
     await expect(
@@ -277,19 +301,21 @@ describe("movePhoneToWorkspace", () => {
   }
 
   it("moves the device only, clears assignments and directives, bumps config", async () => {
-    const { ws, actor, phone, to } = await twoWorkspaces();
+    const { ws, actor, phone, to } = await twoWorkspaces("admin", { targetUpdateId: "test-update-1" });
     const v = await makeVehicle(ws.id);
     await assignPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, vehicleId: v.id });
     const dir = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
     const d = await movePhoneToWorkspace(db(), actor, { workspaceId: ws.id, deviceId: phone.id, toWorkspaceId: to.id });
     expect(d.workspaceId).toBe(to.id);
+    expect(d.targetUpdateId).toBeNull(); // the new workspace's OTA target applies
     expect(d.configVersion).toBe(4);
     expect(await openAssignments(phone.id)).toHaveLength(0);
     const [dirRow] = await db().select().from(directives).where(eq(directives.id, dir.id));
     expect(dirRow.cancelledAt).toBeInstanceOf(Date);
     expect((await db().select().from(vehicles).where(eq(vehicles.id, v.id)))[0].workspaceId).toBe(ws.id);
     const [a] = (await audits(phone.id)).filter((x) => x.action === "phone.move_workspace");
-    expect(a.after).toMatchObject({ workspaceId: to.id });
+    expect(a.after).toMatchObject({ workspaceId: to.id, targetUpdateId: null });
+    expect(a.before).toMatchObject({ targetUpdateId: "test-update-1" });
   });
 
   it("needs admin in the target workspace too", async () => {
