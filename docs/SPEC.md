@@ -20,14 +20,48 @@ Non-goals
 ## 2. Repo layout (new private repo `Nhajela/eci-shuttle`, pnpm monorepo)
 
 ```
-apps/web        Next.js 16 on Vercel: device API, admin, attendee page, Telegram bot webhook
+apps/web        Next.js 16: device API, admin, attendee page, MCP, Telegram bot webhook
+apps/worker     long-running Node process: scheduler + Postgres-backed job queue (same codebase, same services)
 apps/driver     Expo (dev client, Android only) + small Kotlin module if the spike needs it
-packages/shared zod protocol schemas, resolveMode() and ETA maths: pure TS, shared by both apps
+packages/shared zod protocol schemas, resolveMode() and ETA maths: pure TS, shared by all apps
 ```
 
-Stack follows the other ECI apps: Neon Postgres (Singapore, `dev` + `main` branches), drizzle,
-one service layer `fn(db, actor, input)` with typed errors, one `audit_log`, TDD with Vitest on
-local Docker Postgres (template DB, clone per worker). Admin login via Telegram, as in Travel CoOp.
+Stack: Postgres + drizzle, one service layer `fn(db, actor, input)` with typed errors, one `audit_log`,
+TDD with Vitest on local Docker Postgres (template DB, clone per worker). Admin login via Telegram, as in Travel CoOp.
+
+## 2b. Hosting: Coolify on the Mumbai VPS
+
+Everything runs on Coolify on our Mumbai VPS, close to Goa:
+
+| Container | What |
+|---|---|
+| `web` | `next start` from the standalone build. Health check `/api/health` |
+| `worker` | The same image, running `node worker.js` |
+| `postgres` | Postgres 18 with a persistent volume. Not exposed publicly. `web` and `worker` reach it on the Coolify network |
+
+- **Backups**: Coolify's scheduled Postgres backups, every 6h, to off-box S3-compatible storage (e.g. Cloudflare R2),
+  kept for 14 days. A restore is tested once before the event. *The VPS must never hold the only copy.*
+- **Later**: one shared Postgres with a database per app. For now it's its own container, so moving it later is a dump and restore.
+- **Dev**: local Docker Postgres for dev and tests. A `test` workspace on prod for real-world testing. No Neon.
+- **Cloudflare proxied** in front: TLS, and it caches the public status for 5s (`Cache-Control: s-maxage=5`), so crowds
+  don't reach the VPS, and a short outage shows a slightly stale answer (labelled "last seen …") instead of an error.
+- **Uptime**: an outside monitor pings `/api/health` and alerts on Telegram. The worker posts a heartbeat row every
+  minute, and `/api/health` fails if it's more than 3 min old, so a dead worker is noticed too.
+- **Deploys**: Coolify builds from the GitHub repo on push to `main`.
+
+### Scheduled jobs (worker)
+
+| Job | Every | Does |
+|---|---|---|
+| watchdog | 1 min | Alerts: silent or off-route vehicles, low battery, lost permissions, reported ≠ desired, pending kill or update. Marks vehicles offline |
+| windows | 1 min | Service windows opening and closing: vehicles on and off duty, config bump + push |
+| arrival-alerts | 15 s | "Message me when it's 5 min away". Mostly fired when pings arrive; this is the backstop and the expiry |
+| notices | 1 min | Send at start (subscribers, group post + pin), unpin at end |
+| queue | continuous | Paced Telegram broadcasts, push retries for phones behind on config |
+| learning | nightly 02:30 IST | Recompute stats, write suggestions, send the admin digest |
+| cleanup | nightly | Expired login, pairing and proposal codes. Delete raw pings after the event |
+
+Every job takes a Postgres advisory lock, so a restart or a second worker never double-runs or double-sends.
 
 ## 2a. Own domain, host-portable
 
@@ -38,11 +72,10 @@ address, so the host can change later without touching phones, links or bots.
   Telegram magic links, the webhook URL, pairing QR codes and the APK download link. Nothing hardcodes a host.
 - **The driver app** ships with the domain built in, not the host. It also stores an `apiOrigin` from each sync response,
   keeping the previous one as a fallback. So even a *domain* change can be rolled out to phones without a new APK.
-- **No host lock-in:** plain Next.js (`output: "standalone"`, so it also runs in Docker or on a VPS), QStash for
-  scheduled jobs instead of Vercel Cron, Neon reached by its connection string, and caching through standard
-  `Cache-Control` headers that work on any CDN. No `@vercel/*` packages.
-- **Moving hosts** = deploy elsewhere → point DNS → run `pnpm bot:setup` (re-register the webhook). Phones, QR codes,
-  MCP connectors and links don't change.
+- **No host lock-in:** plain Next.js (`output: "standalone"`), our own worker instead of any platform cron,
+  Postgres reached by its connection string, and caching through standard `Cache-Control` headers. No `@vercel/*` packages.
+- **Moving hosts** = restore the DB → deploy the image → point DNS → run `pnpm bot:setup` (re-register the webhook).
+  Phones, QR codes, MCP connectors and links don't change.
 
 ## 3. Domain model
 
@@ -182,7 +215,7 @@ Telegram login (§6c), with roles per workspace. A workspace switcher sits at th
 | **Activity** | The audit log, filterable by entity. Each object page also shows its own timeline from it. |
 | **Workspaces** | Create test workspaces, start or stop a simulated device. |
 
-Watchdog (QStash, every minute): a vehicle expected active but silent for >5 min, or a phone below 15% battery → Telegram DM to ops.
+Watchdog (worker, every minute, see §2b): a vehicle expected active but silent for >5 min, or a phone below 15% battery → Telegram DM to ops.
 
 ## 6b. Notices, pinned where they matter
 
@@ -257,7 +290,7 @@ pings → dwells (arrived/left a spot) → trips (spot → spot) → departure m
   legs, so a party night doesn't distort the Riva↔Circle numbers.
 - Matching actual departures to planned ones: in time order, each actual departure takes the nearest
   unmatched planned departure within ±25 min. A planned departure left with no match is `missed`.
-- Updated incrementally when a trip closes (cheap). A nightly QStash job recomputes everything and writes suggestions.
+- Updated incrementally when a trip closes (cheap). A nightly worker job recomputes everything and writes suggestions.
 
 **What it powers**
 1. **The ETA, with a range.** "Here in 6 min (5–9)". It's built from segment speeds along the remaining path plus
@@ -336,7 +369,7 @@ Any failure → that piece moves into a small Kotlin Expo module (service + boot
 
 1. Contract: shared zod protocol, `resolveMode()`, DB schema (frozen).
 2. In parallel: service layer + sync/pair API · driver app spike → app · admin UI · attendee page + bot.
-3. Integration on the dev Neon branch → install on one driver phone → roll out.
+3. Integration locally + the `test` workspace on Coolify → install on one driver phone → roll out.
 
 ## 10. Needs from Naman
 
