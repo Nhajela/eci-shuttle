@@ -2,6 +2,7 @@ import type { SyncResponse } from "@eci-shuttle/shared/contracts";
 import { describe, expect, it } from "vitest";
 import { createDeviceStore } from "./deviceStore";
 import { memoryKV } from "./kv";
+import { createPingQueue } from "./pingQueue";
 
 const BUILT_IN = "https://eci-shuttle.positivesumcompany.com";
 
@@ -25,8 +26,19 @@ const resp = (over: Partial<SyncResponse> = {}): SyncResponse => ({
 function setup() {
   const files = memoryKV();
   const secure = memoryKV();
-  return { files, secure, store: createDeviceStore({ files, secure, builtInOrigin: BUILT_IN }) };
+  const queue = createPingQueue(files);
+  return { files, secure, queue, store: createDeviceStore({ files, secure, builtInOrigin: BUILT_IN, queue }) };
 }
+
+const ping = (recordedAt: number) => ({
+  recordedAt,
+  lat: 15.6,
+  lng: 73.7,
+  accuracy: 5,
+  speed: null,
+  heading: null,
+  battery: 80,
+});
 
 describe("device store: pairing + token", () => {
   it("is unpaired with no token: deviceConfig null, built-in origin only", async () => {
@@ -48,7 +60,7 @@ describe("device store: pairing + token", () => {
   it("survives a restart (new store over the same storage)", async () => {
     const { store, files, secure } = setup();
     await store.paired({ deviceId: "d", token: "tok", config: resp({ configVersion: 4 }) });
-    const again = createDeviceStore({ files, secure, builtInOrigin: BUILT_IN });
+    const again = createDeviceStore({ files, secure, builtInOrigin: BUILT_IN, queue: createPingQueue(files) });
     expect(await again.token()).toBe("tok");
     expect((await again.deviceConfig())?.configVersion).toBe(4);
   });
@@ -86,6 +98,64 @@ describe("device store: sync responses", () => {
     await store.paired({ deviceId: "d2", token: "tok2", config: resp() });
     expect(await store.token()).toBe("tok2");
     expect((await store.deviceConfig())?.revoked).toBe(false);
+  });
+});
+
+describe("device store: queued pings never outlive the token", () => {
+  it("revoke clears the ping queue", async () => {
+    const { store, queue } = setup();
+    await store.paired({ deviceId: "d", token: "tok", config: resp() });
+    await queue.push([ping(900), ping(950)], 1_000);
+    await store.applySync(resp({ revoked: true }), { sentResume: false });
+    expect(await queue.size()).toBe(0);
+  });
+
+  it("pairing again clears pings queued under the old token", async () => {
+    const { store, queue } = setup();
+    await store.paired({ deviceId: "d", token: "tok", config: resp() });
+    await queue.push([ping(900)], 1_000);
+    await store.paired({ deviceId: "d2", token: "tok2", config: resp() });
+    expect(await queue.size()).toBe(0);
+  });
+
+  it("an ordinary sync keeps the queue", async () => {
+    const { store, queue } = setup();
+    await store.paired({ deviceId: "d", token: "tok", config: resp() });
+    await queue.push([ping(900)], 1_000);
+    await store.applySync(resp({ configVersion: 2 }), { sentResume: false });
+    expect(await queue.size()).toBe(1);
+  });
+});
+
+describe("device store: a stored config that no longer fits the contract (e.g. after an OTA)", () => {
+  async function storedWithout(field: keyof SyncResponse, over: Partial<SyncResponse> = {}) {
+    const { store, files, secure } = setup();
+    await store.paired({ deviceId: "d", token: "tok", config: resp({ apiOrigin: "https://a.example", ...over }) });
+    await store.applySync(resp({ apiOrigin: "https://b.example", killed: true, ...over }), { sentResume: false });
+    const raw = JSON.parse((await files.get("device-state")) as string);
+    delete raw.config[field];
+    await files.set("device-state", JSON.stringify(raw));
+    return createDeviceStore({ files, secure, builtInOrigin: BUILT_IN, queue: createPingQueue(files) });
+  }
+
+  it("stays paired and keeps the latched kill", async () => {
+    const store = await storedWithout("vehicleName", { configVersion: 7 });
+    const c = await store.deviceConfig();
+    expect(c).not.toBeNull();
+    expect(c?.killed).toBe(true);
+    expect(c?.configVersion).toBe(7);
+  });
+
+  it("keeps the origins it knew", async () => {
+    const store = await storedWithout("workspace");
+    expect(await store.origins()).toEqual(["https://b.example", "https://a.example", BUILT_IN]);
+  });
+
+  it("falls back to safe values for a field it lost", async () => {
+    const store = await storedWithout("schedule");
+    const c = await store.deviceConfig();
+    expect(c?.schedule).toEqual([]);
+    expect(c?.killed).toBe(true);
   });
 });
 
@@ -142,7 +212,7 @@ describe("device store: latched kill (SPEC §4: only Resume clears it)", () => {
     const { store, files, secure } = setup();
     await store.paired({ deviceId: "d", token: "tok", config: resp() });
     await store.applySync(resp({ killed: true }), { sentResume: false });
-    const again = createDeviceStore({ files, secure, builtInOrigin: BUILT_IN });
+    const again = createDeviceStore({ files, secure, builtInOrigin: BUILT_IN, queue: createPingQueue(files) });
     expect((await again.deviceConfig())?.killed).toBe(true);
   });
 });

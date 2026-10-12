@@ -20,22 +20,63 @@ const EMPTY: DeviceState = { config: null, killLatched: false, resumePending: fa
 
 const trimSlash = (s: string) => s.replace(/\/+$/, "");
 
-function readState(raw: string | null): DeviceState {
+/**
+ * A stored config that no longer fits SyncResponse (e.g. an OTA added a field) keeps every field that still parses
+ * and takes safe values for the rest, so the phone stays paired and its next sync brings a full config.
+ */
+function readConfig(v: unknown, builtInOrigin: string): SyncResponse | null {
+  const strict = SyncResponse.safeParse(v);
+  if (strict.success) return strict.data;
+  if (!v || typeof v !== "object") return null;
+  const out: Record<string, unknown> = {
+    configVersion: 1,
+    killed: false,
+    revoked: false,
+    schedule: [],
+    activeIntervalS: 10,
+    idleHeartbeatS: 900,
+    minAppVersion: null,
+    apkUrl: null,
+    targetUpdateId: null,
+    apiOrigin: builtInOrigin,
+    serverTime: 0,
+    vehicleName: null,
+    workspace: { slug: "", isLive: false },
+  };
+  for (const [k, field] of Object.entries(SyncResponse.shape)) {
+    const r = field.safeParse((v as Record<string, unknown>)[k]);
+    if (r.success) out[k] = r.data;
+  }
+  const loose = SyncResponse.safeParse(out);
+  return loose.success ? loose.data : null;
+}
+
+function readState(raw: string | null, builtInOrigin: string): DeviceState {
   const v = parseJson(raw) as Partial<DeviceState> | null;
   if (!v || typeof v !== "object") return EMPTY;
-  const config = SyncResponse.safeParse(v.config);
-  if (!config.success) return EMPTY;
+  // latch fields are read on their own: a bad config must never drop a latched kill (SPEC §4)
   return {
-    config: config.data,
+    config: readConfig(v.config, builtInOrigin),
     killLatched: v.killLatched === true,
     resumePending: v.resumePending === true,
     prevApiOrigin: typeof v.prevApiOrigin === "string" ? v.prevApiOrigin : null,
   };
 }
 
-export function createDeviceStore({ files, secure, builtInOrigin }: { files: KV; secure: KV; builtInOrigin: string }) {
+export function createDeviceStore({
+  files,
+  secure,
+  builtInOrigin,
+  queue,
+}: {
+  files: KV;
+  secure: KV;
+  builtInOrigin: string;
+  /** queued pings, cleared whenever the token is wiped or replaced so they never upload under another device/vehicle */
+  queue: { clear(): Promise<void> };
+}) {
   const one = serial();
-  const load = async () => readState(await files.get(STATE_KEY));
+  const load = async () => readState(await files.get(STATE_KEY), builtInOrigin);
   const update = (fn: (s: DeviceState) => DeviceState | Promise<DeviceState>) =>
     one(async () => {
       const next = await fn(await load());
@@ -63,6 +104,7 @@ export function createDeviceStore({ files, secure, builtInOrigin }: { files: KV;
     },
 
     async paired({ token, config }: PairResponse) {
+      await queue.clear();
       await secure.set(TOKEN_KEY, token);
       await update(() => ({ ...EMPTY, config, killLatched: config.killed }));
     },
@@ -70,7 +112,7 @@ export function createDeviceStore({ files, secure, builtInOrigin }: { files: KV;
     /** Store a sync response. `sentResume`: the request carried `resume: true`. */
     applySync(resp: SyncResponse, { sentResume }: { sentResume: boolean }) {
       return update(async (s) => {
-        if (resp.revoked) await secure.del(TOKEN_KEY);
+        if (resp.revoked) await Promise.all([secure.del(TOKEN_KEY), queue.clear()]);
         const oldOrigin = s.config?.apiOrigin;
         return {
           config: resp,

@@ -16,6 +16,13 @@ const ping = (recordedAt: number): Ping => ({
 });
 
 describe("ping queue (SPEC §4: queued on disk, uploaded in batches)", () => {
+  it("clear() empties the queue", async () => {
+    const q = createPingQueue(memoryKV());
+    await q.push([ping(NOW - 2), ping(NOW - 1)], NOW);
+    await q.clear();
+    expect(await q.size()).toBe(0);
+  });
+
   it("starts empty", async () => {
     const q = createPingQueue(memoryKV());
     expect(await q.size()).toBe(0);

@@ -31,5 +31,5 @@ const secureKV: KV = {
 
 const builtInOrigin: string = Constants.expoConfig?.extra?.apiOrigin ?? "https://eci-shuttle.positivesumcompany.com";
 
-export const deviceStore = createDeviceStore({ files: fileKV, secure: secureKV, builtInOrigin });
 export const pingQueue = createPingQueue(fileKV);
+export const deviceStore = createDeviceStore({ files: fileKV, secure: secureKV, builtInOrigin, queue: pingQueue });

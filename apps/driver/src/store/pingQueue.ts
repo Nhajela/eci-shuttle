@@ -39,6 +39,8 @@ export function createPingQueue(kv: KV) {
         const done = new Set(sent.map((p) => p.recordedAt));
         await save((await load()).filter((p) => !done.has(p.recordedAt)));
       }),
+    /** Drop everything: the pings belong to a token that is gone (revoked or replaced). */
+    clear: () => one(() => kv.del(KEY)),
     size: () => one(async () => (await load()).length),
   };
 }
