@@ -2,7 +2,7 @@
  * Driver sync, pure part (SPEC §4): the state kept on disk, building a SyncRequest, applying a SyncResponse,
  * clock offset, retry backoff and when to sync next. Every function takes "now"; I/O lives in ./client.
  */
-import type { ModeResolution, Ping, SyncRequest, SyncResponse } from "@eci-shuttle/shared/contracts";
+import { type ModeResolution, Ping, type SyncRequest, type SyncResponse } from "@eci-shuttle/shared/contracts";
 
 /** SPEC §4: "every ~15s" while active. */
 export const ACTIVE_SYNC_MS = 15_000;
@@ -82,10 +82,28 @@ export function nextSyncDelayMs(
   return state.failures > 0 ? Math.min(regular, backoffMs(state.failures, random)) : regular;
 }
 
+const inRange = (v: number | null, min: number, max: number) =>
+  v !== null && Number.isFinite(v) && v >= min && v <= max ? v : null;
+
+/** Blank out-of-range optional readings (expo-battery says -1 for unknown); drop pings still invalid, so one can't 400 the batch forever. */
+export function cleanPings(pings: Ping[]): Ping[] {
+  return pings.flatMap((p) => {
+    const r = Ping.safeParse({
+      ...p,
+      battery: inRange(p.battery, 0, 100),
+      speed: inRange(p.speed, 0, Number.MAX_VALUE),
+      heading: inRange(p.heading, 0, 360),
+    });
+    return r.success ? [r.data] : [];
+  });
+}
+
+/** Sends the first MAX_PINGS_PER_SYNC pings minus invalid ones; on success the caller drops every ping it scanned. */
 export function buildSyncRequest(state: SyncState, telemetry: Telemetry, pings: Ping[], now: number): SyncRequest {
   return {
     ...telemetry,
-    pings: pings.slice(0, MAX_PINGS_PER_SYNC),
+    battery: inRange(telemetry.battery, 0, 100),
+    pings: cleanPings(pings.slice(0, MAX_PINGS_PER_SYNC)),
     appliedConfigVersion: state.config?.configVersion ?? 0,
     clock: now,
     ...(state.resumePending && { resume: true as const }),
