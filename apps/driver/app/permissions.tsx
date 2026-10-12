@@ -8,7 +8,7 @@ import { checklist } from "../src/screens/setup";
 import { Button, colors, Screen, s } from "../src/screens/ui";
 
 export default function PermissionChecklist() {
-  const { setupDoneAt } = useDevice();
+  const setupDoneAt = useDevice()?.setupDoneAt ?? null;
   const [perms, setPerms] = useState<Permissions | null>(null);
 
   useEffect(() => {
@@ -45,8 +45,8 @@ export default function PermissionChecklist() {
           <Text style={s.text}>You can close the app. It runs by itself.</Text>
           <Button
             label="Done"
-            onPress={() => {
-              if (setupDoneAt === null) finishSetup(Date.now());
+            onPress={async () => {
+              if (setupDoneAt === null) await finishSetup(Date.now());
               router.replace("/status");
             }}
           />

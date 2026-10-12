@@ -3,8 +3,9 @@ import { Redirect, router } from "expo-router";
 import * as Updates from "expo-updates";
 import { useEffect, useState } from "react";
 import { Linking, StyleSheet, Text, View } from "react-native";
-import { appVersion, forgetPairing, resume, useDevice } from "../src/screens/device";
+import { appVersion, refresh, resume, useDevice } from "../src/screens/device";
 import { statusView } from "../src/screens/status";
+import { serverNow } from "../src/screens/syncStub";
 import { Button, colors, Screen, s } from "../src/screens/ui";
 
 const TONE = {
@@ -19,17 +20,24 @@ export default function Status() {
   const [resuming, setResuming] = useState(false);
 
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
+    // the background sync writes to disk; re-read it so mode and last sync stay current
+    const t = setInterval(() => {
+      setNow(Date.now());
+      void refresh();
+    }, 30_000);
     return () => clearInterval(t);
   }, []);
 
-  if (!d.config) return <Redirect href="/" />;
+  if (!d) return null;
+  if (!d.config || !d.deviceConfig) return <Redirect href="/" />;
+  // same inputs as the background service: latched kill and server clock
+  const serverTime = serverNow(d.sync, now);
   const v = statusView({
     config: d.config,
-    resolution: resolveMode(d.config, now),
-    lastSyncAt: d.lastSyncAt,
+    resolution: resolveMode(d.deviceConfig, serverTime),
+    lastSyncAt: d.sync.lastSyncAt === null ? null : serverNow(d.sync, d.sync.lastSyncAt),
     appVersion: appVersion(),
-    now,
+    now: serverTime,
   });
   const tone = TONE[v.tone];
 
@@ -53,13 +61,7 @@ export default function Status() {
         />
       )}
       {d.config.revoked && (
-        <Button
-          label="Pair again"
-          onPress={() => {
-            forgetPairing();
-            router.replace("/");
-          }}
-        />
+        <Button label="Pair again" onPress={() => router.push("/pair")} />
       )}
 
       <Row label="Next" value={v.next} />

@@ -1,87 +1,88 @@
 /**
- * The screens' only view of the device store + sync.
- * ponytail: local stand-in until task/driver-store and task/driver-sync merge; swap these bodies for theirs
- * and keep the names. State is one JSON blob in SecureStore; resume/sync here don't talk to the server yet.
+ * Native wiring for the screens: the same file + SecureStore KVs as task/driver-store's native.ts
+ * (token in SecureStore, everything else in JSON files), so pairing done here is what the background sync reads.
+ * ponytail: on merge of driver-store/driver-sync, replace `store`/`files` with `deviceStore` from "../store/native"
+ * and `syncNow` with driver-sync's trigger; the screens keep using this module unchanged.
  */
-import { PairResponse, type SyncResponse } from "@eci-shuttle/shared/contracts";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
+import { File, Paths } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 import * as Updates from "expo-updates";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
+import { AppState } from "react-native";
+import { createScreenDevice, type ScreenSnapshot } from "./deviceCore";
+import { createDeviceStore } from "./deviceStore";
+import type { KV } from "./storeKv";
 
-export type DeviceState = {
-  consentAt: number | null;
-  setupDoneAt: number | null;
-  token: string | null;
-  config: SyncResponse | null;
-  lastSyncAt: number | null;
+const fileKV: KV = {
+  async get(key) {
+    const f = new File(Paths.document, `${key}.json`);
+    return f.exists ? f.text() : null;
+  },
+  async set(key, value) {
+    const tmp = new File(Paths.document, `${key}.json.tmp`);
+    tmp.write(value);
+    tmp.moveSync(new File(Paths.document, `${key}.json`), { overwrite: true });
+  },
+  async del(key) {
+    const f = new File(Paths.document, `${key}.json`);
+    if (f.exists) f.delete();
+  },
 };
 
-const KEY = "driver-screens-state";
-const EMPTY: DeviceState = { consentAt: null, setupDoneAt: null, token: null, config: null, lastSyncAt: null };
+const secureKV: KV = {
+  get: (k) => SecureStore.getItemAsync(k),
+  set: (k, v) => SecureStore.setItemAsync(k, v),
+  del: (k) => SecureStore.deleteItemAsync(k),
+};
+
+const builtInOrigin: string = Constants.expoConfig?.extra?.apiOrigin ?? "https://eci-shuttle.positivesumcompany.com";
+const store = createDeviceStore({ files: fileKV, secure: secureKV, builtInOrigin });
+
+// ponytail: no-op until driver-sync's client lands; resumePending is still sent by the next background sync.
+const syncNow = async () => {};
+
+const device = createScreenDevice({ store, files: fileKV, syncNow, fetch: (u, i) => fetch(u, i), builtInOrigin });
+
+export const appVersion = (): string => Constants.expoConfig?.version ?? "0.0.0";
+
+let snap: ScreenSnapshot | null = null;
 const listeners = new Set<() => void>();
-let state: DeviceState = load();
-
-function load(): DeviceState {
-  try {
-    return { ...EMPTY, ...JSON.parse(SecureStore.getItem(KEY) ?? "{}") };
-  } catch {
-    return EMPTY;
-  }
-}
-
-function set(patch: Partial<DeviceState>) {
-  state = { ...state, ...patch };
-  SecureStore.setItem(KEY, JSON.stringify(state));
+/** Re-read everything from disk (the background task writes it too) and re-render. */
+export async function refresh() {
+  snap = await device.load();
   for (const l of listeners) l();
 }
+void refresh();
 
-export function useDevice(): DeviceState {
+/** null while the first read from disk is in flight. Re-reads when the app comes to the foreground. */
+export function useDevice(): ScreenSnapshot | null {
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (st) => st === "active" && void refresh());
+    return () => sub.remove();
+  }, []);
   return useSyncExternalStore(
     (l) => {
       listeners.add(l);
       return () => listeners.delete(l);
     },
-    () => state,
+    () => snap,
   );
 }
 
-export const appVersion = (): string => Constants.expoConfig?.version ?? "0.0.0";
-const builtInOrigin = (): string => (Constants.expoConfig?.extra?.apiOrigin as string) ?? "";
+const then = <A extends unknown[]>(fn: (...a: A) => Promise<unknown>) => async (...a: A) => {
+  await fn(...a);
+  await refresh();
+};
 
-export const acceptConsent = (now: number) => set({ consentAt: now });
-export const finishSetup = (now: number) => set({ setupDoneAt: now });
-
-/** POST /api/device/pair. Throws an Error with a message fit to show the driver. */
-export async function pair(code: string, origin: string | null, now: number): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(`${origin ?? builtInOrigin()}/api/device/pair`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        code,
-        model: [Device.manufacturer, Device.modelName].filter(Boolean).join(" ").slice(0, 200),
-        appVersion: appVersion(),
-        updateId: Updates.updateId ?? null,
-        pushToken: null,
-      }),
-    });
-  } catch {
-    throw new Error("No internet. Check the connection and try again.");
-  }
-  if (res.status === 400 || res.status === 404 || res.status === 410)
-    throw new Error("That code didn't work. It may have expired: ask for a new one.");
-  if (!res.ok) throw new Error(`The server had a problem (${res.status}). Try again in a minute.`);
-  const body = PairResponse.parse(await res.json());
-  set({ token: body.token, config: body.config, lastSyncAt: now });
-}
-
-/** Driver pressed Resume after a kill. The real sync sends `resume: true` so the server audits who/when. */
-export async function resume(): Promise<void> {
-  if (state.config) set({ config: { ...state.config, killed: false } });
-}
-
-/** Revoked phones wipe their token and pair again. */
-export const forgetPairing = () => set({ token: null, config: null });
+export const acceptConsent = then(device.acceptConsent);
+export const finishSetup = then(device.finishSetup);
+export const resume = then(device.resume);
+export const pair = then((code: string, origin: string | null) =>
+  device.pair(code, origin, {
+    model: [Device.manufacturer, Device.modelName].filter(Boolean).join(" "),
+    appVersion: appVersion(),
+    updateId: Updates.updateId ?? null,
+  }),
+);

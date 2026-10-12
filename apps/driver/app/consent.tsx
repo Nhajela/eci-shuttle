@@ -17,8 +17,8 @@ export default function Consent() {
       </Text>
       <Button
         label="I agree"
-        onPress={() => {
-          acceptConsent(Date.now());
+        onPress={async () => {
+          await acceptConsent(Date.now());
           router.replace("/");
         }}
       />

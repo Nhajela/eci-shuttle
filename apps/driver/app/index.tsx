@@ -4,5 +4,6 @@ import { nextRoute } from "../src/screens/setup";
 
 export default function Index() {
   const d = useDevice();
-  return <Redirect href={nextRoute({ ...d, paired: d.token !== null })} />;
+  if (!d) return null;
+  return <Redirect href={nextRoute({ ...d, paired: d.deviceConfig !== null })} />;
 }
