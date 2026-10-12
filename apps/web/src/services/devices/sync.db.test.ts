@@ -78,7 +78,13 @@ beforeEach(() => {
 describe("authenticateDevice", () => {
   it("token → device actor", async () => {
     const { ws, device, actor } = await makeDevice();
-    expect(actor).toEqual({ kind: "device", id: device.id, workspaceId: ws.id, channel: "device", label: "Bus 1 phone" });
+    expect(actor).toEqual({
+      kind: "device",
+      id: device.id,
+      workspaceId: ws.id,
+      channel: "device",
+      label: "Bus 1 phone",
+    });
   });
 
   it("accepts the raw token without the Bearer prefix", async () => {
@@ -198,7 +204,12 @@ describe("syncDevice", () => {
 
   it("a permission newly lost is audited device.permission_lost once", async () => {
     const { device, actor } = await makeDevice();
-    const lost = { location: "foreground", preciseLocation: true, notifications: false, batteryOptimizationExempt: true } as const;
+    const lost = {
+      location: "foreground",
+      preciseLocation: true,
+      notifications: false,
+      batteryOptimizationExempt: true,
+    } as const;
     await syncDevice(db(), actor, req({ permissions: lost }), NOW);
     await syncDevice(db(), actor, req({ permissions: lost }), NOW);
     const a = await audits(device.id, "device.permission_lost");
@@ -210,7 +221,12 @@ describe("syncDevice", () => {
 
   it("first report (no stored permissions) and regained permissions are not audited", async () => {
     const { device, actor } = await makeDevice({ permissions: null });
-    const weak = { location: "denied", preciseLocation: false, notifications: false, batteryOptimizationExempt: false } as const;
+    const weak = {
+      location: "denied",
+      preciseLocation: false,
+      notifications: false,
+      batteryOptimizationExempt: false,
+    } as const;
     await syncDevice(db(), actor, req({ permissions: weak }), NOW);
     await syncDevice(db(), actor, req(), NOW);
     expect(await audits(device.id, "device.permission_lost")).toHaveLength(0);
@@ -218,7 +234,10 @@ describe("syncDevice", () => {
 
   it("rejects a non-device actor or another device's actor", async () => {
     const { actor } = await makeDevice();
-    for (const a of [{ ...actor, kind: "system" as const }, { ...actor, kind: "admin" as const }])
+    for (const a of [
+      { ...actor, kind: "system" as const },
+      { ...actor, kind: "admin" as const },
+    ])
       await expect(syncDevice(db(), a, req(), NOW)).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
