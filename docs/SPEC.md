@@ -140,6 +140,58 @@ Telegram login, with an allowlist per workspace. A workspace switcher sits at th
 
 Watchdog (QStash, every minute): a vehicle expected active but silent for >5 min, or a phone below 15% battery → Telegram DM to ops.
 
+## 6a. Learning and adaptive schedule
+
+Everything is derived from pings, through the same pipeline:
+
+```
+pings → dwells (arrived/left a spot) → trips (spot → spot) → departure matches (actual ↔ planned)
+      → rolling stats → ETA model · expected times today · insights · timetable suggestions
+```
+
+**Derived tables**
+| Table | Holds |
+|---|---|
+| `dwells` | vehicle, spot, arrived_at, departed_at, matched planned departure |
+| `trips` | vehicle, service, from → to, departed_at, arrived_at, path quality (clean / off route / gap) |
+| `departure_matches` | planned departure ↔ actual departure, delay in minutes, or `missed` |
+| `leg_stats` | leg (from → to), hour bucket, n, median, p20, p80, updated_at |
+| `segment_speeds` | route, ~200m segment, hour bucket, median speed. Finds the slow parts (a junction, the market) |
+| `suggestions` | kind, evidence, proposed change, status (open / accepted / dismissed), proposal id |
+
+**How it learns**
+- Rolling window of the last 7 service days, newer days weighted more. Each stat falls back down a ladder when
+  data is thin: leg + hour bucket → leg all day → path distance ÷ 25 km/h (day-1 baseline). The fallback level
+  is stored, so the UI can say "estimate" until there are at least 5 samples.
+- Trips that went off route, had GPS gaps, or ran more than 3× the median are dropped from the stats. Admin can
+  mark a day as "don't learn from this" (e.g. a road closure). Special services learn on their own
+  legs, so a party night doesn't distort the Riva↔Circle numbers.
+- Matching actual departures to planned ones: in time order, each actual departure takes the nearest
+  unmatched planned departure within ±25 min. A planned departure left with no match is `missed`.
+- Updated incrementally when a trip closes (cheap). A nightly QStash job recomputes everything and writes suggestions.
+
+**What it powers**
+1. **The ETA, with a range.** "Here in 6 min (5–9)". It's built from segment speeds along the remaining path plus
+   learned dwell times, and the range is p20–p80. When data is thin it says "about".
+2. **Expected times today, automatic.** The public schedule shows planned *and* expected times for upcoming
+   departures. If the shuttle is 10 min late, the delay carries forward:
+   expected = max(planned, expected arrival + minimum dwell). This changes no data; it's just a prediction.
+3. **"Usually" hints when there's no live data**: "Next at 9:40 · usually leaves ~9:46".
+4. **Continuous-loop services** (no fixed times): the schedule shows "about every 25 min" from the measured cycle
+   time, and the answer is fully predictive.
+5. **Insights** (admin page + MCP `shuttle_insights`), per spot and per departure:
+   on-time % (within 3 min), average and p80 delay by departure slot (heatmap: time × day), dwell
+   by spot and hour, leg time by hour, full loop cycle time, % of service windows actually tracked,
+   and the **average wait for someone who turns up at a random time**, worked out from the real headways
+   as E[H²] / 2·E[H]. Uneven gaps make waits longer even when the average gap stays the same.
+6. **Timetable suggestions, which never apply themselves.** The nightly job writes suggestions with their evidence, e.g.
+   - "The 09:40 from Riva left on average 8 min late (p80 12, n=6). Shift it to 09:50?"
+   - "A loop takes 52 min, but the timetable needs one every 40 with one vehicle. Change to every 55, or add a vehicle."
+   - "Dwell at Circle is 9 min on average, against 3 min planned."
+   Accepting one turns it into a normal proposal (same propose/confirm, same audit). Suggestions show in admin,
+   in the `shuttle_initialize` snapshot and in `shuttle_suggestions`. The public timetable only changes
+   when a person confirms, which also stops a feedback loop of the schedule chasing the drivers.
+
 ## 7a. Service layer, audit log, MCP
 
 **One service layer** (`apps/web/src/services`). Every capability is a function `fn(db, actor, input)`
