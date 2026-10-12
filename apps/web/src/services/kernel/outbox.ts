@@ -1,0 +1,53 @@
+import type { Db } from "@/db";
+import { outbox } from "@/db/schema";
+
+export type OutboxJob = typeof outbox.$inferSelect;
+
+/** One inline-keyboard button. callbackData is ≤ 64 bytes (Telegram limit). */
+export type TelegramButton = { text: string; url: string } | { text: string; callbackData: string };
+
+/** A Telegram send, delivered by auth-bot's deliverTelegram and logged in telegram_messages. */
+export type TelegramPayload = {
+  chatId: number;
+  /** Telegram HTML, already escaped */
+  html: string;
+  /** telegram_messages.kind: alert, notice, broadcast, reply, digest, login, arrival … */
+  kind: string;
+  /** rows of buttons */
+  buttons?: TelegramButton[][];
+  /** pin the sent message in the chat (group notices) */
+  pin?: boolean;
+  /** instead of sending: unpin this message id */
+  unpinMessageId?: number;
+  /** recipient person, so a 403 can mark people.blocked_bot_at */
+  personId?: string;
+  /** after a successful send, tell svc-notices the group message id (for the unpin at the end) */
+  ref?: { kind: "notice_group_post"; noticeId: string };
+};
+
+/** "Sync now" (data-only Expo push), delivered by svc-devices' deliverPush. */
+export type PushPayload = { deviceId: string; reason: string };
+
+type Job = { kind: "telegram"; payload: TelegramPayload } | { kind: "push"; payload: PushPayload };
+
+/**
+ * Queue a side effect in the caller's transaction, so it exists iff the change committed. The worker `queue`
+ * job sends it with pacing and retries. Returns null when dedupeKey already exists (idempotent enqueue).
+ */
+export async function enqueue(
+  db: Db,
+  job: Job & { workspaceId: string | null; dedupeKey?: string; runAfter?: Date },
+): Promise<OutboxJob | null> {
+  const rows = await db
+    .insert(outbox)
+    .values({
+      workspaceId: job.workspaceId,
+      kind: job.kind,
+      payload: job.payload,
+      dedupeKey: job.dedupeKey ?? null,
+      runAfter: job.runAfter ?? new Date(),
+    })
+    .onConflictDoNothing({ target: outbox.dedupeKey })
+    .returning();
+  return rows[0] ?? null;
+}
