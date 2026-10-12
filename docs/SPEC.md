@@ -31,8 +31,25 @@ local Docker Postgres (template DB, clone per worker). Admin login via Telegram,
 
 ## 3. Domain model
 
+### Workspaces
+
+Every row below belongs to exactly one `workspace`. Workspaces never share data, and the
+service layer takes `workspaceId` on every call.
+
+- `live`: the real shuttles. It serves the public page at `/`.
+- `test` (and as many more as we want): test phones, test vehicles and a test schedule. Its page is at `/w/<slug>`,
+  so the full flow can be run end to end without touching what attendees see.
+- A pairing code is created inside a workspace, so a phone joins that workspace when it pairs.
+  Moving a phone to another workspace is an admin action. It clears the phone's assignments, and
+  the phone picks up the new config on its next sync.
+- A **simulated device** is a script (`pnpm sim <workspace> <vehicle>`) that replays the Riva↔Circle
+  route through the real sync endpoint. It's the first test phone, used before any real handset is ready.
+  Simulated devices are only allowed in non-live workspaces.
+- Admin has a workspace switcher, and the test workspaces carry a visible "TEST" banner.
+
 | Table | Key fields | Notes |
 |---|---|---|
+| `workspaces` | id, slug, name, is_live | |
 | `devices` | id, label, token_hash, push_token, model, app_version, update_id, last_sync_at, battery, reported_mode, reported_config_version, killed_at, revoked_at | A phone. Created by QR pairing. |
 | `vehicles` | id, name, plate, colour, capacity, active | What attendees see. |
 | `routes` | id, name, polyline, stops (Riva, Circle + geofence radius) | |
