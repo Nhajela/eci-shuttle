@@ -80,9 +80,7 @@ describe("legEstimate", () => {
       thin: false,
     });
     expect(legEstimate([], { hourBucket: 9, pathM: 5000, now: NOW, baselineKmh: 50 }).medianS).toBe(360);
-    expect(legEstimate([at9(100, 3)], { hourBucket: 9, pathM: 5000, now: NOW, windowDays: 2 }).level).toBe(
-      "baseline",
-    );
+    expect(legEstimate([at9(100, 3)], { hourBucket: 9, pathM: 5000, now: NOW, windowDays: 2 }).level).toBe("baseline");
   });
 
   it("p20 ≤ median ≤ p80", () => {
