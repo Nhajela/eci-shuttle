@@ -140,6 +140,46 @@ Telegram login, with an allowlist per workspace. A workspace switcher sits at th
 
 Watchdog (QStash, every minute): a vehicle expected active but silent for >5 min, or a phone below 15% battery → Telegram DM to ops.
 
+## 7a. Service layer, audit log, MCP
+
+**One service layer** (`apps/web/src/services`). Every capability is a function `fn(db, actor, input)`
+with zod input and typed errors. Roles and workspace scope are enforced here and nowhere else. Admin UI,
+the device API, the public page, the watchdog and MCP are thin adapters over it, so a change made from
+an AI agent and a change made in admin run exactly the same code.
+
+`actor = { kind: admin | device | system, id, workspaceId, role, channel: web | mcp | device | watchdog, client? }`
+
+**Roles** (per workspace): `admin` can do everything. `ops` can do schedule, notices, silence, force active,
+nudge and spots. `viewer` is read-only. Kill, revoke, moving workspaces and role changes are admin only.
+
+**One audit log.** Every mutation writes one `audit_log` row in the same transaction:
+actor, channel, client (e.g. "claude.ai"), workspace, action, entity, before → after diff, proposal id
+when it came from MCP, and an optional reason. The admin Activity page, each object's timeline and the MCP
+`shuttle_activity` tool all read from it. Derived data (pings, vehicle state, trips) isn't audited.
+Device-side events that change state (resume, a permission lost) are.
+
+**MCP** at `/api/mcp` (streamable HTTP, stateless), following eci-events-mcp:
+- Auth: OAuth, so it works as a claude.ai / ChatGPT connector. "Connect" → Telegram login → a token bound
+  to that admin. A personal `shs_` token from the admin settings page covers CLI agents. Revocable, listed in admin.
+- `shuttle_initialize` comes first: who you are, your workspaces and roles, today's snapshot
+  (vehicles live / offline, today's services, open problems).
+- Reads go direct: `shuttle_status` (live board), `shuttle_schedule` (day or week, with exceptions),
+  `shuttle_spots`, `shuttle_routes`, `shuttle_vehicles`, `shuttle_phones` (health), `shuttle_activity`,
+  `shuttle_public_answer` (exactly what attendees at a spot see right now, for checking a change landed),
+  `shuttle_guide`.
+- Writes take two steps: `shuttle_propose { workspace, changes: [...] , reason? }` returns a plain-English
+  summary, warnings (e.g. "cancelling this leaves Riva without a shuttle 10:00–10:40", "this phone is
+  in a live vehicle right now") and a sealed proposal code (10 min, bound to that admin, carries the
+  version of every object it touches). `shuttle_confirm { code }` runs all the changes in **one
+  transaction**, and refuses if anything changed since the proposal.
+- Change kinds: spot create/update/archive · route create/update · service create/update/exception
+  (cancel / add / shift a departure, cancel a day) · service vehicle assign/unassign · vehicle create/update ·
+  phone label/assign/silence/force-active/nudge/kill/revoke/move-workspace · pairing code create (returns
+  QR link + code) · notice create/end · workspace create.
+- Example: "The 10:20 from Riva is cancelled today, the shuttle's getting fuel. Tell people." → one proposal
+  with the departure cancel and a notice until 10:45 → one confirm → both land, two audit rows, one proposal id.
+- Every text sent to a model is an exported constant, as in events-mcp.
+
 ## 8. Risks and the day-1 spike
 
 Test plain Expo (`expo-location` + `expo-task-manager` + `expo-notifications`) on the real driver phones:
