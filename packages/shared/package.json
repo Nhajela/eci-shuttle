@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./contracts": "./src/contracts/index.ts",
     "./schedule": "./src/schedule/index.ts",
-    "./geo": "./src/geo/index.ts"
+    "./geo": "./src/geo/index.ts",
+    "./time": "./src/time/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
