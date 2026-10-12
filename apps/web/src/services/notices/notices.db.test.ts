@@ -205,6 +205,20 @@ describe("updateNotice", () => {
     });
     expect((await updateNotice(db(), actor, { workspaceId: ws.id, noticeId: n.id, endsAt: null })).endsAt).toBeNull();
   });
+
+  it("refuses to edit a notice that is over (expired or ended)", async () => {
+    const { ws, actor } = await setup();
+    const now = Date.now();
+    const expired = await raw(ws.id, { startsAt: new Date(now - 2 * H), endsAt: new Date(now - H) });
+    await expect(
+      updateNotice(db(), actor, { workspaceId: ws.id, noticeId: expired.id, endsAt: iso(new Date(now + H)) }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const ended = await createNotice(db(), actor, { workspaceId: ws.id, text: "a", placements: ["everywhere"] });
+    await endNotice(db(), actor, { workspaceId: ws.id, noticeId: ended.id });
+    await expect(
+      updateNotice(db(), actor, { workspaceId: ws.id, noticeId: ended.id, text: "b" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
 });
 
 describe("endNotice", () => {

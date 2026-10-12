@@ -123,6 +123,8 @@ export async function updateNotice(db: Db, actor: Actor, input: z.input<typeof U
     async (tx) => {
       const before = await getInWorkspace(tx, notices, i.workspaceId, i.noticeId, "notice", { forUpdate: true });
       checkVersion(before, i.version, "notice");
+      // the job never re-posts/re-pins a notice, so an over notice can't come back; ops create a new one
+      if (isOver(before, new Date())) throw new ServiceError("CONFLICT", "This notice has ended.");
       const endsAt = i.endsAt === undefined ? before.endsAt : i.endsAt ? new Date(i.endsAt) : null;
       if (i.endsAt !== undefined) checkEnd(before.startsAt, endsAt, new Date());
       const [after] = await tx
