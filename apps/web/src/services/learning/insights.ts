@@ -1,10 +1,11 @@
 /** learning: admin Insights and MCP shuttle_insights / shuttle_suggestions (SPEC §6a.5–6). viewer+ reads. */
 import { IST_TZ, IsoDate, notImplemented } from "@eci-shuttle/shared";
-import { type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
+import { learningExclusions, services, suggestions } from "@/db/schema";
 import type { LearningExclusion, Suggestion } from "@/db/types";
-import { type Actor, parseInput, readable } from "../kernel";
+import { type Actor, getInWorkspace, mutate, parseInput, readable, requireRole, ServiceError } from "../kernel";
 
 export type Insights = {
   /** % of departures within 3 min, per spot */
@@ -140,8 +141,20 @@ export async function listSuggestions(
   actor: Actor,
   input: { workspaceId: string; status?: Suggestion["status"] },
 ): Promise<Suggestion[]> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, status } = parseInput(ListSuggestionsInput, input);
+  readable(actor, workspaceId);
+  return db
+    .select()
+    .from(suggestions)
+    .where(and(eq(suggestions.workspaceId, workspaceId), status ? eq(suggestions.status, status) : undefined))
+    .orderBy(sql`${suggestions.status} = 'open' desc`, desc(suggestions.createdAt));
 }
+
+const ListSuggestionsInput = z.object({
+  workspaceId: z.uuid(),
+  status: z.enum(["open", "accepted", "dismissed"]).optional(),
+});
+const SuggestionInput = z.object({ workspaceId: z.uuid(), suggestionId: z.uuid() });
 
 /**
  * ops+. Accepting turns the suggestion's proposedChanges into a normal MCP proposal (mcp/proposals.propose) and
@@ -161,8 +174,33 @@ export async function dismissSuggestion(
   actor: Actor,
   input: { workspaceId: string; suggestionId: string },
 ): Promise<Suggestion> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, suggestionId } = parseInput(SuggestionInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return mutate(
+    db,
+    actor,
+    { action: "suggestion.dismiss", entity: "suggestion", entityId: suggestionId, workspaceId },
+    async (tx) => {
+      const before = await getInWorkspace(tx, suggestions, workspaceId, suggestionId, "suggestion", {
+        forUpdate: true,
+      });
+      if (before.status !== "open") throw new ServiceError("CONFLICT", `That suggestion is already ${before.status}.`);
+      const [after] = await tx
+        .update(suggestions)
+        .set({
+          status: "dismissed",
+          decidedAt: new Date(),
+          decidedByPersonId: actorPersonId(actor),
+          updatedAt: new Date(),
+        })
+        .where(eq(suggestions.id, suggestionId))
+        .returning();
+      return { before, after, result: after };
+    },
+  );
 }
+
+const actorPersonId = (actor: Actor) => (actor.kind === "admin" ? actor.id : null);
 
 export const ExcludeDayInput = z.object({
   workspaceId: z.uuid(),
@@ -176,5 +214,19 @@ export async function excludeDay(
   actor: Actor,
   input: z.input<typeof ExcludeDayInput>,
 ): Promise<LearningExclusion> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, date, serviceId, reason } = parseInput(ExcludeDayInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return mutate(db, actor, { action: "learning.exclude", entity: "learning_exclusion", workspaceId }, async (tx) => {
+    if (serviceId) await getInWorkspace(tx, services, workspaceId, serviceId, "service");
+    // the same day (and service) twice just updates the reason
+    const [after] = await tx
+      .insert(learningExclusions)
+      .values({ workspaceId, date, serviceId, reason })
+      .onConflictDoUpdate({
+        target: [learningExclusions.workspaceId, learningExclusions.date, learningExclusions.serviceId],
+        set: { reason },
+      })
+      .returning();
+    return { before: null, after, result: after };
+  });
 }
