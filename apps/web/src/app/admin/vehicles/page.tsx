@@ -1,6 +1,6 @@
 import { istDate } from "@eci-shuttle/shared";
 import type { Metadata } from "next";
-import { VehicleCard } from "@/components/admin/vehicles/VehicleCard";
+import { SHOWN_TRIPS, VehicleCard } from "@/components/admin/vehicles/VehicleCard";
 import { VehicleForm } from "@/components/admin/vehicles/VehicleForm";
 import { currentPhone, currentService } from "@/components/admin/vehicles/view";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,7 +29,7 @@ export default async function VehiclesPage({ searchParams }: { searchParams: Pro
     listPhones(d, actor, input, now),
     // from yesterday: an assignment that started before midnight can still be running
     getSchedule(d, actor, { ...input, from: istDate(+now - DAY_MS), days: 2 }),
-    recentTrips(d, actor, { ...input, since: new Date(+now - 7 * DAY_MS) }),
+    recentTrips(d, actor, { ...input, since: new Date(+now - 7 * DAY_MS), perVehicle: SHOWN_TRIPS }),
   ]);
   const action = can(actor, workspace.id, "ops") ? saveVehicle : null;
 

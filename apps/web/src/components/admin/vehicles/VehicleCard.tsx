@@ -9,16 +9,18 @@ type Props = {
   vehicle: Vehicle;
   phoneLabel: string | null;
   service: { name: string; until: string } | null;
-  trips: (Parameters<typeof tripLine>[0] & { id: string })[];
+  /** newest first, at most SHOWN_TRIPS; `total` is the vehicle's full count for the period */
+  trips: (Parameters<typeof tripLine>[0] & { id: string; total: number })[];
   w: string;
   /** null = read-only (viewer) */
   action: ComponentProps<typeof VehicleForm>["action"] | null;
 };
 
-const SHOWN_TRIPS = 20;
+export const SHOWN_TRIPS = 20;
 
 /** One vehicle: what attendees see, its phone and service now, recent trips, and (ops+) the edit form. */
 export function VehicleCard({ vehicle: v, phoneLabel, service, trips, w, action }: Props) {
+  const total = trips[0]?.total ?? 0;
   const facts = [v.plate, v.capacity ? `${v.capacity} seats` : null].filter(Boolean).join(" · ");
   return (
     <Card size="sm" className={v.active ? undefined : "opacity-70"}>
@@ -49,20 +51,18 @@ export function VehicleCard({ vehicle: v, phoneLabel, service, trips, w, action 
         </p>
         <details className="mt-2">
           <summary className="flex min-h-11 cursor-pointer items-center font-medium">
-            Trips, last 7 days ({trips.length})
+            Trips, last 7 days ({total})
           </summary>
           {trips.length === 0 ? (
             <p className="text-muted-foreground">No trips yet.</p>
           ) : (
             <ul className="flex flex-col gap-1">
-              {trips.slice(0, SHOWN_TRIPS).map((t) => (
+              {trips.map((t) => (
                 <li key={t.id} className="break-words">
                   {tripLine(t)}
                 </li>
               ))}
-              {trips.length > SHOWN_TRIPS && (
-                <li className="text-muted-foreground">and {trips.length - SHOWN_TRIPS} older</li>
-              )}
+              {total > trips.length && <li className="text-muted-foreground">and {total - trips.length} older</li>}
             </ul>
           )}
         </details>
