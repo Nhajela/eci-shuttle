@@ -84,6 +84,21 @@ describe("upsertPersonFromTelegram", () => {
     expect(await db().select().from(people).where(eq(people.telegramId, telegramId))).toHaveLength(1);
   });
 
+  it("a username moves to its new holder; the old holder refreshing later does not get it back", async () => {
+    const ws = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id);
+    const name = `u${randomUUID().slice(0, 8)}`;
+    const [aId, bId] = [tgId(), tgId()];
+    const a = await upsertPersonFromTelegram(db(), sys, { telegramId: aId, username: name, firstName: "A" });
+    const b = await upsertPersonFromTelegram(db(), sys, { telegramId: bId, username: name.toUpperCase() });
+    const [aRow] = await db().select().from(people).where(eq(people.id, a.id));
+    expect(aRow.username).toBeNull();
+    // A renames and messages again with no username in the update: A must not win @name back
+    await upsertPersonFromTelegram(db(), sys, { telegramId: aId, firstName: "A2" });
+    const m = await setRole(db(), actor, { workspaceId: ws.id, person: { username: name }, role: "admin" });
+    expect(m).toMatchObject({ personId: b.id });
+  });
+
   it("rejects a bad telegram id", async () => {
     await expect(upsertPersonFromTelegram(db(), sys, { telegramId: 1.5 })).rejects.toMatchObject({ code: "INVALID" });
   });

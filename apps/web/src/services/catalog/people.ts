@@ -1,6 +1,6 @@
 /** svc-catalog: people, memberships, roles, alert prefs (SPEC §3, §6c, §7 People, §7a Roles). */
 import { AlertKind, HHMM, IST_OFFSET_MIN, Role } from "@eci-shuttle/shared";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import { alertPrefs, memberships, people } from "@/db/schema";
@@ -17,6 +17,15 @@ export const TelegramUser = z.object({
 const isUniqueViolation = (e: unknown): boolean => {
   const err = e as { code?: string; cause?: { code?: string } } | null;
   return (err?.code ?? err?.cause?.code) === "23505";
+};
+
+/** Usernames move between Telegram accounts: the account just seen with one takes it from any older holder. */
+const releaseUsername = async (tx: Db, telegramId: number, username: string | null | undefined) => {
+  if (username)
+    await tx
+      .update(people)
+      .set({ username: null })
+      .where(and(eq(sql`lower(${people.username})`, username.toLowerCase()), ne(people.telegramId, telegramId)));
 };
 
 const personByTelegram = async (db: Db, telegramId: number) =>
@@ -39,6 +48,7 @@ export async function upsertPersonFromTelegram(
   if (!person) {
     try {
       return await mutate(db, actor, { action: "person.create", entity: "person", workspaceId: null }, async (tx) => {
+        await releaseUsername(tx, telegramId, names.username);
         const [row] = await tx
           .insert(people)
           .values({ telegramId, ...names })
@@ -52,13 +62,20 @@ export async function upsertPersonFromTelegram(
     }
   }
 
-  const id = person.id;
-  if (Object.entries(names).some(([k, v]) => person[k as keyof Person] !== v)) {
-    [person] = await db
-      .update(people)
-      .set({ ...names, updatedAt: new Date() })
-      .where(eq(people.id, id))
-      .returning();
+  const current = person;
+  const id = current.id;
+  const changed = Object.entries(names).some(([k, v]) => current[k as keyof Person] !== v);
+  if (changed || names.username) {
+    person = await db.transaction(async (tx) => {
+      await releaseUsername(tx, telegramId, names.username);
+      if (!changed) return current;
+      const [row] = await tx
+        .update(people)
+        .set({ ...names, updatedAt: new Date() })
+        .where(eq(people.id, id))
+        .returning();
+      return row;
+    });
   }
   if (input.startedBot && person.blockedBotAt) {
     const before = person;
@@ -118,8 +135,8 @@ async function resolvePerson(db: Db, ref: z.output<typeof SetRoleInput>["person"
     "personId" in ref
       ? eq(people.id, ref.personId)
       : eq(sql`lower(${people.username})`, ref.username.replace(/^@/, "").toLowerCase());
-  // usernames can move between Telegram accounts: the most recently seen holder wins
-  const [p] = await db.select().from(people).where(where).orderBy(desc(people.updatedAt)).limit(1);
+  // upsertPersonFromTelegram keeps each username on at most one person
+  const [p] = await db.select().from(people).where(where).limit(1);
   if (!p)
     throw new ServiceError(
       "NOT_FOUND",
