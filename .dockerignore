@@ -1,0 +1,11 @@
+**/node_modules
+**/.next
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.claude
+apps/driver/android
+apps/driver/ios
+coverage
