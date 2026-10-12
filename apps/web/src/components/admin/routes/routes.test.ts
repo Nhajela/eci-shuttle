@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLeg, legRows, moveItem, parsePath, removeVertex, spotChain } from "./routes";
+import { formatLeg, insertVertex, legRows, moveItem, parsePath, removeVertex, spotChain } from "./routes";
 
 const names = { a: "Riva", b: "Circle" };
 
@@ -57,6 +57,21 @@ describe("removeVertex", () => {
     ];
     expect(removeVertex(p, 1)).toEqual([p[0], p[2]]);
     expect(removeVertex([p[0], p[1]], 0)).toEqual([p[0], p[1]]);
+  });
+});
+
+describe("insertVertex", () => {
+  const p = [
+    { lat: 0, lng: 0 },
+    { lat: 0, lng: 10 },
+    { lat: 10, lng: 10 },
+  ];
+  it("puts the new point into the nearest segment", () => {
+    expect(insertVertex(p, { lat: 1, lng: 5 })).toEqual([p[0], { lat: 1, lng: 5 }, p[1], p[2]]);
+    expect(insertVertex(p, { lat: 5, lng: 11 })).toEqual([p[0], p[1], { lat: 5, lng: 11 }, p[2]]);
+  });
+  it("uses the end segment for a point beyond the line", () => {
+    expect(insertVertex(p, { lat: 0, lng: -3 })).toEqual([p[0], { lat: 0, lng: -3 }, p[1], p[2]]);
   });
 });
 
