@@ -1,0 +1,212 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* =========================================================
+   Edge City India · Goa arrivals
+   Base palette: paper / ink (navy) / teal (GOX) / blue (GOI)
+   One warm note — marigold — reserved for "you" and "today".
+   ========================================================= */
+:root {
+  --paper: #ffffff;
+  --sand: #f7f6f1;
+  --ink: #141b34;
+  --ink-soft: #4e5469;
+  --ink-mute: #858b9e;
+  --line: rgba(20, 27, 52, 0.14);
+  --line-soft: rgba(20, 27, 52, 0.07);
+
+  --teal: #286c71;
+  --teal-deep: #1f575b;
+  --teal-tint: #e6f0eb;
+  --mint: #cde1da;
+
+  --blue: #4d65ff;
+  --blue-deep: #3448d6;
+  --blue-tint: #e9ecff;
+
+  --marigold: #e39a2e;
+  --marigold-deep: #b9761a;
+  --marigold-tint: #fbf0dc;
+
+  --danger: #b4432f;
+  --danger-tint: #fbe9e5;
+
+  --radius-card: 18px;
+  --radius-field: 12px;
+
+  /* shadcn tokens, expressed in our palette */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: var(--paper);
+  --card-foreground: var(--ink);
+  --popover: var(--paper);
+  --popover-foreground: var(--ink);
+  --primary: var(--ink);
+  --primary-foreground: var(--paper);
+  --secondary: var(--sand);
+  --secondary-foreground: var(--ink);
+  --muted: var(--sand);
+  --muted-foreground: var(--ink-mute);
+  --accent: var(--teal-tint);
+  --accent-foreground: var(--teal-deep);
+  --destructive: var(--danger);
+  --border: var(--line-soft);
+  --input: var(--line);
+  --ring: var(--teal);
+  --chart-1: var(--teal);
+  --chart-2: var(--blue);
+  --chart-3: var(--marigold);
+  --chart-4: var(--mint);
+  --chart-5: var(--ink-mute);
+  --radius: 0.75rem;
+  --sidebar: var(--sand);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--ink);
+  --sidebar-primary-foreground: var(--paper);
+  --sidebar-accent: var(--teal-tint);
+  --sidebar-accent-foreground: var(--teal-deep);
+  --sidebar-border: var(--line-soft);
+  --sidebar-ring: var(--teal);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #10141f;
+    --sand: #171c2a;
+    --ink: #f1efe9;
+    --ink-soft: #b8bccb;
+    --ink-mute: #7f8599;
+    --line: rgba(241, 239, 233, 0.16);
+    --line-soft: rgba(241, 239, 233, 0.08);
+
+    --teal: #5fb0b5;
+    --teal-deep: #8fd0d3;
+    --teal-tint: #15262a;
+    --mint: #1d3a3c;
+
+    --blue: #8b9bff;
+    --blue-deep: #aab6ff;
+    --blue-tint: #1a1f3b;
+
+    --marigold: #f0b35a;
+    --marigold-deep: #f6c982;
+    --marigold-tint: #332714;
+
+    --danger: #ef8a78;
+    --danger-tint: #3a1d18;
+
+    --primary: var(--ink);
+    --primary-foreground: var(--paper);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #10141f;
+  --sand: #171c2a;
+  --ink: #f1efe9;
+  --ink-soft: #b8bccb;
+  --ink-mute: #7f8599;
+  --line: rgba(241, 239, 233, 0.16);
+  --line-soft: rgba(241, 239, 233, 0.08);
+  --teal: #5fb0b5;
+  --teal-deep: #8fd0d3;
+  --teal-tint: #15262a;
+  --mint: #1d3a3c;
+  --blue: #8b9bff;
+  --blue-deep: #aab6ff;
+  --blue-tint: #1a1f3b;
+  --marigold: #f0b35a;
+  --marigold-deep: #f6c982;
+  --marigold-tint: #332714;
+  --danger: #ef8a78;
+  --danger-tint: #3a1d18;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-sand: var(--sand);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-mute: var(--ink-mute);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-teal: var(--teal);
+  --color-teal-deep: var(--teal-deep);
+  --color-teal-tint: var(--teal-tint);
+  --color-mint: var(--mint);
+  --color-blue: var(--blue);
+  --color-blue-deep: var(--blue-deep);
+  --color-blue-tint: var(--blue-tint);
+  --color-marigold: var(--marigold);
+  --color-marigold-deep: var(--marigold-deep);
+  --color-marigold-tint: var(--marigold-tint);
+  --color-danger: var(--danger);
+  --color-danger-tint: var(--danger-tint);
+
+  --font-sans: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+
+  --radius-card: var(--radius-card);
+  --radius-field: var(--radius-field);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans bg-background text-foreground;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-size: 16px;
+    line-height: 1.5;
+    font-feature-settings: "ss01", "cv11";
+  }
+  ::selection {
+    background: var(--mint);
+    color: #141b34;
+  }
+}

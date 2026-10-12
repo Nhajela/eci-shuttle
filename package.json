@@ -1,0 +1,30 @@
+{
+  "name": "eci-shuttle",
+  "private": true,
+  "packageManager": "pnpm@10.18.1",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @eci-shuttle/web --filter @eci-shuttle/worker dev",
+    "build": "pnpm --filter @eci-shuttle/web build && pnpm --filter @eci-shuttle/worker build",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:db": "vitest run --project db",
+    "test:watch": "vitest",
+    "test-db": "bash scripts/test-db.sh",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "biome check",
+    "format": "biome check --write",
+    "db:push": "pnpm --filter @eci-shuttle/web db:push",
+    "bot:setup": "pnpm --filter @eci-shuttle/web bot:setup",
+    "sim": "pnpm --filter @eci-shuttle/web sim"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "^24",
+    "drizzle-kit": "^0.31.11",
+    "postgres": "^3.4.7",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3",
+    "@eci-shuttle/shared": "workspace:*",
+    "drizzle-orm": "^0.45.3"
+  }
+}

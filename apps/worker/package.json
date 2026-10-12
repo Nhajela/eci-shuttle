@@ -1,0 +1,25 @@
+{
+  "name": "@eci-shuttle/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../web/.env.local src/main.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/worker.js",
+    "start": "node dist/worker.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@eci-shuttle/shared": "workspace:*",
+    "croner": "^9.1.0",
+    "drizzle-orm": "^0.45.3",
+    "postgres": "^3.4.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "esbuild": "^0.25.12",
+    "tsx": "4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
