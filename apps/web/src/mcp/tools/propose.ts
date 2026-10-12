@@ -40,8 +40,31 @@ export const proposeText = (r: ProposalResult): string =>
     `Show this to the person. Only when they say yes, call shuttle_confirm with code "${r.code}".`,
   ].join("\n");
 
-export const confirmText = (r: ConfirmResult): string =>
-  `Done (${r.proposalId}). ${r.results.length} change${r.results.length === 1 ? "" : "s"} applied:\n${r.summary}`;
+/** What a result carries that the person needs and the summary can't know: pairing code + QR link, new ids. */
+const resultLine = ({ kind, result }: ConfirmResult["results"][number]): string[] => {
+  const r = (result ?? {}) as {
+    code?: string;
+    qrUrl?: string;
+    expiresAt?: Date;
+    id?: string;
+    name?: string;
+    title?: string;
+  };
+  if (kind === "pairing_code.create" && r.code && r.qrUrl && r.expiresAt)
+    return [`Pairing code ${r.code}, QR ${r.qrUrl}, valid until ${istHHMM(r.expiresAt)} IST`];
+  if (!kind.endsWith(".create") || !r.id) return [];
+  const label = r.name ?? r.title;
+  return [`New ${kind.split(".")[0]}${label ? ` '${label}'` : ""}: id ${r.id}`];
+};
+
+export const confirmText = (r: ConfirmResult): string => {
+  const extra = r.results.flatMap(resultLine);
+  return [
+    `Done (${r.proposalId}). ${r.results.length} change${r.results.length === 1 ? "" : "s"} applied:`,
+    r.summary,
+    ...(extra.length ? ["", "Give the person:", ...extra] : []),
+  ].join("\n");
+};
 
 /** Appended to refusals that a fresh proposal fixes. */
 export const REPROPOSE_HINT = "Call shuttle_propose again with the current state, and show the person the new summary.";

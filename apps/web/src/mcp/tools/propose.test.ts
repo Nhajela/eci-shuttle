@@ -67,6 +67,29 @@ describe("shuttle_confirm", () => {
     expect(text(r)).toContain("End the notice 'Fuel stop'");
   });
 
+  it("hands over what the person needs from results: pairing code + QR link, new objects' names and ids", async () => {
+    vi.mocked(proposalWorkspace).mockResolvedValue("w1");
+    vi.mocked(confirm).mockResolvedValue({
+      proposalId: "P-7K3Q9XWD",
+      summary: "• Make a pairing code\n• Add spot 'Circle'\n• End the notice 'Fuel stop'",
+      results: [
+        {
+          kind: "pairing_code.create",
+          result: {
+            code: "482913",
+            qrUrl: "https://x.test/pair/482913",
+            expiresAt: new Date(NOW.getTime() + 1_800_000),
+          },
+        },
+        { kind: "spot.create", result: { id: "s-123", name: "Circle" } },
+        { kind: "notice.end", result: { id: "n-1", title: "Fuel stop" } },
+      ],
+    });
+    const t = text(await shuttleConfirm(ctx, { code: "P-7K3Q9XWD" }));
+    for (const s of ["482913", "https://x.test/pair/482913", "10:50 IST", "Circle", "s-123"]) expect(t).toContain(s);
+    expect(t).not.toContain("n-1");
+  });
+
   it("a stale proposal is a tool error telling the model to propose again", async () => {
     vi.mocked(proposalWorkspace).mockResolvedValue("w1");
     vi.mocked(confirm).mockRejectedValue(
