@@ -202,6 +202,8 @@ describe("publicStatus: timetable answers", () => {
       );
     const a = (await answerAt(w.id, riva.id))?.answers[0];
     expect(a).toMatchObject({ kind: "timetable", nextAtLabel: "10:04", phaseText: "live tracking off" });
+    // the 10:00 that typically leaves 10:04 is still the next one at 10:02, not skipped for a later run
+    expect((await answerAt(w.id, riva.id, at("10:02")))?.answers[0]).toMatchObject({ nextAtLabel: "10:04" });
   });
 
   it("before the first departure says so; after the last it says no more shuttles today", async () => {
@@ -365,8 +367,22 @@ describe("publicStatus: live answers", () => {
     expect((await answerAt(w.id, riva.id))?.answers[0]).toMatchObject({ minutes: 20, phaseText: "stopped on the way" });
   });
 
+  it("after the last planned run, a bus still pinging on a closed route gives no chained ETA or here now", async () => {
+    const { w, riva, circle, svc } = await world();
+    const late = at("10:30");
+    const lastPingAt = new Date(late.getTime() - 30_000);
+    await bus(w.id, svc.id, "Bus 1", { phase: "en_route", nextSpotId: circle.id, alongM: 100, lastPingAt });
+    await bus(w.id, svc.id, "Bus 2", { phase: "at_spot", spotId: riva.id, since: at("10:20"), lastPingAt });
+    etaToSpot.mockReturnValue({ seconds: 1500, minutes: 25, lo: 22, hi: 30, basis: "learned", legsChained: 1 });
+    for (const spot of [circle, riva])
+      expect((await answerAt(w.id, spot.id, late))?.answers[0]).toMatchObject({
+        kind: "none",
+        phaseText: "no more shuttles today",
+      });
+  });
+
   it("never shows lateness, even for a shuttle far behind its timetable", async () => {
-    const { w, circle, svc } = await world();
+    const { w, circle, svc } = await world({ times: ["09:00", "10:00", "10:30"] });
     await bus(w.id, svc.id, "Bus 1", {
       phase: "en_route",
       nextSpotId: circle.id,

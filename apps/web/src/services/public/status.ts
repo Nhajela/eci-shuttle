@@ -38,6 +38,7 @@ import { ServiceError } from "../kernel";
 import { activeNotices } from "../notices/notices";
 
 const STALE_MS = 2 * 60_000;
+const MATCH_WINDOW_MS = 25 * 60_000;
 const MIN_SAMPLES = 5;
 const BASELINE_MPS = 25 / 3.6;
 const BASELINE_DWELL_S = 180;
@@ -429,6 +430,9 @@ function answerFor(
     notices: serviceNotices.map(publicNotice),
   };
 
+  // a timed service only answers live for a departure that still exists today (a loop runs all window)
+  const runLeft = (arriveMs: number) =>
+    r.svc.pattern.kind === "loop" || (times.length > 0 && arriveMs <= (times.at(-1) as number) + MATCH_WINDOW_MS);
   // live: soonest vehicle with an ETA; an off-route one only when nobody else is live
   let best: { line: AnswerLine; minutes: number } | null = null;
   let offRoute: AnswerLine | null = null;
@@ -446,6 +450,7 @@ function answerFor(
       continue;
     }
     if (s.phase === "at_spot" && s.spotId === spot.id) {
+      if (!runLeft(nowMs)) continue;
       const here = { ...line, minutes: 0, rangeLo: 0, rangeHi: 0, phaseText: "here now" };
       if (!best || best.minutes > 0) best = { line: here, minutes: 0 };
       continue;
@@ -461,7 +466,7 @@ function answerFor(
         loop: r.svc.pattern.kind === "loop" || r.route.spotIds[0] === r.route.spotIds.at(-1),
         now: nowMs,
       });
-    if (!eta) continue;
+    if (!eta || !runLeft(nowMs + eta.seconds * 1000)) continue;
     const at = s.spotId ? spotById.get(s.spotId)?.shortName : undefined;
     const phaseText = v.stopped
       ? "stopped on the way"
@@ -502,11 +507,12 @@ function answerFor(
       return { ...base, kind: "timetable", phaseText: `about every ${everyMin} min · live tracking off` };
     return base;
   }
-  const next = times.find((t) => t >= nowMs);
+  // pick on the learned typical time: a 10:00 that usually leaves 10:04 is still next at 10:02.
+  // Never earlier than planned: a typically-early departure must not make people turn up late for it.
+  const shifted = (t: number) => t + Math.max(0, typical.get(`${r.svc.id}|${spot.id}|${istHHMM(t)}`) ?? 0) * 60_000;
+  const next = times.find((t) => shifted(t) >= nowMs);
   if (next === undefined) return base;
-  const delay = typical.get(`${r.svc.id}|${spot.id}|${istHHMM(next)}`) ?? 0;
-  // never earlier than planned: a typically-early departure must not make people turn up late for it
-  const nextAt = next + Math.max(0, delay) * 60_000;
+  const nextAt = shifted(next);
   return {
     ...base,
     kind: "timetable",
