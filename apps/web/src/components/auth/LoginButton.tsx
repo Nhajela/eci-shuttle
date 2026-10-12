@@ -73,6 +73,10 @@ export function LoginButton({ next = "/admin", label = "Log in with Telegram" }:
 
   const start = async () => {
     setPhase("starting");
+    // open the tab inside the click (before the await) so popup blockers allow it; null when blocked, e.g. in
+    // Telegram's in-app browser. No "noopener" here: with it window.open always returns null.
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
     try {
       const res = await fetch("/api/auth/start", { method: "POST" });
       if (!res.ok) throw new Error("start failed");
@@ -84,9 +88,10 @@ export function LoginButton({ next = "/admin", label = "Log in with Telegram" }:
       } catch {}
       setPhase("pending");
       poll();
-      // window.open is often blocked in Telegram's in-app browser: fall back to navigating
-      if (!window.open(u, "_blank", "noopener")) window.location.href = u;
+      if (tab) tab.location.href = u;
+      else window.location.href = u;
     } catch {
+      tab?.close();
       setPhase("error");
     }
   };
