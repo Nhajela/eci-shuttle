@@ -271,7 +271,13 @@ describe("service vehicles", () => {
     const ctx = await setup();
     const s = await createService(db(), ctx.actor, base(ctx.ws.id, ctx.route.id));
     const assign = (startsAt: string, endsAt: string, serviceId = s.id, actor: Actor = ctx.actor) =>
-      assignServiceVehicle(db(), actor, { workspaceId: ctx.ws.id, serviceId, vehicleId: ctx.vehicle.id, startsAt, endsAt });
+      assignServiceVehicle(db(), actor, {
+        workspaceId: ctx.ws.id,
+        serviceId,
+        vehicleId: ctx.vehicle.id,
+        startsAt,
+        endsAt,
+      });
     return { ...ctx, s, assign };
   };
 
@@ -354,9 +360,9 @@ describe("getSchedule", () => {
   it("is workspace-scoped (FORBIDDEN without a membership)", async () => {
     const a = await setup();
     const b = await setup();
-    await expect(getSchedule(db(), b.actor, { workspaceId: a.ws.id, from: "2026-10-12", days: 1 })).rejects.toMatchObject(
-      { code: "FORBIDDEN" },
-    );
+    await expect(
+      getSchedule(db(), b.actor, { workspaceId: a.ws.id, from: "2026-10-12", days: 1 }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
     const rows = await db()
       .select()
       .from(services)
