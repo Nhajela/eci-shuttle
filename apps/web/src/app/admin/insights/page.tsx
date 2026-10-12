@@ -1,5 +1,6 @@
-import { formatIst } from "@eci-shuttle/shared";
+import { formatIst, istDate } from "@eci-shuttle/shared";
 import type { Metadata } from "next";
+import { ExcludeDayForm } from "@/components/admin/insights/exclude-day-form";
 import { InsightsView } from "@/components/admin/insights/insights-view";
 import { SuggestionCard } from "@/components/admin/insights/suggestion-card";
 import { insightsRange } from "@/components/admin/insights/view";
@@ -21,7 +22,8 @@ type Params = Record<string, string | string[] | undefined>;
 export default async function InsightsPage({ searchParams }: { searchParams: Promise<Params> }) {
   const sp = await searchParams;
   const { actor, workspace } = await requireAdmin({ w: typeof sp.w === "string" ? sp.w : null });
-  const range = insightsRange(sp, new Date());
+  const now = new Date();
+  const range = insightsRange(sp, now);
   const ws = { workspaceId: workspace.id };
 
   const [data, suggestions, spots, routes] = await Promise.all([
@@ -70,6 +72,16 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
           </div>
         )}
       </section>
+
+      {canDecide && (
+        <section className="space-y-2">
+          <h2 className="text-lg font-semibold">Skip a day</h2>
+          <p className="text-sm text-muted-foreground">
+            A road closure or festival made the times odd? Leave that day out of the learned times.
+          </p>
+          <ExcludeDayForm w={workspace.slug} today={istDate(now)} />
+        </section>
+      )}
 
       <InsightsView
         data={data}
