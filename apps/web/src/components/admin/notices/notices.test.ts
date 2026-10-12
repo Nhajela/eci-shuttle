@@ -5,6 +5,7 @@ import {
   istInputToIso,
   noticeState,
   placementLabel,
+  untilLabel,
   previewPages,
   type Shown,
 } from "./notices";
@@ -62,6 +63,22 @@ describe("placementLabel", () => {
     expect(placementLabel(`spot:${SPOT}`, names)).toBe("At Riva");
     expect(placementLabel(`service:${SVC}`, names)).toBe("Party shuttle");
     expect(placementLabel(`spot:${SVC.replace("2", "3")}`, names)).toBe("At a removed spot");
+    expect(placementLabel(`service:${SPOT.replace("1", "3")}`, names)).toBe("A service not on the schedule");
+  });
+});
+
+describe("untilLabel", () => {
+  it("open-ended and not ended: still live until someone ends it", () => {
+    expect(untilLabel({ endsAt: null, endedAt: null })).toBe("Until ended by hand");
+  });
+  it("ended by hand shows when", () => {
+    expect(untilLabel({ endsAt: null, endedAt: new Date(T) })).toBe("Mon 12 Oct, 09:40 (ended by hand)");
+  });
+  it("ended by hand before its end time shows when it was ended", () => {
+    expect(untilLabel({ endsAt: new Date(T + 3_600_000), endedAt: new Date(T) })).toBe("Mon 12 Oct, 09:40 (ended by hand)");
+  });
+  it("endsAt set shows the end time", () => {
+    expect(untilLabel({ endsAt: new Date(T), endedAt: null })).toBe("Mon 12 Oct, 09:40");
   });
 });
 

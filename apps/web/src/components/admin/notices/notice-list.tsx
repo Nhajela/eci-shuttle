@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Notice } from "@/db/types";
 import { NoticeStrip } from "./notice-card";
-import { CHANNELS, noticeState, placementLabel, SEVERITIES } from "./notices";
+import { CHANNELS, noticeState, placementLabel, SEVERITIES, untilLabel } from "./notices";
 
 const STATE_LABEL = { showing: "Showing", upcoming: "Upcoming", over: "Over" } as const;
 
@@ -49,13 +49,7 @@ export function NoticeList(props: {
               <dt className="text-muted-foreground">From</dt>
               <dd>{formatIst(n.startsAt)}</dd>
               <dt className="text-muted-foreground">Until</dt>
-              <dd>
-                {n.endedAt && (!n.endsAt || n.endedAt < n.endsAt)
-                  ? `${formatIst(n.endedAt)} (ended by hand)`
-                  : n.endsAt
-                    ? formatIst(n.endsAt)
-                    : "ended by hand"}
-              </dd>
+              <dd>{untilLabel(n)}</dd>
               {n.channels.length > 0 && (
                 <>
                   <dt className="text-muted-foreground">Sent to</dt>

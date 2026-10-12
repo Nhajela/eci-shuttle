@@ -1,5 +1,6 @@
 /** admin-notices: pure helpers for the Notices page (labels, IST inputs, display order, per-page preview). */
 import {
+  formatIst,
   type HHMM,
   type IsoDate,
   istDate,
@@ -57,7 +58,13 @@ export function placementLabel(p: string, names: Record<string, string>): string
   if (p === "admin") return "Admin home";
   const [kind, id] = p.split(":");
   if (kind === "spot") return names[id] ? `At ${names[id]}` : "At a removed spot";
-  return names[id] ?? "A removed service";
+  return names[id] ?? "A service not on the schedule";
+}
+
+/** The list's "Until" cell. No endsAt and not ended means it is still showing until someone ends it. */
+export function untilLabel(n: Pick<Notice, "endsAt" | "endedAt">): string {
+  if (n.endedAt && (!n.endsAt || n.endedAt < n.endsAt)) return `${formatIst(n.endedAt)} (ended by hand)`;
+  return n.endsAt ? formatIst(n.endsAt) : "Until ended by hand";
 }
 
 /**
