@@ -19,20 +19,26 @@ export default async function NoticesPage({ searchParams }: { searchParams: Prom
   const now = Date.now();
   const d = db();
   const input = { workspaceId: workspace.id };
+  const today = istDate(now);
   const [notices, spots, schedule] = await Promise.all([
     listNotices(d, actor, { ...input, includeHistory: true }),
-    listSpots(d, actor, input),
-    // ponytail: services come from the next two weeks of the schedule (no listServices contract); a service not
-    // running in that window can't be picked here.
-    getSchedule(d, actor, { ...input, from: istDate(now), days: 14 }),
+    listSpots(d, actor, { ...input, includeArchived: true }),
+    // ponytail: no listServices contract, so services come from the schedule, 14 days back to 14 ahead. The form
+    // offers the upcoming ones; the list names any in the window. Older services read "not on the schedule".
+    getSchedule(d, actor, { ...input, from: istDate(now - 14 * 86_400_000), days: 28 }),
   ]);
+  const toOption = (s: { id: string; name: string }) => ({ id: s.id, name: s.name });
   const services = [
     ...new Map(
-      schedule.flatMap((day) => day.services.map(({ service: s }) => [s.id, { id: s.id, name: s.name }])),
+      schedule
+        .filter((day) => day.date >= today)
+        .flatMap((day) => day.services.map(({ service: s }) => [s.id, toOption(s)])),
     ).values(),
   ];
-  const spotOptions = spots.map((s) => ({ id: s.id, name: s.name }));
-  const names = Object.fromEntries([...spotOptions, ...services].map((o) => [o.id, o.name]));
+  const spotOptions = spots.filter((s) => !s.archivedAt).map(toOption);
+  const names = Object.fromEntries(
+    [...spots, ...schedule.flatMap((day) => day.services.map(({ service }) => service))].map((o) => [o.id, o.name]),
+  );
   const canEdit = can(actor, workspace.id, "ops");
 
   return (
@@ -49,7 +55,8 @@ export default async function NoticesPage({ searchParams }: { searchParams: Prom
           />
         </section>
       )}
-      <section className="flex flex-col gap-3">
+      {/* On phones the live notices (with Pin and End now) come before the long form. */}
+      <section className="order-first flex flex-col gap-3 md:order-none">
         <h2 className="text-lg font-semibold">Notices</h2>
         <NoticeList w={workspace.slug} notices={notices} names={names} now={now} canEdit={canEdit} />
       </section>
