@@ -120,6 +120,12 @@ describe("toModel", () => {
       toModel({ a: [new Date("2026-10-12T04:10:00Z")], device: { label: "Bus", tokenHash: "x", pushToken: "y" } }),
     ).toEqual({ a: ["Mon 12 Oct, 09:40 IST"], device: { label: "Bus" } });
   });
+
+  it("shows ISO datetime strings (jsonb audit diffs, public status) in IST, leaves other strings alone", () => {
+    expect(toModel({ after: { endsAt: "2026-10-12T05:15:00Z", day: "2026-10-12", label: "10:45" } })).toEqual({
+      after: { endsAt: "Mon 12 Oct, 10:45 IST", day: "2026-10-12", label: "10:45" },
+    });
+  });
 });
 
 describe("tools", () => {
@@ -211,7 +217,15 @@ describe("tools", () => {
 
   it("shuttle_activity: filters through, one plain line per row with the IST time", async () => {
     vi.mocked(listActivity).mockResolvedValue({
-      rows: [{ id: 9, action: "spot.create", entity: "spot", at: new Date("2026-10-12T04:10:00Z") }],
+      rows: [
+        {
+          id: 9,
+          action: "spot.create",
+          entity: "spot",
+          at: new Date("2026-10-12T04:10:00Z"),
+          after: { endsAt: "2026-10-12T05:15:00Z" },
+        },
+      ],
       nextBefore: 9,
     } as never);
     const out = await run("shuttle_activity", { entity: "spot", proposalId: "pr1", before: 20, limit: 10 });
@@ -230,6 +244,7 @@ describe("tools", () => {
           action: "spot.create",
           entity: "spot",
           at: "Mon 12 Oct, 09:40 IST",
+          after: { endsAt: "Mon 12 Oct, 10:45 IST" },
         },
       ],
       nextBefore: 9,
@@ -247,6 +262,18 @@ describe("tools", () => {
     expect(await run("shuttle_public_answer", { spot: "riva" })).toMatchObject({ spots: [spots[0]] });
     expect(await run("shuttle_public_answer", { spot: "b" })).toMatchObject({ spots: [spots[1]] });
     await expect(run("shuttle_public_answer", { spot: "Nowhere" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("shuttle_public_answer: UTC times reach the model in IST", async () => {
+    vi.mocked(publicStatus).mockResolvedValue({
+      generatedAt: "2026-10-12T20:00:00.000Z",
+      notices: [{ text: "Road closed", endsAt: "2026-10-13T05:15:00Z" }],
+      spots: [],
+    } as never);
+    expect(await run("shuttle_public_answer")).toMatchObject({
+      generatedAt: "Tue 13 Oct, 01:30 IST",
+      notices: [{ endsAt: "Tue 13 Oct, 10:45 IST" }],
+    });
   });
 
   it("shuttle_insights: defaults to the last 7 IST days", async () => {

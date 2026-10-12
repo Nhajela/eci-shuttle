@@ -3,7 +3,7 @@
  * build the MCP admin Actor, call one service, shape the result for a model (times in IST, no secrets).
  * Errors are ServiceErrors; the MCP route maps them once.
  */
-import { formatIst, IsoDate, istDate, istHHMM, SuggestionStatus } from "@eci-shuttle/shared";
+import { formatIst, IsoDate, IsoDateTime, istDate, istHHMM, SuggestionStatus } from "@eci-shuttle/shared";
 import { z } from "zod";
 import type { Db } from "@/db";
 import type { Workspace } from "@/db/types";
@@ -72,9 +72,10 @@ export async function resolveScope(ctx: McpContext, slug?: string): Promise<Scop
 
 const HIDDEN = new Set(["tokenHash", "pushToken"]);
 
-/** Dates → "Mon 12 Oct, 09:40 IST"; device secrets dropped. */
+/** Dates and ISO datetime strings (jsonb diffs, public status) → "Mon 12 Oct, 09:40 IST"; device secrets dropped. */
 export function toModel(v: unknown): unknown {
   if (v instanceof Date) return `${formatIst(v)} IST`;
+  if (typeof v === "string" && IsoDateTime.safeParse(v).success) return toModel(new Date(v));
   if (Array.isArray(v)) return v.map(toModel);
   if (v && typeof v === "object")
     return Object.fromEntries(
