@@ -52,12 +52,17 @@ service layer takes `workspaceId` on every call.
 | `workspaces` | id, slug, name, is_live | |
 | `devices` | id, label, token_hash, push_token, model, app_version, update_id, last_sync_at, battery, reported_mode, reported_config_version, killed_at, revoked_at | A phone. Created by QR pairing. |
 | `vehicles` | id, name, plate, colour, capacity, active | What attendees see. |
-| `routes` | id, name, polyline, stops (Riva, Circle + geofence radius) | |
+| `spots` | id, name, short_name, lat, lng, radius_m, notes, photo, archived | Any pick-up or drop point: Riva, Circle, a party venue, the beach. Picked on a map in admin. |
+| `routes` | id, name, spot_ids[] (ordered), path (polyline), typical_leg_s[] | Riva → Circle → Riva, or Riva → Party → Riva. The path is generated once from a routing API when saved, then editable. Leg times learned from trips. |
+| `services` | id, name, kind (`regular`, `special`), route_id, public, colour, valid_from, valid_to, days_of_week, start_time, end_time, pattern (`every N min` or explicit departure times) | The schedule. Regular = the daily Riva↔Circle loop. Special = "Party shuttle, Sat 22:00–02:00". |
+| `service_exceptions` | service_id, date, kind (`cancel_day`, `cancel_departure`, `add_departure`, `shift_minutes`), note | Edits to one day without touching the pattern. |
+| `service_vehicles` | service_id, vehicle_id, starts_at, ends_at | Which vehicle runs which service, and when. A vehicle used for a party is moved here, and drops out of the Riva↔Circle ETA for those hours. |
+| `notices` | text, starts_at, ends_at, spot_ids? | Banner on the public page ("Last shuttle tonight 21:30"). |
 | `device_assignments` | device_id, vehicle_id, starts_at, ends_at | Time-bound. Reassign = close row + open row. |
-| `vehicle_assignments` | vehicle_id, route_id, starts_at, ends_at | Time-bound. |
-| `directives` | target (device or vehicle), kind (`active_window`, `silence_until`), starts_at, ends_at, interval_s | Recurring service hours are expanded into dated windows. |
+| `directives` | target (device or vehicle), kind (`active_window`, `silence_until`, `force_active`), starts_at, ends_at, interval_s | **Overrides only.** The default tracking windows come from `service_vehicles` (each service window ±15 min), so editing the schedule automatically changes when phones track. |
 | `pings` | device_id, vehicle_id (resolved at ingest), recorded_at, lat, lng, accuracy, speed, heading, battery | Partition-free; tiny volume. |
-| `vehicle_state` | vehicle_id, phase (`at_riva`, `to_circle`, `at_circle`, `to_riva`, `offline`), since, eta_s, last_ping_at | Derived on ingest. |
+| `vehicle_state` | vehicle_id, service_id, phase (`at_spot`, `en_route`, `offline`, `off_duty`), spot_id / next_spot_id, since, eta_s, last_ping_at | Derived on ingest from geofences + route. |
+| `trips` | vehicle_id, service_id, from_spot, to_spot, departed_at, arrived_at | Derived. Gives the departure log and the learned leg/dwell times. |
 | `audit_log` | actor, action, entity, before/after, at | Every mutation, including device-side kill/resume. |
 
 ## 4. Device ↔ server protocol (desired state + reconcile)
@@ -101,8 +106,11 @@ are only tracked inside windows, and pings are deleted after the event.
 
 The main surface is one simple public web page with three parts, top to bottom:
 
-1. **"Where are you?"**: a toggle, `Riva | Circle`. The choice is remembered on the device.
-2. **The answer**: one big line, "Shuttle will be here in **6 min**". Underneath it, a small line
+1. **"Where are you?"**: a toggle of the spots that have a public service running today.
+   Usually just `Riva | Circle`. On party night `Party venue` appears too. The choice is remembered on the device.
+   Any notices show above it.
+2. **The answer**: one big line, "Shuttle will be here in **6 min**". When several services serve
+   the chosen spot, there's one line per service ("To Circle: 6 min · Party shuttle: 22:00"). Underneath it, a small line
    of context ("leaving Circle now · last seen 12s ago"). When there's no live data (>2 min stale, or
    outside service hours), it shows the timetable answer instead, says so plainly
    ("next scheduled: 9:40 · live tracking off"), and never pretends to be live.
@@ -114,12 +122,23 @@ Later, optional: `/shuttle` in a Telegram bot that answers with the same line, a
 - ETA: project the position onto the route polyline, remaining distance ÷ median speed from past trips.
   Dwell time at each end is learned the same way.
 
-## 7. Admin
+## 7. Admin (comprehensive, usability first, desktop and phone)
 
-- Phones: pair new, label, see health (last sync, battery, mode reported vs desired, app version), kill, revoke, nudge.
-- Vehicles and routes: CRUD, assign phone ↔ vehicle ↔ route.
-- Schedule: recurring service hours per vehicle, one-off "silence until", "force active now for 2h".
-- Watchdog (QStash, every minute): a vehicle expected active but silent for >5 min → Telegram DM to ops.
+Telegram login, with an allowlist per workspace. A workspace switcher sits at the top.
+
+| Section | What you can do |
+|---|---|
+| **Live board** | A map of every vehicle in the workspace: phase, ETA, last seen, battery, the service it's running. Problems are flagged (silent, low battery, phone reports a different mode than it was told). |
+| **Spots** | Add with a map pin (search or tap), set the geofence radius, rename, archive. |
+| **Routes** | Pick spots in order, auto-generate the path and then adjust it, see learned leg times. |
+| **Schedule** | A week view of every service. Create a regular or special service (route, days, hours, "every 20 min" or exact times, public on/off). Edit one day: cancel, add or shift a departure, cancel the whole day. Assign vehicles to services for time ranges. "Duplicate as special" for one-offs like a party run. |
+| **Vehicles** | CRUD, the current phone, the current service, trip history. |
+| **Phones** | Pair (QR + code), label, assign to a vehicle, health, kill / revoke / nudge, silence until, force active for N hours, move to another workspace. |
+| **Notices** | Banners on the public page, with a start and end time, optionally only for some spots. |
+| **Activity** | The audit log, filterable by entity. Each object page also shows its own timeline from it. |
+| **Workspaces** | Create test workspaces, start or stop a simulated device. |
+
+Watchdog (QStash, every minute): a vehicle expected active but silent for >5 min, or a phone below 15% battery → Telegram DM to ops.
 
 ## 8. Risks and the day-1 spike
 
@@ -140,4 +159,4 @@ Any failure → that piece moves into a small Kotlin Expo module (service + boot
 
 - An Expo account (`eas login`) for cloud APK builds, or permission to install JDK 17 for local builds.
 - A Firebase project for FCM (needed for push).
-- Circle's location, the route, and current service hours. The make of each driver's phone.
+- None needed up front for spots or schedule: they're entered in admin. The make of each driver's phone helps the spike.
