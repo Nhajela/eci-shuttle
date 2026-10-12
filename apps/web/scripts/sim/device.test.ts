@@ -1,6 +1,6 @@
-import { type PairResponse, SyncRequest, type SyncResponse } from "@eci-shuttle/shared";
+import { type ModeResolution, type PairResponse, SyncRequest, type SyncResponse } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
-import { pairSim, runSim } from "./device";
+import { pairSim, runSim as realRunSim } from "./device";
 import { buildPlan } from "./plan";
 
 const T0 = Date.UTC(2026, 9, 20, 4, 0, 0);
@@ -32,6 +32,16 @@ const config = (over: Partial<SyncResponse> = {}): SyncResponse => ({
   workspace: { slug: "test", isLive: false },
   ...over,
 });
+
+const mode = (m: "active" | "idle", intervalS: number) => (): ModeResolution => ({
+  mode: m,
+  intervalS,
+  until: null,
+  window: null,
+  next: null,
+});
+/** most tests are about syncing, so the schedule says "active every activeIntervalS (10 s)" */
+const runSim = (o: Parameters<typeof realRunSim>[0]) => realRunSim({ mode: mode("active", 10), ...o });
 
 type Call = { url: string; init: RequestInit };
 
@@ -163,5 +173,51 @@ describe("runSim", () => {
     expect(await runSim({ origin: "http://x", token: "t", config: config(), plan, speed: 1, deps: h.deps })).toBe(
       "revoked",
     );
+  });
+
+  it("follows the schedule: idle sends heartbeat syncs with no pings, every idleHeartbeatS", async () => {
+    const h = harness((n) => {
+      if (n === 3) h.ctrl.abort();
+      return json(config());
+    });
+    await realRunSim({
+      origin: "http://x",
+      token: "t",
+      config: config(),
+      plan,
+      speed: 1,
+      deps: h.deps,
+      signal: h.ctrl.signal,
+      mode: mode("idle", 900),
+    });
+    const bodies = h.bodies();
+    expect(bodies).toHaveLength(3);
+    expect(bodies.every((b) => b.reportedMode === "idle" && b.pings.length === 0)).toBe(true);
+    expect(bodies[1].clock - bodies[0].clock).toBe(900_000);
+  });
+
+  it("uses the active window's interval, and switches mode when the schedule does", async () => {
+    let n = 0;
+    const h = harness((c) => {
+      if (c === 3) h.ctrl.abort();
+      return json(config());
+    });
+    await realRunSim({
+      origin: "http://x",
+      token: "t",
+      config: config(),
+      plan,
+      speed: 1,
+      deps: h.deps,
+      signal: h.ctrl.signal,
+      // first loop idle (heartbeat), then an active window pinging every 5 s
+      mode: () => (n++ === 0 ? mode("idle", 30)() : mode("active", 5)()),
+    });
+    const [first, second, third] = h.bodies();
+    expect(first).toMatchObject({ reportedMode: "idle", pings: [] });
+    // idle 30 s, then active fixes every 5 s, synced once 15 s have passed since the last sync
+    expect(second.reportedMode).toBe("active");
+    expect(second.pings.map((p) => p.recordedAt - T0)).toEqual([30_000]);
+    expect(third.pings.map((p) => p.recordedAt - T0)).toEqual([35_000, 40_000, 45_000]);
   });
 });
