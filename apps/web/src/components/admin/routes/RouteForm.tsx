@@ -1,4 +1,5 @@
 "use client";
+import type { PathSource } from "@eci-shuttle/shared";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
 import { useState } from "react";
 import { createRouteAction, updateRouteAction } from "@/app/admin/routes/actions";
@@ -23,7 +24,7 @@ export function RouteForm({
   spots: SpotOption[];
   /** every spot's name, archived ones included, for spots already on the route */
   names: Record<string, string>;
-  route?: { id: string; version: number; name: string; spotIds: string[] };
+  route?: { id: string; version: number; name: string; spotIds: string[]; pathSource?: PathSource };
   onDone?: () => void;
 }) {
   const [order, setOrder] = useState<string[]>(route?.spotIds ?? []);
@@ -33,15 +34,30 @@ export function RouteForm({
     onDone?.();
   });
 
+  // edits send the spots only when they changed, so a rename keeps the path (and works with archived spots on it)
+  const spotsChanged = !route || order.join() !== route.spotIds.join();
+
   return (
-    <form action={formAction} className="flex flex-col gap-4">
+    <form
+      action={formAction}
+      className="flex flex-col gap-4"
+      onSubmit={(e) => {
+        if (
+          route?.pathSource === "manual" &&
+          spotsChanged &&
+          !confirm("Changing the spots replaces the hand-adjusted path with a generated one. Continue?")
+        )
+          e.preventDefault();
+      }}
+    >
       <input type="hidden" name="w" value={w} />
       {route && <input type="hidden" name="routeId" value={route.id} />}
       {route && <input type="hidden" name="version" value={route.version} />}
-      {order.map((id, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: a loop repeats a spot id
-        <input key={i} type="hidden" name="spotId" value={id} />
-      ))}
+      {spotsChanged &&
+        order.map((id, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: a loop repeats a spot id
+          <input key={i} type="hidden" name="spotId" value={id} />
+        ))}
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`name-${route?.id ?? "new"}`}>Name</Label>

@@ -86,7 +86,13 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
                         w={workspace.slug}
                         spots={pickable}
                         names={names}
-                        route={{ id: r.id, version: r.version, name: r.name, spotIds: r.spotIds }}
+                        route={{
+                          id: r.id,
+                          version: r.version,
+                          name: r.name,
+                          spotIds: r.spotIds,
+                          pathSource: r.pathSource,
+                        }}
                       />
                     </div>
                   </details>

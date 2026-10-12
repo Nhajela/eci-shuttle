@@ -44,6 +44,16 @@ describe("route actions", () => {
     });
   });
 
+  it("leaves the spots (and so the path) alone on a rename-only save", async () => {
+    await updateRouteAction(null, form({ w: "live", routeId: "r1", version: "3", name: "New name" }));
+    expect(vi.mocked(updateRoute).mock.calls[0][2]).toStrictEqual({
+      workspaceId: "ws1",
+      routeId: "r1",
+      version: 3,
+      name: "New name",
+    });
+  });
+
   it("saves a hand-edited path", async () => {
     const path = [
       { lat: 15.6, lng: 73.7 },

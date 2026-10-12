@@ -43,7 +43,8 @@ export async function updateRouteAction(_: ActionState, fd: FormData): Promise<A
       routeId: str(fd, "routeId"),
       version: num(fd, "version"),
       name: str(fd, "name"),
-      spotIds: fd.getAll("spotId").map(String),
+      // the form sends spots only when they changed: a rename must not regenerate the path or trip on archived spots
+      ...(fd.has("spotId") && { spotIds: fd.getAll("spotId").map(String) }),
     }),
   );
 }
