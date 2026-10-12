@@ -29,6 +29,21 @@ Stack follows the other ECI apps: Neon Postgres (Singapore, `dev` + `main` branc
 one service layer `fn(db, actor, input)` with typed errors, one `audit_log`, TDD with Vitest on
 local Docker Postgres (template DB, clone per worker). Admin login via Telegram, as in Travel CoOp.
 
+## 2a. Own domain, host-portable
+
+Everything is served from our own domain (e.g. `shuttle.<domain>`, DNS on Cloudflare), never a `*.vercel.app`
+address, so the host can change later without touching phones, links or bots.
+
+- **One origin, set by `PUBLIC_ORIGIN`.** It's used for the public page, `/admin`, `/api/*`, `/api/mcp`, the OAuth issuer,
+  Telegram magic links, the webhook URL, pairing QR codes and the APK download link. Nothing hardcodes a host.
+- **The driver app** ships with the domain built in, not the host. It also stores an `apiOrigin` from each sync response,
+  keeping the previous one as a fallback. So even a *domain* change can be rolled out to phones without a new APK.
+- **No host lock-in:** plain Next.js (`output: "standalone"`, so it also runs in Docker or on a VPS), QStash for
+  scheduled jobs instead of Vercel Cron, Neon reached by its connection string, and caching through standard
+  `Cache-Control` headers that work on any CDN. No `@vercel/*` packages.
+- **Moving hosts** = deploy elsewhere → point DNS → run `pnpm bot:setup` (re-register the webhook). Phones, QR codes,
+  MCP connectors and links don't change.
+
 ## 3. Domain model
 
 ### Workspaces
