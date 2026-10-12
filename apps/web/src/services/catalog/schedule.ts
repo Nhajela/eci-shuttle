@@ -171,6 +171,8 @@ export async function addException(
   input: z.input<typeof AddExceptionInput>,
 ): Promise<ServiceException> {
   const { workspaceId, serviceId, date, type, departure, minutes: mins, note } = parseInput(AddExceptionInput, input);
+  // cancel_day ignores any departure; normalise once so the dup check matches what we insert
+  const dep = type === "cancel_day" ? null : (departure ?? null);
   requireRole(actor, workspaceId, "ops");
   return mutate(db, actor, { action: "service.exception", entity: "service_exception", workspaceId }, async (tx) => {
     // the lock serialises concurrent edits of one service, so the duplicate check below can't race
@@ -178,7 +180,7 @@ export async function addException(
     if (!runsOn(service, date)) throw new ServiceError("INVALID", `${service.name} doesn't run on ${date}.`);
     if (
       (type === "cancel_departure" || type === "shift_minutes") &&
-      !expandServiceDepartures(service, [], date).some((d) => d.planned === departure)
+      !expandServiceDepartures(service, [], date).some((d) => d.planned === dep)
     )
       throw new ServiceError("INVALID", `There's no ${departure} departure on ${date}.`);
     const dup = await tx
@@ -189,7 +191,7 @@ export async function addException(
           eq(serviceExceptions.serviceId, serviceId),
           eq(serviceExceptions.date, date),
           eq(serviceExceptions.kind, type),
-          departure ? eq(serviceExceptions.departure, departure) : isNull(serviceExceptions.departure),
+          dep ? eq(serviceExceptions.departure, dep) : isNull(serviceExceptions.departure),
         ),
       )
       .limit(1);
@@ -201,7 +203,7 @@ export async function addException(
         serviceId,
         date,
         kind: type,
-        departure: type === "cancel_day" ? null : departure,
+        departure: dep,
         minutes: type === "shift_minutes" ? mins : null,
         note,
       })
