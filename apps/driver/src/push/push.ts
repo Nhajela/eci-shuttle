@@ -33,18 +33,20 @@ Notifications.addPushTokenListener(() => {
 });
 
 /**
- * Expo push token for SyncRequest.pushToken / PairRequest.pushToken. Null while notifications aren't granted
- * or before `eas init` sets the project id (SPEC §10). Never asks for permission: onboarding does that.
+ * Expo push token for SyncRequest.pushToken (undefined = field omitted = server keeps the token it has).
+ * Does not need notification permission: the push is data-only (SPEC §4), so a driver who declined
+ * notifications still gets "sync now". Undefined before `eas init` sets the project id, without
+ * google-services.json in the APK (android.googleServicesFile, SPEC §10), or on a temporary failure;
+ * never null, so one failed fetch can't clear a good token. PairRequest.pushToken needs `?? null`.
  */
-export async function getPushToken(): Promise<string | null> {
+export async function getPushToken(): Promise<string | undefined> {
   if (cached) return cached;
+  const projectId: string | undefined = Constants.expoConfig?.extra?.eas?.projectId;
+  if (!projectId) return undefined;
   try {
-    if (!(await Notifications.getPermissionsAsync()).granted) return null;
-    const projectId: string | undefined = Constants.expoConfig?.extra?.eas?.projectId;
-    if (!projectId) return null;
     cached = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
     return cached;
   } catch {
-    return null; // offline or FCM not ready; the next sync tries again
+    return undefined; // offline or FCM not ready; the next sync tries again
   }
 }
