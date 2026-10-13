@@ -11,9 +11,12 @@ import {
   type GeofenceSpot,
   geofenceStep,
   INITIAL_GEOFENCE_STATE,
+  inOpsHours,
   istDate,
   type LatLng,
   matchDepartures,
+  type OpsHours,
+  opsHoursOf,
   type Phase,
   type Ping,
   pathLengthM,
@@ -40,6 +43,7 @@ import {
   spots,
   trips,
   vehicleState,
+  workspaces,
 } from "@/db/schema";
 import type { PingRow, Route, Service, Trip, VehicleState } from "@/db/types";
 import { ServiceError } from "@/services/kernel";
@@ -174,8 +178,9 @@ export async function ingestPings(
   const { workspaceId, deviceId } = input;
   return db.transaction(async (tx) => {
     const [device] = await tx
-      .select({ id: devices.id })
+      .select({ id: devices.id, opsHoursStart: workspaces.opsHoursStart, opsHoursEnd: workspaces.opsHoursEnd })
       .from(devices)
+      .innerJoin(workspaces, eq(workspaces.id, devices.workspaceId))
       .where(and(eq(devices.id, deviceId), eq(devices.workspaceId, workspaceId)));
     if (!device) throw new ServiceError("NOT_FOUND", "Phone not found.");
     if (!input.pings.length) return { inserted: 0, closedTrips: [], vehicleIds: [] };
@@ -209,7 +214,7 @@ export async function ingestPings(
     const closedTrips: Trip[] = [];
     const vehicleIds: string[] = [];
     for (const [vehicleId, vRows] of byVehicle) {
-      const res = await processVehicle(tx, workspaceId, vehicleId, vRows, now);
+      const res = await processVehicle(tx, workspaceId, vehicleId, vRows, opsHoursOf(device), now);
       if (!res) continue;
       if (res.live) vehicleIds.push(vehicleId);
       closedTrips.push(...res.closed);
@@ -227,6 +232,7 @@ async function processVehicle(
   workspaceId: string,
   vehicleId: string,
   rows: PingRow[],
+  opsHours: OpsHours | null,
   now: Date,
 ): Promise<{ closed: Trip[]; live: boolean } | null> {
   await tx.insert(vehicleState).values({ workspaceId, vehicleId, since: now }).onConflictDoNothing();
@@ -259,9 +265,11 @@ async function processVehicle(
     const step = geofenceStep(gf, { at: p.recordedAt.getTime(), lat: p.lat, lng: p.lng, accuracy: p.accuracy }, gSpots);
     gf = step.state;
     for (const e of step.events) {
+      const serviceId = sched.serviceAt(vehicleId, e.at);
+      // off duty (ops hours, force_active): the geofence follows, but nothing is learned from it
+      if (!serviceId) continue;
       lastEventAt = e.at;
       const at = new Date(e.at);
-      const serviceId = sched.serviceAt(vehicleId, e.at);
       if (e.kind === "arrived") {
         await tx.insert(dwells).values({ workspaceId, vehicleId, spotId: e.spotId, serviceId, arrivedAt: at });
         if (openTrip) {
@@ -311,8 +319,9 @@ async function processVehicle(
   // ponytail: a rejoin older than 10 min within one batch still keeps the old start; fine for live phones
   const keep = st.offRouteSince != null && st.offRouteSince.getTime() < lastAt - OFF_ROUTE_LOOKBACK_MS;
   const offRouteSince = offStart == null ? null : keep ? st.offRouteSince : new Date(offStart);
-  // SPEC §4: drivers' phones are only tracked inside windows, so off duty keeps no position
-  const offDuty = phase === "off_duty";
+  // SPEC §4: drivers' phones are only tracked inside windows, so off duty keeps no position, except in the
+  // workspace's ops tracking hours (ops-only: public status never shows an off-duty vehicle)
+  const dropPosition = phase === "off_duty" && !inOpsHours(opsHours, lastAt);
   await tx
     .update(vehicleState)
     .set({
@@ -323,12 +332,12 @@ async function processVehicle(
       since,
       etaS: live?.etaS ?? null,
       lastPingAt: new Date(lastAt),
-      lat: offDuty ? null : (lastGood?.lat ?? st.lat),
-      lng: offDuty ? null : (lastGood?.lng ?? st.lng),
+      lat: dropPosition ? null : (lastGood?.lat ?? st.lat),
+      lng: dropPosition ? null : (lastGood?.lng ?? st.lng),
       alongM: live?.alongM ?? null,
       offRoute: offRouteSince != null,
       offRouteSince,
-      geofence: offDuty ? null : gf,
+      geofence: dropPosition ? null : gf,
       updatedAt: now,
     })
     .where(eq(vehicleState.vehicleId, vehicleId));
@@ -555,15 +564,17 @@ export async function refreshPhases(db: Db, workspaceId: string, now: Date): Pro
       t - DAY_MS,
       t + DAY_MS,
     );
+    const [ws] = await tx.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    const opsNow = !!ws && inOpsHours(opsHoursOf(ws), t);
     const changed: string[] = [];
     for (const r of rows) {
       const serviceId = sched.serviceAt(r.vehicleId, t);
       const silent = !r.lastPingAt || t - r.lastPingAt.getTime() > OFFLINE_MS;
       const phase: Phase | null = !serviceId ? "off_duty" : silent ? "offline" : null;
-      if (!phase || (phase === r.phase && (phase !== "off_duty" || r.lat == null))) continue;
+      if (!phase || (phase === r.phase && (phase !== "off_duty" || r.lat == null || opsNow))) continue;
       const offDuty = phase === "off_duty";
-      // off duty drops the position (SPEC §4); since stays when only the leftover position is cleared
-      const clear = offDuty ? { lat: null, lng: null, alongM: null, geofence: null } : {};
+      // off duty drops the position (SPEC §4) outside ops hours; since stays when only the leftover position is cleared
+      const clear = offDuty ? { alongM: null, ...(!opsNow && { lat: null, lng: null, geofence: null }) } : {};
       await tx
         .update(vehicleState)
         .set({

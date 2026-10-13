@@ -1,6 +1,7 @@
 import {
   type Departure,
   type EtaInput,
+  INITIAL_GEOFENCE_STATE,
   PublicStatus,
   type ServiceDef,
   type ServiceExceptionDef,
@@ -267,6 +268,29 @@ describe("publicStatus: live answers", () => {
       [riva.id, circle.id, 900],
       [circle.id, riva.id, 900],
     ]);
+  });
+
+  it("an off-duty vehicle with a stored position (ops hours) never shows: not live, not here now", async () => {
+    const { w, riva, circle, svc } = await world();
+    await bus(w.id, svc.id, "Bus 1", {
+      phase: "off_duty",
+      serviceId: null,
+      spotId: riva.id,
+      nextSpotId: circle.id,
+      lat: riva.lat,
+      lng: riva.lng,
+      geofence: { ...INITIAL_GEOFENCE_STATE, insideSpotId: riva.id, enteredAt: NOW.getTime() - 600_000 },
+    });
+    etaToSpot.mockReturnValue({ seconds: 60, minutes: 1, lo: 1, hi: 1, basis: "learned", legsChained: 1 });
+    for (const spotId of [riva.id, circle.id]) {
+      const answers = (await answerAt(w.id, spotId))?.answers ?? [];
+      expect(answers.length).toBeGreaterThan(0);
+      for (const a of answers) {
+        expect(a.kind).toBe("timetable");
+        expect(a.vehicleName).toBeNull();
+      }
+    }
+    expect(JSON.stringify(await publicStatus(db(), w.id, NOW))).not.toContain("Bus 1");
   });
 
   it("a ping older than 2 minutes is not live: the timetable answer shows instead", async () => {

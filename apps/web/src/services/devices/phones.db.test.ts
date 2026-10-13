@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Role, resolveMode } from "@eci-shuttle/shared";
+import { OPS_HOURS_LABEL, type Role, resolveMode } from "@eci-shuttle/shared";
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq, inArray, isNull } from "drizzle-orm";
@@ -409,7 +409,7 @@ describe("listPhones", () => {
         { workspaceId: ws.id, vehicleId: v.id, kind: "active_window", endsAt: new Date(now.getTime() + HOUR) },
         { workspaceId: ws.id, deviceId: ok.id, kind: "silence_until", endsAt: new Date(now.getTime() - 1) },
       ]);
-    vi.mocked(desiredConfig).mockImplementation(async (_db, id) => ({ killed: id === bad.id }) as never);
+    vi.mocked(desiredConfig).mockImplementation(async (_db, id) => ({ killed: id === bad.id, schedule: [] }) as never);
 
     const list = await listPhones(db(), actor, { workspaceId: ws.id }, now);
     expect(list.map((p) => p.device.label)).toEqual(["B ok", "C bad", "A gone"]);
@@ -456,16 +456,23 @@ describe("listPhones", () => {
     const fresh = await makeDevice(ws.id, { label: "B", lastSyncAt: ago(SILENT_AFTER_MS - 1000) });
     const never = await makeDevice(ws.id, { label: "C" }); // its window opened a minute ago: not silent yet
     await makeDevice(ws.id, { label: "D", lastSyncAt: ago(HOUR) }); // no vehicle
-    for (const d of [quiet, fresh, never])
+    // E is only inside ops hours (off duty): never silent
+    const opsOnly = await makeDevice(ws.id, { label: "E", lastSyncAt: ago(HOUR) });
+    for (const d of [quiet, fresh, never, opsOnly])
       await db()
         .insert(deviceAssignments)
         .values({ workspaceId: ws.id, deviceId: d.id, vehicleId: (await makeVehicle(ws.id, d.label)).id });
     vi.mocked(desiredConfig).mockImplementation(
-      async (_db, id) => ({ start: now.getTime() - (id === never.id ? 60_000 : HOUR) }) as never,
+      async (_db, id) =>
+        ({
+          start: now.getTime() - (id === never.id ? 60_000 : HOUR),
+          schedule: id === opsOnly.id ? [{ label: OPS_HOURS_LABEL }] : [{ label: null }],
+        }) as never,
     );
-    vi.mocked(resolveMode).mockImplementation(
-      (c) => ({ mode: "active", window: { startsAt: (c as unknown as { start: number }).start } }) as never,
-    );
+    vi.mocked(resolveMode).mockImplementation((c) => {
+      const cfg = c as unknown as { start: number; schedule: unknown[] };
+      return (cfg.schedule.length ? { mode: "active", window: { startsAt: cfg.start } } : { mode: "idle" }) as never;
+    });
     try {
       const list = await listPhones(db(), actor, { workspaceId: ws.id }, now);
       expect(Object.fromEntries(list.map((p) => [p.device.label, p.silent]))).toEqual({
@@ -473,7 +480,9 @@ describe("listPhones", () => {
         B: false,
         C: false,
         D: false,
+        E: false,
       });
+      expect(list.find((p) => p.device.label === "E")?.desiredMode).toBe("active");
     } finally {
       vi.mocked(resolveMode).mockImplementation(
         (c) => ({ mode: (c as unknown as { killed: boolean }).killed ? "killed" : "idle" }) as never,

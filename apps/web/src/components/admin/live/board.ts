@@ -128,5 +128,9 @@ export function buildBoard(input: BoardInput, now: number): Board {
 function phaseText(phase: Phase, st: VehicleState | undefined, spotName: Map<string, string>): string {
   if (phase === "at_spot") return st?.spotId ? `At ${spotName.get(st.spotId) ?? "a spot"}` : "At a spot";
   if (phase === "en_route") return st?.nextSpotId ? `To ${spotName.get(st.nextSpotId) ?? "next spot"}` : "On the road";
-  return phase === "offline" ? "Offline" : "Off duty";
+  if (phase === "offline") return "Offline";
+  // a position off duty only exists in ops tracking hours (between shifts)
+  if (st?.lat == null) return "Off duty";
+  const inside = st.geofence?.insideSpotId;
+  return `Off duty · ${inside ? `at ${spotName.get(inside) ?? "a spot"}` : "on the road"}`;
 }

@@ -2,7 +2,7 @@
  * svc-alerts: problem detection (SPEC §2b watchdog, §7 Live board flags). The same list feeds the live board,
  * MCP shuttle_initialize ("open problems") and the watchdog alerts.
  */
-import { type AlertKind, istHHMM, resolveMode } from "@eci-shuttle/shared";
+import { type AlertKind, dutyWindows, istHHMM, resolveMode } from "@eci-shuttle/shared";
 import { and, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, outbox, vehicleState, vehicles, workspaces } from "@/db/schema";
@@ -86,9 +86,12 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     const config = await desiredConfig(db, d.id, now);
     const desired = resolveMode(config, t);
     const windowStart = desired.window ? new Date(desired.window.startsAt) : null;
+    // ops hours are off duty: a phone switched off between shifts is not an alert, only a service window is
+    const duty = resolveMode(config && { ...config, schedule: dutyWindows(config.schedule) }, t);
+    const dutyStart = duty.window ? new Date(duty.window.startsAt) : null;
 
-    if (v && desired.mode === "active" && windowStart) {
-      const last = s?.lastPingAt && s.lastPingAt > windowStart ? s.lastPingAt : windowStart;
+    if (v && duty.mode === "active" && dutyStart) {
+      const last = s?.lastPingAt && s.lastPingAt > dutyStart ? s.lastPingAt : dutyStart;
       if (t - last.getTime() > SILENT_AFTER_MS) add("silent", last, `${v.name} has been silent`, true);
     }
     if (v && s?.offRoute && s.phase !== "off_duty")

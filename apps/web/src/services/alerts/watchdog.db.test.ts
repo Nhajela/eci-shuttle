@@ -80,6 +80,21 @@ describe("detectProblems", () => {
     );
   });
 
+  it("ops hours alone never make a vehicle silent; a service window inside them still does", async () => {
+    const ws = await makeWorkspace(db());
+    const ops: Window = { ...activeSince(120)[0], source: "active_window", label: "Ops hours" };
+    const between = await makeAssignedDevice(db(), ws.id, { state: { lastPingAt: ago(60), phase: "off_duty" } });
+    const onService = await makeAssignedDevice(db(), ws.id, {
+      vehicle: { name: "Bus 2" },
+      state: { lastPingAt: ago(60), phase: "offline" },
+    });
+    schedules.set(between.device.id, [ops]);
+    schedules.set(onService.device.id, [ops, ...activeSince(30)]);
+    expect(await detectProblems(db(), ws.id, NOW)).toEqual([
+      expect.objectContaining({ kind: "silent", vehicleId: onService.vehicle.id, since: ago(30) }),
+    ]);
+  });
+
   it("off_route while on duty, since off_route_since (else the phase start)", async () => {
     const ws = await makeWorkspace(db());
     const { vehicle, device } = await makeAssignedDevice(db(), ws.id, {

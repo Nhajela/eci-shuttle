@@ -47,8 +47,8 @@ function track(from: number, to: number, a: { lat: number; lng: number }, b = a)
 }
 
 /** Riva ↔ Circle on 13 Oct 2026, one vehicle with one phone, service 08:30–11:00 with departures 09:00 and 09:40. */
-async function world(opts: { assign?: boolean; svFrom?: string; svTo?: string } = {}) {
-  const ws = await makeWorkspace(db());
+async function world(opts: { assign?: boolean; svFrom?: string; svTo?: string; ops?: [string, string] } = {}) {
+  const ws = await makeWorkspace(db(), opts.ops ? { opsHoursStart: opts.ops[0], opsHoursEnd: opts.ops[1] } : {});
   const [riva, circle] = await db()
     .insert(spots)
     .values([
@@ -379,6 +379,32 @@ describe("ingestPings", () => {
       alongM: null,
       geofence: null,
     });
+    // no dwells from off-duty pings
+    expect(await db().select().from(dwells).where(eq(dwells.vehicleId, w.vehicle.id))).toEqual([]);
+  });
+
+  it("off duty inside ops hours keeps position, geofence and last ping, but makes no dwells, trips or matches", async () => {
+    const w = await world({ svFrom: "10:00:00", svTo: "11:00:00", ops: ["06:00", "22:00"] });
+    await w.send([...riva, ...drive, ...atCircle]);
+    const s = await w.state();
+    expect(s).toMatchObject({ phase: "off_duty", serviceId: null, ...CIRCLE, offRoute: false, etaS: null });
+    expect(s.lastPingAt?.getTime()).toBe(atCircle.at(-1)?.recordedAt);
+    expect(s.geofence?.insideSpotId).toBe(w.circle.id);
+    expect(await db().select().from(dwells).where(eq(dwells.vehicleId, w.vehicle.id))).toEqual([]);
+    expect(await db().select().from(trips).where(eq(trips.vehicleId, w.vehicle.id))).toEqual([]);
+    expect(await db().select().from(departureMatches).where(eq(departureMatches.serviceId, w.service.id))).toEqual([]);
+
+    // on duty from 10:00: the geofence carried over, so leaving Circle opens a trip on the service
+    await w.send(track(ist("10:00:00"), ist("10:01:00"), CIRCLE));
+    await w.send(track(ist("10:01:10"), ist("10:04:00"), CIRCLE, RIVA));
+    const [trip] = await db().select().from(trips).where(eq(trips.vehicleId, w.vehicle.id));
+    expect(trip).toMatchObject({ fromSpotId: w.circle.id, serviceId: w.service.id });
+  });
+
+  it("off duty outside ops hours still keeps no position", async () => {
+    const w = await world({ svFrom: "10:00:00", svTo: "11:00:00", ops: ["12:00", "21:00"] });
+    await w.send(riva);
+    expect(await w.state()).toMatchObject({ phase: "off_duty", lat: null, lng: null, geofence: null });
   });
 
   it("a special service overlapping the regular one wins (the party run drops out of the regular route)", async () => {
@@ -456,6 +482,17 @@ describe("refreshPhases", () => {
     // pings bring it back
     await w.send(track(ist("09:10:00"), ist("09:10:30"), RIVA), ist("09:10:30"));
     expect(await w.state()).toMatchObject({ phase: "at_spot", serviceId: w.service.id });
+  });
+
+  it("in ops hours an off-duty vehicle keeps its last position; when ops hours end it is cleared", async () => {
+    const w = await world({ ops: ["06:00", "14:00"] });
+    await w.send(riva);
+    expect(await refreshPhases(db(), w.ws.id, new Date(ist("12:00:00")))).toEqual([w.vehicle.id]);
+    expect(await w.state()).toMatchObject({ phase: "off_duty", serviceId: null, ...RIVA, etaS: null });
+    expect((await w.state()).geofence?.insideSpotId).toBe(w.riva.id);
+    expect(await refreshPhases(db(), w.ws.id, new Date(ist("13:00:00")))).toEqual([]);
+    expect(await refreshPhases(db(), w.ws.id, new Date(ist("14:00:00")))).toEqual([w.vehicle.id]);
+    expect(await w.state()).toMatchObject({ phase: "off_duty", lat: null, lng: null, geofence: null });
   });
 
   it("sweeps planned departures that passed with no departure at all into missed", async () => {
