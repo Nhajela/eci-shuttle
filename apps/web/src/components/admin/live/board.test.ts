@@ -345,3 +345,21 @@ describe("buildBoard: driver breaks", () => {
     expect(by("v3")).toMatchObject({ onBreak: false, breakText: null });
   });
 });
+
+describe("buildBoard: several sources on one vehicle", () => {
+  it("lists every source, the freshest fix first; buttons act on it", () => {
+    const v = vehicle("v1", "Shuttle 1");
+    const app = phone("app", v, { appVersion: "0.1.0", lastSyncAt: new Date(NOW - 30_000) });
+    const tg = phone("tg", v, { appVersion: "telegram" });
+    (app as { lastFixAt: Date | null }).lastFixAt = new Date(NOW - 20 * 60_000);
+    (app as { silent: boolean }).silent = true;
+    (tg as { lastFixAt: Date | null }).lastFixAt = new Date(NOW - 40_000);
+    (tg as { silent: boolean }).silent = false;
+    const [card] = buildBoard(base({ vehicles: [v], phones: [app, tg] }), NOW).cards;
+    expect(card).toMatchObject({ deviceId: "tg", phoneLabel: "tg phone" });
+    expect(card.sources).toEqual([
+      { deviceId: "tg", label: "tg phone · Telegram", text: "location 40s ago", silent: false },
+      { deviceId: "app", label: "app phone · app", text: "location 20 min ago", silent: true },
+    ]);
+  });
+});

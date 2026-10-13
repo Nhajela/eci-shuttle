@@ -35,6 +35,7 @@ function health(over: Partial<PhoneView> = {}, dev: Partial<Device> = {}): Phone
     silent: false,
     configBehind: false,
     lastSyncAgoS: 20,
+    lastFixAt: null,
     needsNewApk: false,
     updateFailed: false,
     permissionsOk: true,

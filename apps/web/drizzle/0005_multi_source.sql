@@ -1,0 +1,1 @@
+DROP INDEX "device_assignments_open_vehicle";

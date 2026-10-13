@@ -61,6 +61,8 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
 
   // a driver on a break may park anywhere and switch the phone off: not silent, not off route
   const onBreak = await activeBreaks(db, workspaceId, now);
+  // several sources may back each other up on one vehicle: its silent / off-route problem is raised once
+  const flagged = new Set<string>();
   const problems: Problem[] = [];
   for (const { device: d, vehicle: v, state: s } of rows) {
     const add = (kind: Problem["kind"], since: Date, message: string, onVehicle = false) =>
@@ -94,12 +96,17 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     const dutyStart = duty.window ? new Date(duty.window.startsAt) : null;
 
     const resting = v !== null && onBreak.has(v.id);
-    if (v && !resting && duty.mode === "active" && dutyStart) {
+    if (v && !resting && !flagged.has(`silent:${v.id}`) && duty.mode === "active" && dutyStart) {
       const last = s?.lastPingAt && s.lastPingAt > dutyStart ? s.lastPingAt : dutyStart;
-      if (t - last.getTime() > SILENT_AFTER_MS) add("silent", last, `${v.name} has been silent`, true);
+      if (t - last.getTime() > SILENT_AFTER_MS) {
+        add("silent", last, `${v.name} has been silent`, true);
+        flagged.add(`silent:${v.id}`);
+      }
     }
-    if (v && !resting && s?.offRoute && s.phase !== "off_duty")
+    if (v && !resting && !flagged.has(`off_route:${v.id}`) && s?.offRoute && s.phase !== "off_duty") {
       add("off_route", s.offRouteSince ?? s.since, `${v.name} is off its route`, true);
+      flagged.add(`off_route:${v.id}`);
+    }
 
     if (d.battery !== null && d.battery < LOW_BATTERY_PCT && d.charging !== true)
       add("low_battery", d.lowBatterySince ?? now, ` is at ${Math.round(d.battery)}% battery`);

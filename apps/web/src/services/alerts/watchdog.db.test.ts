@@ -4,7 +4,7 @@ import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { devices, outbox, vehicleBreaks } from "@/db/schema";
+import { deviceAssignments, devices, outbox, vehicleBreaks } from "@/db/schema";
 import { refreshPhases } from "@/services/ingest/ingest";
 import type { TelegramPayload } from "../kernel";
 import { detectProblems, runWatchdog } from "./watchdog";
@@ -129,6 +129,16 @@ describe("detectProblems", () => {
         { workspaceId: ws.id, vehicleId: off.vehicle.id, startsAt: ago(10), endsAt: ago(-5) },
       ]);
     expect((await detectProblems(db(), ws.id, NOW)).map((p) => p.kind)).toEqual(["low_battery"]);
+  });
+
+  it("a vehicle with two sources is silent or off route once, and only when its newest fix is old", async () => {
+    const ws = await makeWorkspace(db());
+    const a = await makeAssignedDevice(db(), ws.id, { state: { lastPingAt: ago(20) } });
+    const b = await makeDevice(db(), ws.id, { label: "Backup", permissions: OK });
+    await db().insert(deviceAssignments).values({ workspaceId: ws.id, deviceId: b.id, vehicleId: a.vehicle.id });
+    schedules.set(a.device.id, activeSince(30));
+    schedules.set(b.id, activeSince(30));
+    expect((await detectProblems(db(), ws.id, NOW)).map((p) => p.kind)).toEqual(["silent"]);
   });
 
   it("low_battery below 15% and not charging, since devices.low_battery_since (now when not stamped yet)", async () => {

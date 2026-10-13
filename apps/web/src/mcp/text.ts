@@ -78,6 +78,7 @@ ${OPS_HOURS_GUIDE}`,
 - The planned wait at stops (boarding time) is on the route: \`route.update { routeId, plannedDwellS: { "*": 300 } }\` = wait 5 min at each stop; add a spot id key to override one stop (seconds, 0 = no wait; the map replaces the whole plan, \`{}\` clears it). It feeds "about every N min" and ETAs until enough real dwells are learned.`,
   phones: `# Phones (the drivers' own Android phones)
 - A phone is paired to a workspace with a pairing code (admin), labelled, and assigned to a vehicle. It tracks only inside its tracking windows and is idle otherwise.
+- One vehicle can have several sources at once as backups of each other (our app, Telegram live location via /pair, Traccar): \`phone.assign\` each to the same vehicle; assigning never takes another source off. The newest fix from any of them moves the vehicle; it is silent only when all are. \`shuttle_phones\` shows each source's \`lastFixAt\`. Take one off with \`phone.assign { deviceId, vehicleId: null }\`.
 - ${OPS_HOURS_GUIDE}
 - silence (until a time): stop tracking until then. force_active (for some hours): track now even outside a window. nudge: ask the phone to sync now. These are ops.
 - kill: stop the phone's tracking until the driver presses Resume in the app. revoke: wipe its token (lost phone, driver left); it needs pairing again. move_workspace: moves it and clears its assignments. These are admin only, and a phone in a live vehicle right now gets a warning.

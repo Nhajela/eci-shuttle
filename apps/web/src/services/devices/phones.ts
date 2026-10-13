@@ -25,7 +25,7 @@ import {
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { deviceAssignments, devices, directives, memberships, outbox, vehicles, workspaces } from "@/db/schema";
+import { deviceAssignments, devices, directives, memberships, outbox, pings, vehicles, workspaces } from "@/db/schema";
 import type { Device, DeviceAssignment, Directive, Vehicle } from "@/db/types";
 import { escapeHtml } from "@/lib/telegram/html";
 import { adminButton, raiseAlert } from "../alerts/alerts";
@@ -94,7 +94,8 @@ export async function labelPhone(db: Db, actor: Actor, input: z.input<typeof Lab
 }
 
 /** Closes the open assignment (ends_at = now) and opens one for vehicleId (null = just unassign). A vehicle
- *  holding another phone loses it (that phone's assignment closes too). Bumps both phones' configs. */
+ *  keeps its other phones: several sources (our app, Telegram live location, Traccar) back each other up, and
+ *  ingest keeps the newest fix of any of them. Bumps this phone's config. */
 export async function assignPhone(
   db: Db,
   actor: Actor,
@@ -116,20 +117,16 @@ export async function assignPhone(
       const now = new Date();
       const closed = await closeAssignments(tx, eq(deviceAssignments.deviceId, deviceId), now);
       let created: DeviceAssignment | null = null;
-      let displaced: string[] = [];
       if (vehicleId) {
-        displaced = (await closeAssignments(tx, eq(deviceAssignments.vehicleId, vehicleId), now)).map(
-          (a) => a.deviceId,
-        );
         [created] = await tx
           .insert(deviceAssignments)
           .values({ workspaceId, deviceId, vehicleId, startsAt: now })
           .returning();
       }
-      await bumpConfigs(tx, { deviceIds: [deviceId, ...displaced] }, "phone.assign");
+      await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.assign");
       return {
         before: { vehicleId: closed[0]?.vehicleId ?? null },
-        after: { vehicleId, ...(displaced.length ? { displacedDeviceIds: displaced } : {}) },
+        after: { vehicleId },
         result: created,
       };
     },
@@ -368,6 +365,8 @@ export type PhoneHealth = {
   silent: boolean;
   configBehind: boolean;
   lastSyncAgoS: number | null;
+  /** its newest GPS fix (any source: app, Telegram, Traccar), in the last day */
+  lastFixAt: Date | null;
   needsNewApk: boolean;
   updateFailed: boolean;
   permissionsOk: boolean;
@@ -525,6 +524,21 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
     )
     .orderBy(asc(directives.startsAt));
 
+  const fixes = await db
+    .select({ deviceId: pings.deviceId, at: sql<Date>`max(${pings.recordedAt})`.mapWith((v) => new Date(v)) })
+    .from(pings)
+    .where(
+      and(
+        inArray(
+          pings.deviceId,
+          phones.map((p) => p.id),
+        ),
+        gt(pings.recordedAt, new Date(now.getTime() - 86_400_000)),
+      ),
+    )
+    .groupBy(pings.deviceId);
+  const fixOf = new Map(fixes.map((f) => [f.deviceId, f.at]));
+
   const out: PhoneHealth[] = [];
   for (const device of phones) {
     const vehicle = vehicleOf.get(device.id) ?? null;
@@ -536,7 +550,9 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
     // same rule as the watchdog's silent alert (on duty only, not ops hours), with the phone's last sync for the
     // vehicle's last ping
     const duty = config && resolveMode({ ...config, schedule: dutyWindows(config.schedule) }, now.getTime());
-    const heardAt = Math.max(device.lastSyncAt?.getTime() ?? 0, duty?.window?.startsAt ?? 0);
+    // Telegram and Traccar never sync: their last fix is when we last heard from them
+    const lastFixAt = fixOf.get(device.id) ?? null;
+    const heardAt = Math.max(device.lastSyncAt?.getTime() ?? 0, lastFixAt?.getTime() ?? 0, duty?.window?.startsAt ?? 0);
     out.push({
       device,
       vehicle,
@@ -544,6 +560,7 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
       silent: !!vehicle && duty?.mode === "active" && now.getTime() - heardAt > SILENT_AFTER_MS,
       modeMismatch: !!config && isModeMismatch(device, config, await pushedAt(db, device), now),
       configBehind: !revoked && (device.reportedConfigVersion ?? 0) < device.configVersion,
+      lastFixAt,
       lastSyncAgoS: device.lastSyncAt ? Math.floor((now.getTime() - device.lastSyncAt.getTime()) / 1000) : null,
       needsNewApk: !!(
         ws.minAppVersion &&

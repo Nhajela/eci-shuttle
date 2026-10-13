@@ -36,6 +36,8 @@ export type VehicleCard = {
   serviceName: string | null;
   deviceId: string | null;
   phoneLabel: string | null;
+  /** every phone / Telegram / Traccar source on this vehicle, freshest fix first (deviceId above is the first) */
+  sources: { deviceId: string; label: string; text: string; silent: boolean }[];
   /** IST HH:MM while a silence directive runs */
   silencedUntilText: string | null;
   problems: ProblemLine[];
@@ -67,10 +69,16 @@ export function agoText(t: Date | null, now: number): string {
 
 const line = (p: Problem): ProblemLine => ({ kind: p.kind, message: p.message });
 
+const SOURCE: Record<string, string> = { telegram: "Telegram", traccar: "Traccar" };
+
 export function buildBoard(input: BoardInput, now: number): Board {
   const spotName = new Map(input.spots.map((s) => [s.id, s.shortName]));
   const stateOf = new Map(input.states.map((s) => [s.vehicleId, s]));
-  const phoneOf = new Map(input.phones.filter((p) => p.vehicle).map((p) => [p.vehicle?.id, p]));
+  // several sources may back each other up on one vehicle: the freshest fix leads
+  const fix = (p: PhoneHealth) => p.lastFixAt?.getTime() ?? p.device.lastSyncAt?.getTime() ?? 0;
+  const phonesOf = new Map<string, PhoneHealth[]>();
+  for (const p of input.phones) if (p.vehicle) phonesOf.set(p.vehicle.id, [...(phonesOf.get(p.vehicle.id) ?? []), p]);
+  for (const list of phonesOf.values()) list.sort((a, b) => fix(b) - fix(a));
   const serviceName = new Map(input.schedule.flatMap((d) => d.services.map((s) => [s.service.id, s.service.name])));
   const used = new Set<Problem>();
 
@@ -78,10 +86,13 @@ export function buildBoard(input: BoardInput, now: number): Board {
     .filter((v) => v.active)
     .map((v): VehicleCard => {
       const st = stateOf.get(v.id);
-      const ph = phoneOf.get(v.id);
+      const all = phonesOf.get(v.id) ?? [];
+      const ph = all[0];
       const dev = ph?.device;
       const phase: Phase = st?.phase ?? "off_duty";
-      const problems = input.problems.filter((p) => p.vehicleId === v.id || (dev && p.deviceId === dev.id));
+      const problems = input.problems.filter(
+        (p) => p.vehicleId === v.id || all.some((x) => x.device.id === p.deviceId),
+      );
       for (const p of problems) used.add(p);
       const silence = ph?.activeDirectives.find(
         (d) => d.kind === "silence_until" && !d.cancelledAt && d.startsAt.getTime() <= now && d.endsAt.getTime() > now,
@@ -106,6 +117,12 @@ export function buildBoard(input: BoardInput, now: number): Board {
         serviceName: st?.serviceId ? (serviceName.get(st.serviceId) ?? null) : null,
         deviceId: dev?.id ?? null,
         phoneLabel: dev?.label ?? null,
+        sources: all.map((p) => ({
+          deviceId: p.device.id,
+          label: `${p.device.label} · ${SOURCE[p.device.appVersion ?? ""] ?? "app"}`,
+          text: p.lastFixAt ? `location ${agoText(p.lastFixAt, now)}` : "no location yet",
+          silent: p.silent,
+        })),
         silencedUntilText: silence ? istHHMM(silence.endsAt) : null,
         problems: problems.map(line),
         onBreak: !!brk,
