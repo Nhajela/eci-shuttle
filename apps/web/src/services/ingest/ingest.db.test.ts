@@ -214,10 +214,20 @@ describe("ingestPings", () => {
       p.recordedAt >= ist("09:02:00") && p.recordedAt <= ist("09:03:10") ? { ...p, lng: p.lng + 0.0028 } : p,
     );
     await w.send([...riva, ...detour.filter((p) => p.recordedAt <= ist("09:03:10"))]);
-    expect((await w.state()).offRoute).toBe(true);
+    expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(ist("09:02:00")) });
     const r = await w.send([...detour.filter((p) => p.recordedAt > ist("09:03:10")), ...atCircle]);
-    expect((await w.state()).offRoute).toBe(false);
+    expect(await w.state()).toMatchObject({ offRoute: false, offRouteSince: null });
     expect(r.closedTrips[0].quality).toBe("off_route");
+  });
+
+  it("off_route_since keeps the start of a stretch longer than the 10 min look-back", async () => {
+    const w = await world();
+    const east = { lat: RIVA.lat + 0.005, lng: RIVA.lng + 0.0028 };
+    await w.send([...riva, ...track(ist("09:01:10"), ist("09:04:00"), RIVA, east)]);
+    const since = (await w.state()).offRouteSince?.getTime() as number;
+    expect(since).toBeLessThan(ist("09:03:00"));
+    await w.send(track(ist("09:04:10"), ist("09:15:00"), east));
+    expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(since) });
   });
 
   it("a short excursion off the path (< 1 min) is not off route", async () => {

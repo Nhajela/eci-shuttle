@@ -67,8 +67,11 @@ const goodFixes = (rows: PingRow[]): Fix[] =>
     .filter((p) => p.accuracy <= GEOFENCE_MAX_ACCURACY_M)
     .map((p) => ({ at: p.recordedAt.getTime(), lat: p.lat, lng: p.lng }));
 
-/** Longest and trailing runs of fixes > 150 m off the path, in ms (first to last off-route fix of the run). */
-export function offRouteRuns(fixes: Fix[], path: LatLng[]): { longest: number; current: number } {
+/**
+ * Longest and trailing runs of fixes > 150 m off the path, in ms (first to last off-route fix of the run);
+ * start = first fix of the trailing run (null when the last fix is on the path).
+ */
+export function offRouteRuns(fixes: Fix[], path: LatLng[]): { longest: number; current: number; start: number | null } {
   let start: number | null = null;
   let longest = 0;
   let current = 0;
@@ -82,7 +85,7 @@ export function offRouteRuns(fixes: Fix[], path: LatLng[]): { longest: number; c
       current = 0;
     }
   }
-  return { longest, current };
+  return { longest, current, start };
 }
 
 /** gap: > 2 min without fixes anywhere between departure and arrival; off_route: > 150 m off for > 1 min. */
@@ -296,6 +299,9 @@ async function processVehicle(
         : phase !== st.phase
           ? fresh[0].recordedAt
           : st.since;
+  const offStart = !stale && !atSpot && route ? await offRouteStart(tx, vehicleId, route.path, lastAt) : null;
+  // keep the stretch's first start: the 10 min look-back loses it on long stretches
+  const offRouteSince = offStart == null ? null : (st.offRouteSince ?? new Date(offStart));
   await tx
     .update(vehicleState)
     .set({
@@ -309,7 +315,8 @@ async function processVehicle(
       lat: lastGood?.lat ?? st.lat,
       lng: lastGood?.lng ?? st.lng,
       alongM: live?.alongM ?? null,
-      offRoute: !stale && !atSpot && route ? await offRouteNow(tx, vehicleId, route.path, lastAt) : false,
+      offRoute: offRouteSince != null,
+      offRouteSince,
       geofence: gf,
       updatedAt: now,
     })
@@ -346,8 +353,11 @@ async function closeTrip(tx: Db, trip: Trip, toSpotId: string, at: number, sched
   return row;
 }
 
-/** Live off-route: the trailing run of the last 10 min of fixes is > 150 m off the path for > 1 min. */
-async function offRouteNow(tx: Db, vehicleId: string, path: LatLng[], lastAt: number): Promise<boolean> {
+/**
+ * Live off-route: the trailing run of the last 10 min of fixes is > 150 m off the path for > 1 min. Returns that
+ * run's first fix time, or null when on route.
+ */
+async function offRouteStart(tx: Db, vehicleId: string, path: LatLng[], lastAt: number): Promise<number | null> {
   const recent = await tx
     .select()
     .from(pingsTable)
@@ -359,7 +369,8 @@ async function offRouteNow(tx: Db, vehicleId: string, path: LatLng[], lastAt: nu
       ),
     )
     .orderBy(asc(pingsTable.recordedAt));
-  return offRouteRuns(goodFixes(recent), path).current > OFF_ROUTE_MS;
+  const run = offRouteRuns(goodFixes(recent), path);
+  return run.current > OFF_ROUTE_MS ? run.start : null;
 }
 
 /**
