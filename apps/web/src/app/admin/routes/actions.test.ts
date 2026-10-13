@@ -54,6 +54,20 @@ describe("route actions", () => {
     });
   });
 
+  it("sends the planned wait at each stop and per-stop overrides, in seconds", async () => {
+    await updateRouteAction(
+      null,
+      form({ w: "live", routeId: "r1", version: "3", name: "Loop", waitMin: "5", "waitMin:b": "2", "waitMin:a": "" }),
+    );
+    expect(vi.mocked(updateRoute).mock.calls[0][2]).toStrictEqual({
+      workspaceId: "ws1",
+      routeId: "r1",
+      version: 3,
+      name: "Loop",
+      plannedDwellS: { "*": 300, b: 120 },
+    });
+  });
+
   it("saves a hand-edited path", async () => {
     const path = [
       { lat: 15.6, lng: 73.7 },

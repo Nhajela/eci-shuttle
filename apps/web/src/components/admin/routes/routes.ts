@@ -59,6 +59,20 @@ export function insertVertex(path: LatLng[], p: LatLng): LatLng[] {
   return [...path.slice(0, best + 1), p, ...path.slice(best + 1)];
 }
 
+/**
+ * The route form's wait fields as planned_dwell_s seconds: "waitMin" = every stop ("*"), "waitMin:<spotId>" = that
+ * stop. Blank = no planned wait there. undefined when the form has no wait fields (leave the plan alone).
+ */
+export function parseWaits(fd: FormData): Record<string, number> | undefined {
+  if (!fd.has("waitMin")) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, v] of fd) {
+    if (!k.startsWith("waitMin") || String(v).trim() === "") continue;
+    out[k === "waitMin" ? "*" : k.slice("waitMin:".length)] = Math.round(Number(v) * 60);
+  }
+  return out;
+}
+
 const PathJson = z.array(LatLng);
 
 /** The hidden `path` form field: a JSON list of {lat, lng}, or null when it isn't one. */
