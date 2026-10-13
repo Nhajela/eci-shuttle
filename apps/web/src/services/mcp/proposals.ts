@@ -112,7 +112,7 @@ export async function confirm(db: Db, actor: Actor, input: { code: string }, now
     for (const c of p.changes) requireRole(actor, p.workspaceId, CHANGE_ROLE[c.kind]);
 
     // FOR UPDATE: at READ COMMITTED another admin could otherwise commit between this check and the apply
-    const current = await lockedVersions(tx, p.workspaceId, Object.keys(p.versions), { forUpdate: true });
+    const current = await loadVersions(tx, p.workspaceId, Object.keys(p.versions), { forUpdate: true });
     const stale = Object.keys(p.versions).filter((k) => current[k] !== p.versions[k]);
     if (stale.length)
       throw new ServiceError("STALE_VERSION", "Something changed since this was proposed. Propose it again.", {
@@ -126,11 +126,5 @@ export async function confirm(db: Db, actor: Actor, input: { code: string }, now
     return { proposalId: p.id, summary: p.summary, results };
   });
 }
-
-// ponytail: changes.loadVersions (svc-mcp, frozen stub) has no lock option yet; contract request asks it to take
-// `{ forUpdate }` and pass it to getInWorkspace. Until it does, the option is ignored and the race stays open.
-const lockedVersions = loadVersions as (
-  ...args: [...Parameters<typeof loadVersions>, { forUpdate: boolean }]
-) => ReturnType<typeof loadVersions>;
 
 const ConfirmCodeInput = z.object({ code: z.string().trim().min(1).max(40) });
