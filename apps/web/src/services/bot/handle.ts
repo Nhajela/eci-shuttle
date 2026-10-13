@@ -10,6 +10,7 @@ import { isServiceError, systemActor, userMessage } from "../kernel";
 import { onNotice, onSetGroup, onSilence, onStatus, onToday } from "./admin";
 import { onShuttle, onStop } from "./attendee";
 import { handleCallback } from "./callbacks";
+import { onLocation, onPair } from "./live";
 import { onLogin, onStart } from "./start";
 import type { BotContext, BotReply, TgUpdate } from "./types";
 
@@ -17,7 +18,8 @@ const BOT = systemActor("bot", "telegram");
 const NONE: BotReply = { send: [] };
 const HELP =
   "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
-  "/stop turns off your alerts and notices.";
+  "/stop turns off your alerts and notices.\n" +
+  "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
 
 /**
@@ -27,7 +29,8 @@ const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html
  * - "/start <payload>" → start.onStart; "/login" → start.onLogin.
  * - "/shuttle" or a spot's short name / name typed alone ("riva", case-insensitive) → attendee handlers.
  * - "/status", "/today", "/notice", "/silence", "/setgroup" → admin handlers (need a membership; otherwise a polite no).
- * - "/stop" → attendee.onStop.
+ * - "/stop" → attendee.onStop. "/pair <code>" in a private chat → live.onPair.
+ * - a location message or any edited_message → live.onLocation (first, without the person upsert).
  * - callback_query → callbacks.handleCallback.
  * - anything else in a private chat → a short help text; in groups → nothing.
  * No live workspace → "The shuttle isn't set up yet."
@@ -67,6 +70,9 @@ async function memberWorkspace(
 
 export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise<BotReply> {
   const { message, callback_query: query, my_chat_member: member } = update;
+  // live-location pings (every few seconds per driver): before the person upsert, which they don't need
+  const located = update.edited_message ?? (message?.location ? message : undefined);
+  if (located) return located.from?.is_bot ? NONE : await onLocation(db, located, now);
   const from = query?.from ?? message?.from ?? member?.from;
   const chat = query?.message?.chat ?? message?.chat ?? member?.chat;
   if (!from || from.is_bot) return NONE;
@@ -93,8 +99,9 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
   const command = m?.[1].toLowerCase() ?? null;
   const rest = m?.[2]?.trim() || null;
 
-  // login needs no shuttle: let staff log in before a workspace is made live
-  const loginOnly = command === "start" || command === "login" || !!query?.data?.startsWith("login:");
+  // login and pairing need no shuttle: let staff log in and drivers pair before a workspace is made live
+  const loginOnly =
+    command === "start" || command === "login" || command === "pair" || !!query?.data?.startsWith("login:");
   const workspace =
     (await workspaceBySlug(db, null)) ?? (loginOnly ? ((await listAllWorkspaces(db))[0] ?? null) : null);
   if (!workspace) {
@@ -135,6 +142,9 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
         return await onNotice(ctx, text ?? "");
       case "stop":
         return await onStop(ctx);
+      case "pair":
+        // the code is a credential: never take it from a group
+        return isPrivate ? await onPair(ctx, rest) : NONE;
       case null:
         // ponytail: one indexed lookup per short message, groups included; cache spot names if groups get busy
         if (text && text.length <= 60 && (await isSpotName(db, workspace.id, text))) return await onShuttle(ctx, text);

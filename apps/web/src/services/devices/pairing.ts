@@ -76,8 +76,16 @@ const noSuchCode = () =>
  * A `simulated` pair is stored as such and refused (FORBIDDEN, code left unused) when the code's workspace is
  * live. Marks the code used. Audited device.pair with the device as actor. Returns the token once, plus the initial
  * config. `now` for expiry; the throttle window is DB time, like audit_log.at.
+ * `link` (bot/live): stored as token_hash instead of a token's sha256, so the device is found by its outside sender
+ * and never by a bearer (no hex sha256 equals it); an older device with the same link loses it. `label` is the
+ * fallback name before the model.
  */
-export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise<PairResponse> {
+export async function pairDevice(
+  db: Db,
+  input: PairRequest,
+  now: Date,
+  opts: { link?: string; label?: string } = {},
+): Promise<PairResponse> {
   const req = parseInput(PairRequest, input);
   // ponytail: global cap, so a flood also blocks honest pairing for 10 min; the route should add a per-IP limit
   const [{ misses }] = await db
@@ -115,7 +123,7 @@ export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise
 
   const deviceId = randomUUID();
   const token = randomBytes(32).toString("base64url");
-  const label = code.label ?? (req.model.trim() || "Phone");
+  const label = code.label ?? opts.label ?? (req.model.trim() || "Phone");
   const actor: Actor = { kind: "device", id: deviceId, workspaceId: code.workspaceId, channel: "device", label };
 
   return mutate(
@@ -130,13 +138,18 @@ export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise
         .where(and(eq(pairingCodes.code, code.code), isNull(pairingCodes.usedAt), gt(pairingCodes.expiresAt, now)))
         .returning();
       if (!claimed) throw noSuchCode();
+      if (opts.link)
+        await tx
+          .update(devices)
+          .set({ tokenHash: sql`${devices.tokenHash} || ':' || ${devices.id}` })
+          .where(eq(devices.tokenHash, opts.link));
       const [device] = await tx
         .insert(devices)
         .values({
           id: deviceId,
           workspaceId: code.workspaceId,
           label,
-          tokenHash: createHash("sha256").update(token).digest("hex"),
+          tokenHash: opts.link ?? createHash("sha256").update(token).digest("hex"),
           model: req.model,
           appVersion: req.appVersion,
           updateId: req.updateId,

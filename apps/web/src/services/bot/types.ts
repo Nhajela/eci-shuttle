@@ -16,12 +16,24 @@ export type TgMessage = {
   from?: TgUser;
   text?: string;
   reply_to_message?: TgMessage;
+  /** set on edited_message updates (seconds) */
+  edit_date?: number;
+  /** live_period is set while it is a live location; heading 1..360, horizontal_accuracy 0..1500 m */
+  location?: {
+    latitude: number;
+    longitude: number;
+    horizontal_accuracy?: number;
+    live_period?: number;
+    heading?: number;
+  };
 };
 export type TgCallbackQuery = { id: string; from: TgUser; message?: TgMessage; data?: string };
 export type TgChatMemberUpdated = { chat: TgChat; from: TgUser; new_chat_member: { status: string } };
 export type TgUpdate = {
   update_id: number;
   message?: TgMessage;
+  /** every live-location update arrives as an edit of the first location message */
+  edited_message?: TgMessage;
   callback_query?: TgCallbackQuery;
   /** status "kicked" in a private chat = the person blocked the bot */
   my_chat_member?: TgChatMemberUpdated;

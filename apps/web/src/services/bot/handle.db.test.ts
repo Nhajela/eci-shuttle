@@ -9,6 +9,7 @@ import { ServiceError } from "../kernel";
 import { onAdminCallback, onNotice, onSilence, onStatus, onToday } from "./admin";
 import { onAttendeeCallback, onShuttle, onStop } from "./attendee";
 import { handleUpdate } from "./handle";
+import { onLocation, onPair } from "./live";
 import { onLogin, onStart } from "./start";
 import type { BotContext, BotReply, TgUpdate, TgUser } from "./types";
 
@@ -21,6 +22,7 @@ vi.mock("./admin", () => ({
   onAdminCallback: vi.fn(),
 }));
 vi.mock("./attendee", () => ({ onShuttle: vi.fn(), onStop: vi.fn(), onAttendeeCallback: vi.fn() }));
+vi.mock("./live", () => ({ onPair: vi.fn(), onLocation: vi.fn() }));
 
 const db = () => testDb();
 const NOW = new Date("2026-10-12T04:30:00Z");
@@ -30,7 +32,7 @@ let live: Workspace;
 let seq = 0;
 beforeEach(async () => {
   vi.clearAllMocks();
-  for (const f of [onStart, onLogin, onStatus, onToday, onSilence, onNotice, onShuttle, onStop])
+  for (const f of [onStart, onLogin, onStatus, onToday, onSilence, onNotice, onShuttle, onStop, onPair, onLocation])
     vi.mocked(f).mockResolvedValue(OK);
   vi.mocked(onAdminCallback).mockResolvedValue(OK);
   vi.mocked(onAttendeeCallback).mockResolvedValue(OK);
@@ -201,6 +203,31 @@ describe("handleUpdate", () => {
         showAlert: true,
       },
     });
+  });
+
+  it("/pair in private goes to onPair (help lists it); in a group it does nothing", async () => {
+    const from = user();
+    expect(await handleUpdate(db(), dm(from, "/pair 123456"), NOW)).toBe(OK);
+    expect(vi.mocked(onPair).mock.calls[0][1]).toBe("123456");
+    expect(await handleUpdate(db(), inGroup(from, "/pair 123456"), NOW)).toEqual({ send: [] });
+    expect(onPair).toHaveBeenCalledOnce();
+    const help = await handleUpdate(db(), dm(from, "hello"), NOW);
+    expect(help.send[0].html).toMatch(/\/pair/);
+  });
+
+  it("locations (new and edited) go to onLocation before anything else; other edits too", async () => {
+    const from = user();
+    const location = { latitude: 15.6, longitude: 73.7, live_period: 900 };
+    const msg = { message_id: 3, date: 1, chat: { id: from.id, type: "private" as const }, from, location };
+    expect(await handleUpdate(db(), { update_id: ++seq, message: msg }, NOW)).toBe(OK);
+    expect(vi.mocked(onLocation).mock.calls[0].slice(1)).toEqual([msg, NOW]);
+    const edited = { ...msg, edit_date: 2 };
+    await handleUpdate(db(), { update_id: ++seq, edited_message: edited }, NOW);
+    expect(vi.mocked(onLocation).mock.calls[1][1]).toEqual(edited);
+    const textEdit = { message_id: 4, date: 1, edit_date: 2, chat: msg.chat, from, text: "/shuttle" };
+    await handleUpdate(db(), { update_id: ++seq, edited_message: textEdit }, NOW);
+    expect(onLocation).toHaveBeenCalledTimes(3);
+    expect(onShuttle).not.toHaveBeenCalled();
   });
 
   it("a person blocking the bot in private is remembered (audited); unblocking clears it", async () => {
