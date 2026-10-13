@@ -3,11 +3,12 @@
 import { istHHMM } from "@eci-shuttle/shared";
 import { AlertTriangle, BatteryMedium, Clock, Route, Smartphone } from "lucide-react";
 import { nudgeAction, silenceAction } from "@/app/admin/live/actions";
+import { ConfirmButton } from "@/components/admin/shell/confirm-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { VehicleCard as Card_ } from "./board";
-import { ConfirmButton, useQuick } from "./quick";
+import { useQuick } from "./quick";
 
 const PHASE_TONE: Record<Card_["phase"], string> = {
   at_spot: "bg-[var(--teal-tint)] text-[var(--teal-deep)]",
@@ -64,8 +65,11 @@ export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null
             <ConfirmButton
               label="Silence 1h"
               question={`Silence ${card.name} till ${istHHMM(Date.now() + 3_600_000)}?`}
-              done={`${card.name} silenced for an hour`}
-              action={() => silenceAction(w, card.deviceId as string, 1)}
+              variant="default"
+              disabled={pending}
+              onConfirm={() =>
+                run(() => silenceAction(w, card.deviceId as string, 1), `${card.name} silenced for an hour`)
+              }
             />
           </div>
         )}

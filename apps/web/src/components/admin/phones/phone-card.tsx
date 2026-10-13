@@ -15,12 +15,12 @@ import {
   revokePhoneAction,
   silencePhoneAction,
 } from "@/app/admin/phones/actions";
+import { ConfirmButton } from "@/components/admin/shell/confirm-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ConfirmButton } from "./confirm-button";
 import { useAction } from "./use-action";
 import {
   agoText,
@@ -293,7 +293,7 @@ export function PhoneCard({
                       {moveTargets.length > 0 && (
                         <ConfirmButton
                           label="Move to another workspace"
-                          title={`Move ${d.label}?`}
+                          question={`Move ${d.label}?`}
                           description="Its vehicle and any silence or force-active are cleared. It picks up the new workspace's config on its next sync."
                           confirmLabel="Move"
                           disabled={pending}
@@ -319,7 +319,7 @@ export function PhoneCard({
                       {!d.killedAt && (
                         <ConfirmButton
                           label="Kill tracking"
-                          title={`Kill ${d.label}?`}
+                          question={`Kill ${d.label}?`}
                           description="The phone stops tracking on its next sync and stays stopped. Only the driver can resume it, with the Resume button in the app."
                           confirmLabel="Kill"
                           disabled={pending}
@@ -328,7 +328,7 @@ export function PhoneCard({
                       )}
                       <ConfirmButton
                         label="Revoke (lost phone / driver left)"
-                        title={`Revoke ${d.label}?`}
+                        question={`Revoke ${d.label}?`}
                         description="Its token stops working and it leaves its vehicle. To use this phone again it must be paired again."
                         confirmLabel="Revoke"
                         disabled={pending}

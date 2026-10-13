@@ -6,6 +6,8 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { cancelDepartureAction, postNoticeAction } from "@/app/admin/live/actions";
+import type { MapSpot } from "@/components/admin/shell/admin-map";
+import { ConfirmButton } from "@/components/admin/shell/confirm-button";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -13,11 +15,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { Board } from "./board";
-import type { MapSpot } from "./live-map";
-import { ConfirmButton, useQuick } from "./quick";
+import { useQuick } from "./quick";
 import { VehicleCard } from "./vehicle-card";
 
-const LiveMap = dynamic(() => import("./live-map").then((m) => m.LiveMap), { ssr: false });
+const AdminMap = dynamic(() => import("@/components/admin/shell/admin-map").then((m) => m.AdminMap), { ssr: false });
 
 const REFRESH_MS = 10_000;
 
@@ -39,6 +40,7 @@ export function LiveBoard({
   canAct: boolean;
 }) {
   const router = useRouter();
+  const { pending, run } = useQuick();
   const [view, setView] = useState<"list" | "map">("list");
 
   useEffect(() => {
@@ -96,9 +98,13 @@ export function LiveBoard({
                 <ConfirmButton
                   label="Cancel"
                   question={`Cancel the ${d.atText} ${d.serviceName}?`}
-                  done={`${d.atText} ${d.serviceName} cancelled`}
-                  destructive
-                  action={() => cancelDepartureAction(w, d.serviceId, d.date, d.planned)}
+                  disabled={pending}
+                  onConfirm={() =>
+                    run(
+                      () => cancelDepartureAction(w, d.serviceId, d.date, d.planned),
+                      `${d.atText} ${d.serviceName} cancelled`,
+                    )
+                  }
                 />
               )}
             </div>
@@ -128,7 +134,7 @@ export function LiveBoard({
           ))}
         </div>
         <div className={`${view === "map" ? "block" : "hidden"} lg:sticky lg:top-4 lg:block lg:self-start`}>
-          <LiveMap spots={spots} paths={paths} vehicles={vehicles} />
+          <AdminMap spots={spots} paths={paths} markers={vehicles} label="Map of vehicles and spots" />
         </div>
       </div>
     </div>
