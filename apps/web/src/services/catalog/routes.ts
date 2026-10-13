@@ -3,7 +3,7 @@ import { type LatLng, type PathSource, RouteCreateFields, RouteUpdateFields, wit
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
-import { routes, spots } from "@/db/schema";
+import { legStats, routes, spots } from "@/db/schema";
 import type { Route } from "@/db/types";
 import {
   type Actor,
@@ -163,12 +163,36 @@ export async function updateRoute(
   });
 }
 
-/** viewer+. Non-archived routes with their learned typical_leg_s. */
-export async function listRoutes(db: Db, actor: Actor, input: { workspaceId: string }): Promise<Route[]> {
+/** typicalLegS[i] null = leg i not learned yet; legSamples[i] = all-day regular-service samples of leg i (0 = none). */
+export type RouteListItem = Omit<Route, "typicalLegS"> & { typicalLegS: (number | null)[]; legSamples: number[] };
+
+/** viewer+. Non-archived routes with their learned typical_leg_s and per-leg sample counts. */
+export async function listRoutes(db: Db, actor: Actor, input: { workspaceId: string }): Promise<RouteListItem[]> {
   readable(actor, input.workspaceId);
-  return db
-    .select()
-    .from(routes)
-    .where(and(inWorkspace(routes, input.workspaceId), isNull(routes.archivedAt)))
-    .orderBy(asc(routes.name));
+  const ws = input.workspaceId;
+  const [rows, stats] = await Promise.all([
+    db
+      .select()
+      .from(routes)
+      .where(and(inWorkspace(routes, ws), isNull(routes.archivedAt)))
+      .orderBy(asc(routes.name)),
+    db
+      .select({ from: legStats.fromSpotId, to: legStats.toSpotId, n: legStats.n })
+      .from(legStats)
+      .where(
+        and(
+          inWorkspace(legStats, ws),
+          eq(legStats.kind, "leg"),
+          isNull(legStats.serviceId),
+          isNull(legStats.hourBucket),
+        ),
+      ),
+  ]);
+  const n = new Map(stats.map((s) => [`${s.from}>${s.to}`, s.n]));
+  return rows.map((r) => ({
+    ...r,
+    // drizzle parses a NULL element of integer[] as NaN (schema types it number[]; learning writes nulls)
+    typicalLegS: r.typicalLegS.map((s) => (Number.isNaN(s) ? null : s)),
+    legSamples: r.spotIds.slice(1).map((to, i) => n.get(`${r.spotIds[i]}>${to}`) ?? 0),
+  }));
 }
