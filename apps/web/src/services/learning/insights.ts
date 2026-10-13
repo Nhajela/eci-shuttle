@@ -1,11 +1,12 @@
 /** learning: admin Insights and MCP shuttle_insights / shuttle_suggestions (SPEC §6a.5–6). viewer+ reads. */
-import { IST_TZ, IsoDate, notImplemented } from "@eci-shuttle/shared";
+import { IST_TZ, IsoDate, istHHMM } from "@eci-shuttle/shared";
 import { and, desc, eq, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { learningExclusions, services, suggestions } from "@/db/schema";
+import { learningExclusions, proposals, services, suggestions } from "@/db/schema";
 import type { LearningExclusion, Suggestion } from "@/db/types";
 import { type Actor, getInWorkspace, mutate, parseInput, readable, requireRole, ServiceError } from "../kernel";
+import { propose } from "../mcp/proposals";
 
 export type Insights = {
   /** % of departures within 3 min, per spot */
@@ -157,15 +158,62 @@ const ListSuggestionsInput = z.object({
 const SuggestionInput = z.object({ workspaceId: z.uuid(), suggestionId: z.uuid() });
 
 /**
- * ops+. Accepting turns the suggestion's proposedChanges into a normal MCP proposal (mcp/proposals.propose) and
- * stores its id; the timetable only changes when someone confirms it. Audited suggestion.accept.
+ * ops+. Accepting turns the suggestion's proposedChanges into a normal MCP proposal (mcp/proposals.propose, bound
+ * to the actor, the suggestion's summary as its reason) and stores its id; the timetable only changes when someone
+ * confirms it. Audited suggestion.accept. Informational suggestions (no proposedChanges) → CONFLICT.
+ *
+ * Expiry: the suggestion stays "accepted" with the proposal id. While that proposal is live, or once it was
+ * confirmed, accepting again → CONFLICT. Once it expired unconfirmed (or the cleanup job deleted it), accepting
+ * again makes a fresh proposal and replaces the id, so an accept that nobody confirmed is never a dead end.
  */
 export async function acceptSuggestion(
   db: Db,
   actor: Actor,
   input: { workspaceId: string; suggestionId: string },
+  now: Date = new Date(),
 ): Promise<{ suggestion: Suggestion; proposalCode: string; summary: string }> {
-  return notImplemented(db, actor, input);
+  const { workspaceId, suggestionId } = parseInput(SuggestionInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return mutate(
+    db,
+    actor,
+    { action: "suggestion.accept", entity: "suggestion", entityId: suggestionId, workspaceId },
+    async (tx) => {
+      const before = await getInWorkspace(tx, suggestions, workspaceId, suggestionId, "suggestion", {
+        forUpdate: true,
+      });
+      if (before.status === "dismissed") throw new ServiceError("CONFLICT", "That suggestion was dismissed.");
+      if (!before.proposedChanges.length)
+        throw new ServiceError("CONFLICT", "That suggestion is information only: there is nothing to propose.");
+      if (before.proposalId) {
+        const [p] = await tx.select().from(proposals).where(eq(proposals.id, before.proposalId));
+        if (p?.confirmedAt) throw new ServiceError("CONFLICT", "That suggestion was already accepted and confirmed.");
+        if (p && p.expiresAt > now)
+          throw new ServiceError(
+            "CONFLICT",
+            `That suggestion is already proposed as ${p.id}, valid until ${istHHMM(p.expiresAt)}.`,
+          );
+      }
+      const proposal = await propose(
+        tx,
+        actor,
+        { workspaceId, changes: before.proposedChanges, reason: before.summary },
+        now,
+      );
+      const [after] = await tx
+        .update(suggestions)
+        .set({
+          status: "accepted",
+          proposalId: proposal.code,
+          decidedAt: now,
+          decidedByPersonId: actorPersonId(actor),
+          updatedAt: now,
+        })
+        .where(eq(suggestions.id, suggestionId))
+        .returning();
+      return { before, after, result: { suggestion: after, proposalCode: proposal.code, summary: proposal.summary } };
+    },
+  );
 }
 
 /** ops+. Audited suggestion.dismiss. */
