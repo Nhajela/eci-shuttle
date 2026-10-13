@@ -38,6 +38,8 @@ export const SNAPSHOT = {
   moreSuggestions: (n: number) => `…and ${n} more.`,
   live: "LIVE: what attendees see",
   test: "test",
+  update: (id: string | null) =>
+    `App update for every phone: ${id ? `${id} (phones may override it; see shuttle_phones)` : "none set"}`,
 } as const;
 const MAX_SUGGESTIONS = 3;
 
@@ -94,7 +96,7 @@ const PARTS: [string, Part][] = [
 ];
 
 async function snapshot(ctx: McpContext, ws: McpWorkspace): Promise<string> {
-  const head = `## ${ws.name} (\`${ws.slug}\`, ${ws.isLive ? SNAPSHOT.live : SNAPSHOT.test}): you are ${ws.role}`;
+  const head = `## ${ws.name} (\`${ws.slug}\`, ${ws.isLive ? SNAPSHOT.live : SNAPSHOT.test}): you are ${ws.role}\n${SNAPSHOT.update(ws.targetUpdateId)}`;
   let actor: Actor;
   try {
     actor = (await ctx.inWorkspace(ws.slug)).actor;

@@ -28,7 +28,7 @@ export const RULES = `## Rules
 5. Attendees never see lateness. When writing notices or explaining the public page, never say "late" or compare planned and expected times.
 6. Workspaces never share data. Pass \`workspace\` (the slug) when the person has more than one; test workspaces are for trying things without touching what attendees see.`;
 
-export const ROLES_TEXT = `Roles: admin can do everything; ops can change the schedule, notices, spots, vehicles, and silence, force active or nudge phones; viewer can only read. Kill, revoke, moving a phone between workspaces, pairing codes and new workspaces are admin only.`;
+export const ROLES_TEXT = `Roles: admin can do everything; ops can change the schedule, notices, spots, vehicles, and silence, force active or nudge phones; viewer can only read. Kill, revoke, moving a phone between workspaces, pairing codes, app updates and new workspaces are admin only.`;
 
 export const NO_WORKSPACES = `You aren't a member of any workspace yet, so there is nothing to show or change. Ask an ECI Shuttle admin to add you in admin → People.`;
 
@@ -62,7 +62,8 @@ export const GUIDES = {
 3. Read the summary and every warning to the person. Only after an explicit yes, call \`shuttle_confirm { code }\`.
 4. Confirm runs all changes in one transaction. If anything changed since the proposal, nothing is applied (STALE_VERSION): read again and propose again. An expired or used code is GONE: propose again.
 5. Put related changes in one proposal (e.g. cancel a departure and post a notice about it), so they land together under one proposal id.
-Updates carry an optional \`version\` (from the read tools): pass it, so a change made meanwhile by someone else isn't overwritten.`,
+Updates carry an optional \`version\` (from the read tools): pass it, so a change made meanwhile by someone else isn't overwritten.
+App updates go out the same way: \`ota.rollout\`, \`ota.rollback\` (whole workspace) and \`ota.phone\` (one phone); see the phones topic.`,
   schedule: `# Schedule
 - A service is a route run on some days between start and end time (IST), with a pattern: every N minutes, explicit departure times, or a continuous loop (no fixed times; shown as "about every N min").
 - Regular services are the daily Riva ↔ Circle loop; special ones are one-offs (a party shuttle). Only public services show to attendees.
@@ -74,7 +75,9 @@ Updates carry an optional \`version\` (from the read tools): pass it, so a chang
 - A phone is paired to a workspace with a pairing code (admin), labelled, and assigned to a vehicle. It tracks only inside its tracking windows and is idle otherwise.
 - silence (until a time): stop tracking until then. force_active (for some hours): track now even outside a window. nudge: ask the phone to sync now. These are ops.
 - kill: stop the phone's tracking until the driver presses Resume in the app. revoke: wipe its token (lost phone, driver left); it needs pairing again. move_workspace: moves it and clears its assignments. These are admin only, and a phone in a live vehicle right now gets a warning.
-- Health: last sync, battery, permissions, the mode it reports versus the mode it was told.`,
+- Health: last sync, battery, permissions, the mode it reports versus the mode it was told.
+- App updates (over the air, admin only): \`ota.rollout { updateId }\` tells every phone in the workspace to run that update (null stops targeting; phones keep what they run). \`ota.rollback\` targets the update from before the last rollout again. \`ota.phone { deviceId, updateId }\` overrides one phone (null = follow the workspace again) and pushes it. \`shuttle_phones\` shows the workspace target, each phone's running update and override, "update failed" and "needs new APK".
+- A phone downloads the update in the background and applies it only while idle, never during a tracking window. An update built for a newer native runtime is ignored by phones on an older APK; they show "needs new APK" until the driver installs it. Try an update on the test workspace's phones first.`,
   notices: `# Notices
 - One notice, written once, placed in one or more places: everywhere (top of the public page), spot:<id> (when that spot is picked), service:<id> (that service's lines), schedule (above the timetable), admin (notes between ops).
 - Severity info, heads_up or urgent; urgent always comes first. Pinned notices stay on top in sort order until they end.

@@ -166,6 +166,16 @@ export const PhoneRevokeFields = z.object({ deviceId: Id });
 export const PhoneMoveWorkspaceFields = z.object({ deviceId: Id, toWorkspaceId: Id });
 export const PairingCodeCreateFields = z.object({ label: name.nullable().default(null) });
 
+// ---------- OTA app updates (SPEC §5) ----------
+/** an expo-updates update id */
+const UpdateId = z.string().trim().min(1).max(100);
+/** the workspace target; null = stop targeting (phones keep what they run) */
+export const OtaRolloutFields = z.object({ updateId: UpdateId.nullable() });
+/** target the update from before the last rollout again */
+export const OtaRollbackFields = z.object({});
+/** per-phone override; null = follow the workspace target again */
+export const OtaPhoneFields = z.object({ deviceId: Id, updateId: UpdateId.nullable() });
+
 // ---------- notices ----------
 export const NoticeCreateFields = z.object({
   text: z.string().trim().min(1).max(1000),
