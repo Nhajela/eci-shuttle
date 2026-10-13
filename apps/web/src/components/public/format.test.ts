@@ -21,6 +21,22 @@ const line = (over: Partial<AnswerLine> = {}): AnswerLine => ({
 });
 
 describe("answerParts", () => {
+  it("every shuttle on a break: when it's back if known, else 'On a short break'", () => {
+    const base = { kind: "timetable" as const, minutes: null, rangeLo: null, rangeHi: null, lastSeenS: null };
+    const back = line({
+      ...base,
+      nextAt: "2026-10-13T08:20:00.000Z",
+      nextAtLabel: "13:50",
+      phaseText: "on a short break",
+    });
+    expect(answerParts(back, true)).toEqual({ label: "Shuttle back around", value: "13:50", range: null });
+    expect(answerParts(back, false).label).toBe("To Circle");
+    expect(contextText(back, 0)).toBe("on a short break");
+    const open = line({ ...base, phaseText: "on a short break" });
+    expect(answerParts(open, true)).toEqual({ label: "Shuttle", value: "On a short break", range: null, small: true });
+    expect(contextText(open, 0)).toBe("");
+  });
+
   it("a loop service inside its hours reads 'Running now', never 'No more today'", () => {
     const loop = line({
       kind: "timetable",

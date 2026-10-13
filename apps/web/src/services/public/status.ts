@@ -39,6 +39,7 @@ import {
   workspaces,
 } from "@/db/schema";
 import type { LegStat, Notice, Route, Service, Spot, VehicleState } from "@/db/types";
+import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { activeNotices } from "../notices/notices";
 
@@ -48,6 +49,8 @@ const MIN_SAMPLES = 5;
 const BASELINE_MPS = 25 / 3.6;
 const BASELINE_DWELL_S = 180;
 const DAY = 86_400_000;
+/** A loop whose every shuttle is on a driver's break (never says why it is late: there is no "late"). */
+export const ON_BREAK = "on a short break";
 
 const addDays = (date: string, n: number) => istDate(istToEpoch(date, "00:00") + n * DAY);
 const weekday = (date: string) => ((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7) + 1;
@@ -266,6 +269,8 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
           times,
           everyMin,
           live.byService.get(svcId) ?? [],
+          // only when no shuttle on it is left working
+          live.assigned.get(svcId) ? null : (live.breaks.get(svcId) ?? null),
           typical,
           placed(`service:${svcId}`),
           nowMs,
@@ -324,9 +329,12 @@ type Live = { vehicle: { id: string; name: string }; state: VehicleState; stoppe
 async function liveVehicles(db: Db, workspaceId: string, running: Running[], nowMs: number) {
   const byService = new Map<string, Live[]>();
   const assigned = new Map<string, number>();
+  /** per service, the end of each of its vehicles' breaks (null = open-ended) */
+  const breaks = new Map<string, (number | null)[]>();
   const ids = running.map((r) => r.svc.id);
-  if (!ids.length) return { byService, assigned };
+  if (!ids.length) return { byService, assigned, breaks };
   const now = new Date(nowMs);
+  const onBreak = await activeBreaks(db, workspaceId, now);
   const rows = await db
     .select({ serviceId: serviceVehicles.serviceId, vehicle: vehicles, state: vehicleState })
     .from(serviceVehicles)
@@ -345,6 +353,12 @@ async function liveVehicles(db: Db, workspaceId: string, running: Running[], now
     const s = r.state;
     // a vehicle answers only for the service ingest resolved it to (SPEC §3: a party run drops out of the line)
     if (s?.serviceId && s.serviceId !== r.serviceId) continue;
+    // on a driver's break: not live and not counted, until the break ends
+    const brk = onBreak.get(r.vehicle.id);
+    if (brk) {
+      breaks.set(r.serviceId, [...(breaks.get(r.serviceId) ?? []), breakEnd(brk)?.getTime() ?? null]);
+      continue;
+    }
     assigned.set(r.serviceId, (assigned.get(r.serviceId) ?? 0) + 1);
     const fresh = s?.lastPingAt && nowMs - s.lastPingAt.getTime() <= STALE_MS;
     if (!s || !fresh || s.serviceId !== r.serviceId || (s.phase !== "at_spot" && s.phase !== "en_route")) continue;
@@ -356,7 +370,7 @@ async function liveVehicles(db: Db, workspaceId: string, running: Running[], now
     });
     byService.set(r.serviceId, list);
   }
-  return { byService, assigned };
+  return { byService, assigned, breaks };
 }
 
 /** En route but not moving: ≥ 3 pings in the last 3 min, spanning ≥ 2 min, all at walking pace or less. */
@@ -410,6 +424,8 @@ function answerFor(
   times: number[],
   everyMin: number | null,
   live: Live[],
+  /** set only when every vehicle on the service is on a break: when each break ends (null = open-ended) */
+  breaks: (number | null)[] | null,
   typical: Map<string, number>,
   serviceNotices: Notice[],
   nowMs: number,
@@ -505,6 +521,18 @@ function answerFor(
         nextAtLabel: istHHMM(start),
         phaseText: "first shuttle today",
       };
+    // every shuttle on this loop is on a break: back when the first break ends, if that's known
+    if (nowMs < end && breaks?.length) {
+      const ends = breaks.filter((e): e is number => e !== null && e < end);
+      const back = ends.length ? Math.min(...ends) : null;
+      return {
+        ...base,
+        kind: "timetable",
+        nextAt: back === null ? null : iso(back),
+        nextAtLabel: back === null ? null : istHHMM(back),
+        phaseText: ON_BREAK,
+      };
+    }
     if (nowMs < end)
       return { ...base, kind: "timetable", phaseText: `about every ${everyMin} min · live tracking off` };
     return base;

@@ -175,6 +175,15 @@ export const VehicleUpdateFields = z.object({
   active: z.boolean().optional(),
 });
 
+/** A driver's break from now: `minutes` long, or until ended by hand (null). On a break already: replaces its end. */
+export const VehicleBreakFields = z.object({
+  vehicleId: Id,
+  minutes: z.number().int().min(1).max(240).nullable().default(null),
+  note: z.string().trim().max(200).nullable().default(null),
+});
+/** End the vehicle's current break now. */
+export const VehicleBreakEndFields = z.object({ vehicleId: Id });
+
 // ---------- phones (devices) ----------
 export const PhoneLabelFields = z.object({ deviceId: Id, label: name });
 /** vehicleId null = unassign. Closes the open assignment and opens a new one. */

@@ -289,6 +289,29 @@ export const serviceVehicles = pgTable(
   ],
 );
 
+/**
+ * A driver's break: the vehicle stays on its service and its phone keeps tracking, but it gives no ETA,
+ * doesn't count toward "how many shuttles run" and raises no silent / off-route alert. `endsAt` null = until
+ * ended by hand; `endedAt` = ended by hand (early or open-ended).
+ */
+export const vehicleBreaks = pgTable(
+  "vehicle_breaks",
+  {
+    id: id(),
+    workspaceId: workspaceId(),
+    vehicleId: uuid("vehicle_id")
+      .notNull()
+      .references(() => vehicles.id, { onDelete: "cascade" }),
+    startsAt: ts("starts_at").notNull(),
+    endsAt: ts("ends_at"),
+    endedAt: ts("ended_at"),
+    note: text("note"),
+    version: version(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("vehicle_breaks_vehicle").on(t.vehicleId, t.startsAt)],
+);
+
 // ============================================================ notices (§6b)
 
 export const notices = pgTable(

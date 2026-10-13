@@ -22,6 +22,13 @@
       "when": 1791866849290,
       "tag": "0002_ops_hours",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791870075804,
+      "tag": "0003_vehicle_breaks",
+      "breakpoints": true
     }
   ]
 }

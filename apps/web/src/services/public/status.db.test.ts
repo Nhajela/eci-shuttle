@@ -19,6 +19,7 @@ import {
   services,
   serviceVehicles,
   spots,
+  vehicleBreaks,
   vehicleState,
   vehicles,
 } from "@/db/schema";
@@ -567,6 +568,77 @@ describe("publicStatus: notices and schedule", () => {
     const input = etaToSpot.mock.calls[0][0] as EtaInput;
     expect(input.dwells[riva.id]?.medianS).toBe(300);
     expect(input.dwells[circle.id]?.medianS).toBe(120);
+  });
+});
+
+describe("publicStatus: driver breaks", () => {
+  const onBreak = (ws: string, vehicleId: string, endsAt: Date | null) =>
+    db()
+      .insert(vehicleBreaks)
+      .values({ workspaceId: ws, vehicleId, startsAt: at("09:20"), endsAt });
+  async function loop(w: string, routeId: string) {
+    const [svc] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w,
+        name: "Shuttle",
+        kind: "regular",
+        routeId,
+        validFrom: "2026-10-01",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "08:30",
+        endTime: "19:00",
+        pattern: { kind: "loop" },
+      })
+      .returning();
+    return svc;
+  }
+
+  it("a vehicle on a break gives no answer: here now comes from the other one", async () => {
+    const { w, riva, svc } = await world();
+    const b1 = await bus(w.id, svc.id, "Bus 1", { phase: "at_spot", spotId: riva.id, since: at("09:20") });
+    await onBreak(w.id, b1.id, at("09:45"));
+    const a = (await answerAt(w.id, riva.id))?.answers[0];
+    expect(a).toMatchObject({ kind: "timetable", vehicleName: null });
+    await bus(w.id, svc.id, "Bus 2", { phase: "at_spot", spotId: riva.id, since: at("09:25") });
+    expect((await answerAt(w.id, riva.id))?.answers[0]).toMatchObject({ kind: "live", vehicleName: "Bus 2" });
+    // ended by hand: Bus 1 (at Riva since earlier) answers again
+    await db()
+      .update(vehicleBreaks)
+      .set({ endedAt: at("09:29") })
+      .where(eq(vehicleBreaks.vehicleId, b1.id));
+    const all = PublicStatus.parse(await publicStatus(db(), w.id, NOW));
+    expect(all.spots.find((x) => x.spotId === riva.id)?.answers[0]).toMatchObject({ kind: "live", minutes: 0 });
+  });
+
+  it("a loop with every shuttle on a break says so, with when it's back if known", async () => {
+    const { w, riva, route } = await world();
+    const svc = await loop(w.id, route.id);
+    const b1 = await bus(w.id, svc.id, "Bus 1", { phase: "at_spot", spotId: riva.id, since: at("09:20") });
+    await onBreak(w.id, b1.id, at("09:50"));
+    const line = (await answerAt(w.id, riva.id))?.answers.find((a) => a.serviceId === svc.id);
+    expect(line).toMatchObject({
+      kind: "timetable",
+      nextAt: at("09:50").toISOString(),
+      nextAtLabel: "09:50",
+      phaseText: "on a short break",
+    });
+  });
+
+  it("an open-ended break has no back time; one of two on a break halves nothing", async () => {
+    const { w, riva, route } = await world();
+    const svc = await loop(w.id, route.id);
+    const b1 = await bus(w.id, svc.id, "Bus 1", { phase: "offline" });
+    const b2 = await bus(w.id, svc.id, "Bus 2", { phase: "offline" });
+    await onBreak(w.id, b1.id, null);
+    // lap 36 min shared by the one shuttle still running
+    expect((await answerAt(w.id, riva.id))?.schedule.loops).toEqual([
+      { serviceId: svc.id, serviceName: "Shuttle", everyMin: 36 },
+    ]);
+    await onBreak(w.id, b2.id, null);
+    const line = (await answerAt(w.id, riva.id))?.answers.find((a) => a.serviceId === svc.id);
+    expect(line).toMatchObject({ kind: "timetable", nextAt: null, phaseText: "on a short break" });
   });
 });
 

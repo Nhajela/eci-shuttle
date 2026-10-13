@@ -5,6 +5,7 @@ import { LiveBoard } from "@/components/admin/live/live-board";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { detectProblems } from "@/services/alerts/watchdog";
+import { activeBreaks } from "@/services/catalog/breaks";
 import { listRoutes } from "@/services/catalog/routes";
 import { getSchedule } from "@/services/catalog/schedule";
 import { listSpots } from "@/services/catalog/spots";
@@ -23,7 +24,7 @@ export default async function LivePage({ searchParams }: { searchParams: Promise
   const now = new Date();
   const d = db();
   const workspaceId = workspace.id;
-  const [vehicles, states, phones, problems, schedule, spots, routes, notices] = await Promise.all([
+  const [vehicles, states, phones, problems, schedule, spots, routes, notices, breaks] = await Promise.all([
     listVehicles(d, actor, { workspaceId }),
     vehicleStates(d, workspaceId),
     listPhones(d, actor, { workspaceId }, now),
@@ -33,8 +34,9 @@ export default async function LivePage({ searchParams }: { searchParams: Promise
     listSpots(d, actor, { workspaceId }),
     listRoutes(d, actor, { workspaceId }),
     activeNotices(d, workspaceId, now, ["admin"]),
+    activeBreaks(d, workspaceId, now),
   ]);
-  const board = buildBoard({ vehicles, states, phones, problems, schedule, spots }, now.getTime());
+  const board = buildBoard({ vehicles, states, phones, problems, breaks, schedule, spots }, now.getTime());
 
   return (
     <LiveBoard

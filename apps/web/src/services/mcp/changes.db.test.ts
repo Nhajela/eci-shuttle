@@ -524,8 +524,24 @@ describe("applyChange", () => {
 describe("liveBoard", () => {
   it("lists every vehicle with its live state for a viewer", async () => {
     const s = await setup("viewer");
-    const board = await liveBoard(db(), s.actor, { workspaceId: s.ws.id });
-    expect(board).toEqual([{ vehicle: expect.objectContaining({ id: s.bus.id }), state: null }]);
+    const board = await liveBoard(db(), s.actor, { workspaceId: s.ws.id }, NOW);
+    expect(board).toEqual([{ vehicle: expect.objectContaining({ id: s.bus.id }), state: null, onBreakUntil: null }]);
+  });
+
+  it("vehicle.break / vehicle.break_end: described, applied at now, shown as onBreakUntil", async () => {
+    const s = await setup("ops");
+    const brk = { kind: "vehicle.break" as const, vehicleId: s.bus.id, minutes: 20, note: "chai" };
+    expect(await describeChange(db(), s.ws.id, brk)).toBe(
+      "Bus 1's driver is on a break from now for 20 min (chai): no ETA for attendees and no silent or off-route alerts meanwhile",
+    );
+    expect(versionKeys(brk)).toEqual([]);
+    await applyChange(db(), s.actor, s.ws.id, brk, NOW);
+    const [row] = await liveBoard(db(), s.actor, { workspaceId: s.ws.id }, NOW);
+    expect(row.onBreakUntil).toBe("10:40");
+    const end = { kind: "vehicle.break_end" as const, vehicleId: s.bus.id };
+    expect(await describeChange(db(), s.ws.id, end)).toBe("End Bus 1's break now: back in service");
+    await applyChange(db(), s.actor, s.ws.id, end, NOW);
+    expect((await liveBoard(db(), s.actor, { workspaceId: s.ws.id }, NOW))[0].onBreakUntil).toBeNull();
   });
 
   it("shows an off-duty vehicle's last position kept in ops hours (ingest drops it outside them)", async () => {
@@ -542,14 +558,14 @@ describe("liveBoard", () => {
         alongM: 5,
         geofence: gf as never,
       });
-    const [{ state }] = await liveBoard(db(), s.actor, { workspaceId: s.ws.id });
+    const [{ state }] = await liveBoard(db(), s.actor, { workspaceId: s.ws.id }, NOW);
     expect(state).toMatchObject({ phase: "off_duty", lat: 15.6, lng: 73.7, geofence: gf });
   });
 
   it("FORBIDDEN outside the actor's workspace", async () => {
     const a = await setup("viewer");
     const b = await setup();
-    await expectCode(liveBoard(db(), a.actor, { workspaceId: b.ws.id }), "FORBIDDEN");
+    await expectCode(liveBoard(db(), a.actor, { workspaceId: b.ws.id }, NOW), "FORBIDDEN");
   });
 });
 

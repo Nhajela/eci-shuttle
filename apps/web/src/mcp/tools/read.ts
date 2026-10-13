@@ -112,7 +112,7 @@ export const READ_TOOLS = [
   tool("shuttle_status", z.object(ws), async ({ db, actor, workspace, now }) => ({
     workspace: { slug: workspace.slug, name: workspace.name, isLive: workspace.isLive },
     now,
-    vehicles: await liveBoard(db, actor, { workspaceId: workspace.id }),
+    vehicles: await liveBoard(db, actor, { workspaceId: workspace.id }, now),
   })),
 
   tool(

@@ -8,6 +8,7 @@ import type { Db } from "@/db";
 import { deviceAssignments, devices, outbox, vehicleState, vehicles, workspaces } from "@/db/schema";
 import { escapeHtml } from "@/lib/telegram/html";
 import { encodeCallback } from "@/services/bot/callbacks";
+import { activeBreaks } from "@/services/catalog/breaks";
 import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { desiredConfig } from "@/services/devices/config";
 import { isOutsideApp } from "@/services/devices/phones";
@@ -58,6 +59,8 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     .where(and(eq(devices.workspaceId, workspaceId), isNull(devices.revokedAt)))
     .orderBy(devices.createdAt);
 
+  // a driver on a break may park anywhere and switch the phone off: not silent, not off route
+  const onBreak = await activeBreaks(db, workspaceId, now);
   const problems: Problem[] = [];
   for (const { device: d, vehicle: v, state: s } of rows) {
     const add = (kind: Problem["kind"], since: Date, message: string, onVehicle = false) =>
@@ -90,11 +93,12 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     const duty = resolveMode(config && { ...config, schedule: dutyWindows(config.schedule) }, t);
     const dutyStart = duty.window ? new Date(duty.window.startsAt) : null;
 
-    if (v && duty.mode === "active" && dutyStart) {
+    const resting = v !== null && onBreak.has(v.id);
+    if (v && !resting && duty.mode === "active" && dutyStart) {
       const last = s?.lastPingAt && s.lastPingAt > dutyStart ? s.lastPingAt : dutyStart;
       if (t - last.getTime() > SILENT_AFTER_MS) add("silent", last, `${v.name} has been silent`, true);
     }
-    if (v && s?.offRoute && s.phase !== "off_duty")
+    if (v && !resting && s?.offRoute && s.phase !== "off_duty")
       add("off_route", s.offRouteSince ?? s.since, `${v.name} is off its route`, true);
 
     if (d.battery !== null && d.battery < LOW_BATTERY_PCT && d.charging !== true)

@@ -31,6 +31,7 @@ import {
 } from "@/db/schema";
 import type { Vehicle, VehicleState } from "@/db/types";
 import { adminActor } from "../auth/actor";
+import { activeBreaks, breakEnd, endBreak, startBreak } from "../catalog/breaks";
 import { createRoute, updateRoute } from "../catalog/routes";
 import {
   addException,
@@ -72,6 +73,8 @@ export const CHANGE_ROLE: Record<McpChangeKind, Role> = {
   "service_vehicle.unassign": "ops",
   "vehicle.create": "ops",
   "vehicle.update": "ops",
+  "vehicle.break": "ops",
+  "vehicle.break_end": "ops",
   "phone.label": "ops",
   "phone.assign": "ops",
   "phone.silence": "ops",
@@ -321,6 +324,13 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
         capacity: (v: number | null) => (v === null ? "clear seats" : `${v} seats`),
         active: (v: boolean) => (v ? "back in service" : "out of service"),
       })}`;
+    case "vehicle.break": {
+      const v = await get(db, ws, "vehicle", c.vehicleId);
+      const until = c.minutes === null ? "until ended by hand" : `for ${c.minutes} min`;
+      return `${v.name}'s driver is on a break from now ${until}${c.note ? ` (${c.note})` : ""}: no ETA for attendees and no silent or off-route alerts meanwhile`;
+    }
+    case "vehicle.break_end":
+      return `End ${(await get(db, ws, "vehicle", c.vehicleId)).name}'s break now: back in service`;
     case "phone.label":
       return `Rename ${(await phone(db, ws, c.deviceId)).name} to '${c.label}'`;
     case "phone.assign": {
@@ -585,6 +595,10 @@ export async function applyChange(
       return createVehicle(db, actor, input(c, ws));
     case "vehicle.update":
       return updateVehicle(db, actor, input(c, ws));
+    case "vehicle.break":
+      return startBreak(db, actor, input(c, ws), now);
+    case "vehicle.break_end":
+      return endBreak(db, actor, input(c, ws), now);
     case "phone.label":
       return labelPhone(db, actor, input(c, ws));
     case "phone.assign":
@@ -633,10 +647,21 @@ export async function liveBoard(
   db: Db,
   actor: Actor,
   input: { workspaceId: string },
-): Promise<{ vehicle: Vehicle; state: VehicleState | null }[]> {
+  now: Date,
+): Promise<{ vehicle: Vehicle; state: VehicleState | null; onBreakUntil: string | null }[]> {
   // listVehicles checks the viewer role before vehicleStates (which takes no actor) is read
   const list = await listVehicles(db, actor, input);
   const states = await vehicleStates(db, input.workspaceId);
+  const breaks = await activeBreaks(db, input.workspaceId, now);
   // an off-duty vehicle keeps a position only inside ops hours (ingest/refreshPhases drop it outside them)
-  return list.map((vehicle) => ({ vehicle, state: states.find((x) => x.vehicleId === vehicle.id) ?? null }));
+  return list.map((vehicle) => {
+    const b = breaks.get(vehicle.id);
+    const end = b && breakEnd(b);
+    return {
+      vehicle,
+      state: states.find((x) => x.vehicleId === vehicle.id) ?? null,
+      // driver's break: "13:20" IST, "until ended" when open-ended, null when working
+      onBreakUntil: b ? (end ? istHHMM(end) : "until ended") : null,
+    };
+  });
 }

@@ -1,6 +1,6 @@
 import { istToEpoch } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
-import type { Device, Directive, Service, Spot, Vehicle, VehicleState } from "@/db/types";
+import type { Device, Directive, Service, Spot, Vehicle, VehicleBreak, VehicleState } from "@/db/types";
 import type { Problem } from "@/services/alerts/watchdog";
 import type { PhoneHealth } from "@/services/devices/phones";
 import { agoText, type BoardInput, buildBoard } from "./board";
@@ -57,6 +57,7 @@ const base = (over: Partial<BoardInput> = {}): BoardInput => ({
   states: [],
   phones: [],
   problems: [],
+  breaks: new Map(),
   schedule: [],
   spots: [spot("riva", "Riva"), spot("circle", "Circle")],
   ...over,
@@ -311,5 +312,36 @@ describe("buildBoard", () => {
       NOW,
     );
     expect(out.nextDepartures[0]).toMatchObject({ planned: "09:40", atText: "09:50" });
+  });
+});
+
+describe("buildBoard: driver breaks", () => {
+  const brk = (vehicleId: string, endsAt: Date | null): VehicleBreak =>
+    ({
+      id: "b1",
+      vehicleId,
+      workspaceId: WS,
+      startsAt: new Date(NOW - 300_000),
+      endsAt,
+      endedAt: null,
+    }) as VehicleBreak;
+  it("says who is on a break and until when", () => {
+    const v1 = vehicle("v1", "Shuttle 1");
+    const v2 = vehicle("v2", "Shuttle 2");
+    const v3 = vehicle("v3", "Shuttle 3");
+    const board = buildBoard(
+      base({
+        vehicles: [v1, v2, v3],
+        breaks: new Map([
+          ["v1", brk("v1", new Date(istToEpoch("2026-10-12", "09:50")))],
+          ["v2", brk("v2", null)],
+        ]),
+      }),
+      NOW,
+    );
+    const by = (id: string) => board.cards.find((c) => c.vehicleId === id);
+    expect(by("v1")).toMatchObject({ onBreak: true, breakText: "On break till 09:50" });
+    expect(by("v2")).toMatchObject({ onBreak: true, breakText: "On break" });
+    expect(by("v3")).toMatchObject({ onBreak: false, breakText: null });
   });
 });
