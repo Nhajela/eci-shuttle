@@ -139,7 +139,8 @@ export async function runSim(o: {
         deps.log(`${istHHMM(now)} IST sync failed (${(e as Error).message}); keeping ${queue.length} ping(s).`);
       }
     }
-    await deps.sleep((m.intervalS ?? config.activeIntervalS) * 1000);
+    // re-resolve: the sync may have just brought a new schedule (e.g. paired idle, then assigned a vehicle)
+    await deps.sleep((modeAt(config, now).intervalS ?? config.activeIntervalS) * 1000);
   }
 }
 

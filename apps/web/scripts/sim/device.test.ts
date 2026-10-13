@@ -197,7 +197,6 @@ describe("runSim", () => {
   });
 
   it("uses the active window's interval, and switches mode when the schedule does", async () => {
-    let n = 0;
     const h = harness((c) => {
       if (c === 3) h.ctrl.abort();
       return json(config());
@@ -211,7 +210,7 @@ describe("runSim", () => {
       deps: h.deps,
       signal: h.ctrl.signal,
       // first loop idle (heartbeat), then an active window pinging every 5 s
-      mode: () => (n++ === 0 ? mode("idle", 30)() : mode("active", 5)()),
+      mode: (_c, t) => (t === T0 ? mode("idle", 30)() : mode("active", 5)()),
     });
     const [first, second, third] = h.bodies();
     expect(first).toMatchObject({ reportedMode: "idle", pings: [] });
@@ -219,5 +218,27 @@ describe("runSim", () => {
     expect(second.reportedMode).toBe("active");
     expect(second.pings.map((p) => p.recordedAt - T0)).toEqual([30_000]);
     expect(third.pings.map((p) => p.recordedAt - T0)).toEqual([35_000, 40_000, 45_000]);
+  });
+
+  it("sleeps by the config the sync just returned, so pairing idle then getting a vehicle goes active at once", async () => {
+    const h = harness((n) => {
+      if (n === 2) h.ctrl.abort();
+      return json(config({ configVersion: 4 }));
+    });
+    await realRunSim({
+      origin: "http://x",
+      token: "t",
+      config: config(),
+      plan,
+      speed: 1,
+      deps: h.deps,
+      signal: h.ctrl.signal,
+      // paired before the vehicle was assigned (v3: idle 900 s); the first sync brings v4: active every 10 s
+      mode: (c) => (c.configVersion === 3 ? mode("idle", 900)() : mode("active", 10)()),
+    });
+    const [first, second] = h.bodies();
+    expect(first.reportedMode).toBe("idle");
+    expect(second.reportedMode).toBe("active");
+    expect(second.clock - first.clock).toBeLessThanOrEqual(15_000 + 10_000);
   });
 });
