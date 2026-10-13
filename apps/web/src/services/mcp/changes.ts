@@ -42,6 +42,7 @@ import {
 import { archiveSpot, createSpot, updateSpot } from "../catalog/spots";
 import { createVehicle, listVehicles, updateVehicle } from "../catalog/vehicles";
 import { createWorkspace } from "../catalog/workspaces";
+import { rollbackUpdate, rolloutUpdate, setPhoneUpdate } from "../devices/ota";
 import { createPairingCode } from "../devices/pairing";
 import {
   assignPhone,
@@ -83,6 +84,9 @@ export const CHANGE_ROLE: Record<McpChangeKind, Role> = {
   "notice.create": "ops",
   "notice.end": "ops",
   "workspace.create": "admin",
+  "ota.rollout": "admin",
+  "ota.rollback": "admin",
+  "ota.phone": "admin",
 };
 
 /** Versioned tables a key can name, with the word used in NOT_FOUND messages. */
@@ -98,8 +102,8 @@ const VERSIONED = {
 
 /**
  * Pure. The "<entity>:<id>" keys whose versions a change depends on, e.g. spot.update → ["spot:<spotId>"],
- * service.exception / service_vehicle.assign → ["service:<serviceId>"], phone.* → ["device:<deviceId>"].
- * Creates (and pairing_code.create, workspace.create) → [].
+ * service.exception / service_vehicle.assign → ["service:<serviceId>"], phone.* / ota.phone → ["device:<deviceId>"].
+ * Creates (and pairing_code.create, workspace.create, ota.rollout, ota.rollback) → [].
  */
 export function versionKeys(change: McpChange): string[] {
   const c = change;
@@ -196,6 +200,15 @@ async function phoneVehicle(db: Db, deviceId: string): Promise<Vehicle | null> {
     .limit(1);
   return row?.vehicle ?? null;
 }
+
+async function workspaceName(db: Db, ws: string): Promise<string> {
+  const [w] = await db.select({ name: workspaces.name }).from(workspaces).where(eq(workspaces.id, ws));
+  if (!w) throw new ServiceError("NOT_FOUND", "No such workspace.", { entity: "workspace", id: ws });
+  return w.name;
+}
+
+/** "app update 01a13327…": the first 8 characters are enough to tell update ids apart. */
+const updateRef = (id: string) => `app update ${id.slice(0, 8)}…`;
 
 async function phone(db: Db, ws: string, deviceId: string) {
   const d = await get(db, ws, "device", deviceId);
@@ -330,6 +343,20 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
       return `End notice "${(await get(db, ws, "notice", c.noticeId)).text}"`;
     case "workspace.create":
       return `Create workspace '${c.name}' (${c.slug})`;
+    case "ota.rollout": {
+      const name = await workspaceName(db, ws);
+      return c.updateId
+        ? `Roll out ${updateRef(c.updateId)} to every phone in ${name}`
+        : `Stop rolling out app updates in ${name}: phones keep the update they run`;
+    }
+    case "ota.rollback":
+      return `Roll every phone in ${await workspaceName(db, ws)} back to the app update before the last rollout`;
+    case "ota.phone": {
+      const p = await phone(db, ws, c.deviceId);
+      return c.updateId
+        ? `Update ${p.full} to ${updateRef(c.updateId)}`
+        : `Put ${p.full} back on ${await workspaceName(db, ws)}'s app update`;
+    }
   }
 }
 
@@ -404,6 +431,25 @@ async function gapWarning(
 const NO_GROUP =
   "This workspace has no Telegram group yet, so nothing is posted to a group. An admin can send /setgroup in the group.";
 
+const OTA_IDLE =
+  "Phones download an app update in the background and apply it only while idle, never during a tracking window, so each phone switches at its next idle time.";
+const OTA_NATIVE =
+  'An update built for a newer native runtime is ignored by phones on an older APK; they show "needs new APK" until the driver installs it.';
+
+/** How many unrevoked phones follow the workspace target, and how many have their own override. */
+async function otaReach(db: Db, ws: string): Promise<string> {
+  const rows = await db
+    .select({ own: devices.targetUpdateId })
+    .from(devices)
+    .where(and(inWorkspace(devices, ws), isNull(devices.revokedAt)));
+  const follow = rows.filter((r) => r.own === null).length;
+  const own = rows.length - follow;
+  return (
+    `${follow} phone${follow === 1 ? " in this workspace follows" : "s in this workspace follow"} the workspace update` +
+    `${own ? ` (${own} more ${own === 1 ? "has its" : "have their"} own)` : ""}.`
+  );
+}
+
 async function oneWarning(db: Db, ws: string, c: McpChange, now: Date): Promise<string | null> {
   switch (c.kind) {
     case "service.exception":
@@ -440,6 +486,12 @@ async function oneWarning(db: Db, ws: string, c: McpChange, now: Date): Promise<
       const svc = await runningNow(db, v.id, now);
       return svc ? `${v.name} is running '${svc}' right now.` : null;
     }
+    case "ota.rollout":
+    case "ota.rollback":
+      if (c.kind === "ota.rollout" && !c.updateId) return null;
+      return `${OTA_IDLE} ${await otaReach(db, ws)} ${OTA_NATIVE}`;
+    case "ota.phone":
+      return c.updateId ? `${OTA_IDLE} ${OTA_NATIVE}` : null;
     default:
       return null;
   }
@@ -467,7 +519,7 @@ const input = <C extends McpChange>({ kind: _, ...fields }: C, workspaceId: stri
  * Run one change with `actor` (it carries proposalId and reason into the audit row) through its service:
  * spot.* → catalog/spots, route.* → catalog/routes, service.* / service_vehicle.* → catalog/schedule,
  * vehicle.* → catalog/vehicles, phone.* → devices/phones, pairing_code.create → devices/pairing,
- * notice.* → notices, workspace.create → catalog/workspaces. Returns the service's result.
+ * notice.* → notices, workspace.create → catalog/workspaces, ota.* → devices/ota. Returns the service's result.
  */
 export async function applyChange(
   db: Db,
@@ -531,6 +583,12 @@ export async function applyChange(
       return endNotice(db, actor, input(c, ws));
     case "workspace.create":
       return createWorkspace(db, actor, { slug: c.slug, name: c.name });
+    case "ota.rollout":
+      return rolloutUpdate(db, actor, input(c, ws));
+    case "ota.rollback":
+      return rollbackUpdate(db, actor, input(c, ws));
+    case "ota.phone":
+      return setPhoneUpdate(db, actor, input(c, ws));
   }
 }
 

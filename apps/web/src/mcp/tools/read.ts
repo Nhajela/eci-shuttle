@@ -32,7 +32,7 @@ export const READ_TEXT = {
   shuttle_routes: "Routes: their ordered spot ids and learned typical leg times. The path polyline is left out.",
   shuttle_vehicles: "Vehicles of the workspace, active first.",
   shuttle_phones:
-    "Driver phone health: desired vs reported mode, config behind, last sync, app version, permissions, active silence / force-active directives.",
+    "Driver phone health: desired vs reported mode, config behind, last sync, app version, running update (device.updateId) and per-phone override (device.targetUpdateId, null = follows the workspace), update failed / needs new APK, permissions, active silence / force-active directives. workspaceTargetUpdateId is the app update every phone in the workspace is told to run (null = none).",
   shuttle_activity:
     "The audit log, newest first: who changed what, from where. Filter by entity (+ entityId for one object's timeline), actorId, proposalId (everything one confirm did) or since. Page with before = nextBefore.",
   shuttle_public_answer:
@@ -146,9 +146,10 @@ export const READ_TOOLS = [
     listVehicles(db, actor, { workspaceId: workspace.id }),
   ),
 
-  tool("shuttle_phones", z.object(ws), ({ db, actor, workspace, now }) =>
-    listPhones(db, actor, { workspaceId: workspace.id }, now),
-  ),
+  tool("shuttle_phones", z.object(ws), async ({ db, actor, workspace, now }) => ({
+    workspaceTargetUpdateId: workspace.targetUpdateId,
+    phones: await listPhones(db, actor, { workspaceId: workspace.id }, now),
+  })),
 
   tool(
     "shuttle_activity",

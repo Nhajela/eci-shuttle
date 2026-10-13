@@ -8,6 +8,9 @@ import {
   checkException,
   NoticeCreateFields,
   NoticeEndFields,
+  OtaPhoneFields,
+  OtaRollbackFields,
+  OtaRolloutFields,
   PairingCodeCreateFields,
   PhoneAssignFields,
   PhoneForceActiveFields,
@@ -64,6 +67,9 @@ export const McpChange = z.discriminatedUnion("kind", [
   change("notice.create", NoticeCreateFields),
   change("notice.end", NoticeEndFields),
   change("workspace.create", WorkspaceCreateFields),
+  change("ota.rollout", OtaRolloutFields),
+  change("ota.rollback", OtaRollbackFields),
+  change("ota.phone", OtaPhoneFields),
 ]);
 export type McpChange = z.infer<typeof McpChange>;
 export type McpChangeKind = McpChange["kind"];

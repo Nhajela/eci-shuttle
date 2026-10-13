@@ -207,11 +207,18 @@ describe("tools", () => {
     expect(listVehicles).toHaveBeenCalledWith(db, actor, { workspaceId: "w1" });
   });
 
-  it("shuttle_phones passes now and never shows the token hash", async () => {
+  it("shuttle_phones passes now, shows the workspace update target and never the token hash", async () => {
+    vi.mocked(resolveWorkspace).mockResolvedValue({
+      workspace: { ...ws, targetUpdateId: "u1" },
+      role: "viewer",
+    } as never);
     vi.mocked(listPhones).mockResolvedValue([
       { device: { id: "d1", label: "Bus", tokenHash: "h" }, lastSyncAgoS: 5 },
     ] as never);
-    expect(await run("shuttle_phones")).toEqual([{ device: { id: "d1", label: "Bus" }, lastSyncAgoS: 5 }]);
+    expect(await run("shuttle_phones")).toEqual({
+      workspaceTargetUpdateId: "u1",
+      phones: [{ device: { id: "d1", label: "Bus" }, lastSyncAgoS: 5 }],
+    });
     expect(listPhones).toHaveBeenCalledWith(db, actor, { workspaceId: "w1" }, now);
   });
 

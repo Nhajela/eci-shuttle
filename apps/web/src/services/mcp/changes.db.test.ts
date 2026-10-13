@@ -548,3 +548,82 @@ describe("actorFor", () => {
     await expectCode(actorFor({ db: db(), personId: s.person.id })(other.id), "FORBIDDEN");
   });
 });
+
+describe("OTA app updates", () => {
+  const U1 = "01a13327-aaaa-bbbb-cccc-000000000001";
+  const U2 = "02b24438-aaaa-bbbb-cccc-000000000002";
+
+  it("versionKeys: the phone for ota.phone, nothing for workspace-wide ones", () => {
+    const id = randomUUID();
+    expect(versionKeys({ kind: "ota.rollout", updateId: U1 })).toEqual([]);
+    expect(versionKeys({ kind: "ota.rollback" })).toEqual([]);
+    expect(versionKeys({ kind: "ota.phone", deviceId: id, updateId: U1 })).toEqual([`device:${id}`]);
+  });
+
+  it("describes them in plain English", async () => {
+    const { ws, phone } = await setup();
+    await db().update(workspaces).set({ name: "Test" }).where(eq(workspaces.id, ws.id));
+    const d = (c: McpChange) => describeChange(db(), ws.id, c);
+    expect(await d({ kind: "ota.rollout", updateId: U1 })).toBe("Roll out app update 01a13327… to every phone in Test");
+    expect(await d({ kind: "ota.rollout", updateId: null })).toBe(
+      "Stop rolling out app updates in Test: phones keep the update they run",
+    );
+    expect(await d({ kind: "ota.rollback" })).toBe(
+      "Roll every phone in Test back to the app update before the last rollout",
+    );
+    expect(await d({ kind: "ota.phone", deviceId: phone.id, updateId: U1 })).toBe(
+      "Update phone 'Ravi's Redmi' (Bus 1) to app update 01a13327…",
+    );
+    expect(await d({ kind: "ota.phone", deviceId: phone.id, updateId: null })).toBe(
+      "Put phone 'Ravi's Redmi' (Bus 1) back on Test's app update",
+    );
+  });
+
+  it("warns that phones apply it only while idle, how many phones, and the native caveat", async () => {
+    const { ws, phone } = await setup();
+    await db()
+      .insert(devices)
+      .values([
+        { workspaceId: ws.id, label: "Spare", tokenHash: randomUUID() },
+        { workspaceId: ws.id, label: "Own", tokenHash: randomUUID(), targetUpdateId: U2 },
+        { workspaceId: ws.id, label: "Gone", tokenHash: randomUUID(), revokedAt: NOW },
+      ]);
+    const [rollout] = await changeWarnings(db(), ws.id, [{ kind: "ota.rollout", updateId: U1 }], NOW);
+    expect(rollout).toContain("only while idle");
+    expect(rollout).toContain("2 phones in this workspace follow the workspace update (1 more has its own)");
+    expect(rollout).toContain("needs new APK");
+    const [back] = await changeWarnings(db(), ws.id, [{ kind: "ota.rollback" }], NOW);
+    expect(back).toContain("2 phones in this workspace follow the workspace update");
+    const [one] = await changeWarnings(db(), ws.id, [{ kind: "ota.phone", deviceId: phone.id, updateId: U1 }], NOW);
+    expect(one).toContain("only while idle");
+    expect(one).toContain("needs new APK");
+    expect(await changeWarnings(db(), ws.id, [{ kind: "ota.rollout", updateId: null }], NOW)).toEqual([]);
+  });
+
+  it("applies through devices/ota, audited, and rolls back to the earlier target", async () => {
+    const s = await setup("admin");
+    const actor = { ...s.actor, proposalId: "P-OTAOTAOT", reason: "test" };
+    const apply = (c: McpChange) => applyChange(db(), actor, s.ws.id, c, NOW);
+    const target = async () =>
+      (await db().select().from(workspaces).where(eq(workspaces.id, s.ws.id)))[0].targetUpdateId;
+    await apply({ kind: "ota.rollout", updateId: U1 });
+    await apply({ kind: "ota.rollout", updateId: U2 });
+    expect(await target()).toBe(U2);
+    await apply({ kind: "ota.rollback" });
+    expect(await target()).toBe(U1);
+    await apply({ kind: "ota.phone", deviceId: s.phone.id, updateId: U2 });
+    const [p] = await db().select().from(devices).where(eq(devices.id, s.phone.id));
+    expect(p.targetUpdateId).toBe(U2);
+    const rows = await db()
+      .select({ action: auditLog.action })
+      .from(auditLog)
+      .where(eq(auditLog.proposalId, "P-OTAOTAOT"))
+      .orderBy(auditLog.id);
+    expect(rows.map((r) => r.action)).toEqual(["ota.rollout", "ota.rollout", "ota.rollback", "phone.update"]);
+  });
+
+  it("is admin only", async () => {
+    const s = await setup("ops");
+    await expectCode(applyChange(db(), s.actor, s.ws.id, { kind: "ota.rollout", updateId: U1 }, NOW), "FORBIDDEN");
+  });
+});
