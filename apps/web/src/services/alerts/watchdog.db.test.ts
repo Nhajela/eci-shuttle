@@ -4,7 +4,7 @@ import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { outbox, pings } from "@/db/schema";
+import { devices, outbox } from "@/db/schema";
 import { refreshPhases } from "@/services/ingest/ingest";
 import type { TelegramPayload } from "../kernel";
 import { detectProblems, runWatchdog } from "./watchdog";
@@ -42,7 +42,6 @@ const activeSince = (min: number): Window[] => [
     label: null,
   },
 ];
-const DAY_START = new Date(istToEpoch("2026-10-12", "00:00"));
 const OK = { location: "always", preciseLocation: true, notifications: true, batteryOptimizationExempt: true } as const;
 
 beforeEach(() => schedules.clear());
@@ -75,10 +74,10 @@ describe("detectProblems", () => {
     );
   });
 
-  it("off_route while on duty, since the phase began", async () => {
+  it("off_route while on duty, since off_route_since (else the phase start)", async () => {
     const ws = await makeWorkspace(db());
     const { vehicle, device } = await makeAssignedDevice(db(), ws.id, {
-      state: { offRoute: true, phase: "en_route", since: ago(3), lastPingAt: ago(0) },
+      state: { offRoute: true, phase: "en_route", since: ago(9), offRouteSince: ago(3), lastPingAt: ago(0) },
     });
     await makeAssignedDevice(db(), ws.id, { vehicle: { name: "Bus 2" }, state: { offRoute: true, phase: "off_duty" } });
     expect(await detectProblems(db(), ws.id, NOW)).toEqual([
@@ -93,24 +92,12 @@ describe("detectProblems", () => {
     ]);
   });
 
-  it("low_battery below 15% and not charging, since the first low ping of this episode", async () => {
+  it("low_battery below 15% and not charging, since devices.low_battery_since (now when not stamped yet)", async () => {
     const ws = await makeWorkspace(db());
-    const low = await makeDevice(db(), ws.id, { battery: 12, charging: false });
+    const low = await makeDevice(db(), ws.id, { battery: 12, charging: false, lowBatterySince: ago(20) });
     await makeDevice(db(), ws.id, { label: "Charging", battery: 5, charging: true });
     await makeDevice(db(), ws.id, { label: "Fine", battery: 15, charging: false });
-    const noPings = await makeDevice(db(), ws.id, { label: "Asha's phone", battery: 9, charging: null });
-    const ping = (min: number, battery: number) => ({
-      workspaceId: ws.id,
-      deviceId: low.id,
-      recordedAt: ago(min),
-      lat: 15.6,
-      lng: 73.7,
-      accuracy: 5,
-      battery,
-    });
-    await db()
-      .insert(pings)
-      .values([ping(60, 10), ping(40, 30), ping(20, 14), ping(10, 12)]);
+    const fresh = await makeDevice(db(), ws.id, { label: "Asha's phone", battery: 9, charging: null });
 
     const problems = await detectProblems(db(), ws.id, NOW);
     expect(problems).toHaveLength(2);
@@ -122,20 +109,26 @@ describe("detectProblems", () => {
       since: ago(20),
       message: "Ravi's phone is at 12% battery",
     });
-    expect(problems).toContainEqual(expect.objectContaining({ deviceId: noPings.id, since: DAY_START }));
+    expect(problems).toContainEqual(expect.objectContaining({ deviceId: fresh.id, since: NOW }));
   });
 
   it("permission_lost when location isn't 'always' or notifications are off", async () => {
     const ws = await makeWorkspace(db());
-    const d = await makeDevice(db(), ws.id, { permissions: { ...OK, location: "foreground", notifications: false } });
+    const d = await makeDevice(db(), ws.id, {
+      permissions: { ...OK, location: "foreground", notifications: false },
+      permissionLostSince: ago(8),
+    });
     await makeDevice(db(), ws.id, { label: "OK", permissions: OK });
-    expect(await detectProblems(db(), ws.id, NOW)).toEqual([
+    const fresh = await makeDevice(db(), ws.id, { label: "New", permissions: { ...OK, notifications: false } });
+    const problems = await detectProblems(db(), ws.id, NOW);
+    expect(problems).toContainEqual(expect.objectContaining({ deviceId: fresh.id, since: NOW }));
+    expect(problems.filter((p) => p.deviceId !== fresh.id)).toEqual([
       {
         kind: "permission_lost",
         workspaceId: ws.id,
         vehicleId: null,
         deviceId: d.id,
-        since: DAY_START,
+        since: ago(8),
         message: "Ravi's phone: location isn't set to 'Allow all the time', notifications are off",
       },
     ]);
@@ -220,7 +213,7 @@ describe("detectProblems", () => {
     ]);
   });
 
-  it("update pending when the phone synced > 2 min after the target was pushed but isn't running it", async () => {
+  it("update_pending when the phone synced > 2 min after the target was pushed but isn't running it", async () => {
     const ws = await makeWorkspace(db(), { targetUpdateId: "u2" });
     const pending = await makeDevice(db(), ws.id, {
       configVersion: 4,
@@ -244,7 +237,7 @@ describe("detectProblems", () => {
       );
     expect(await detectProblems(db(), ws.id, NOW)).toEqual([
       {
-        kind: "update_failed",
+        kind: "update_pending",
         workspaceId: ws.id,
         vehicleId: null,
         deviceId: pending.id,
@@ -316,6 +309,52 @@ describe("runWatchdog", () => {
     });
     await runWatchdog(db(), NOW);
     const [job] = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
-    expect(job.dedupeKey).toBe(`alert:permission_lost:${device.id}:${DAY_START.getTime()}:${person.id}`);
+    expect(job.dedupeKey).toBe(`alert:permission_lost:${device.id}:${NOW.getTime()}:${person.id}`);
+  });
+
+  it("stamps low_battery_since / permission_lost_since once per episode, so alerts keep their key, and clears them", async () => {
+    const ws = await makeWorkspace(db());
+    await makeAdmin(db(), ws.id);
+    const d = await makeDevice(db(), ws.id, {
+      battery: 10,
+      charging: false,
+      permissions: { ...OK, notifications: false },
+    });
+    const fine = await makeDevice(db(), ws.id, { label: "Fine", battery: 80, lowBatterySince: ago(30) });
+    const since = async (id: string) => {
+      const [r] = await db().select().from(devices).where(eq(devices.id, id));
+      return { low: r.lowBatterySince, lost: r.permissionLostSince, updatedAt: r.updatedAt };
+    };
+    const before = await since(d.id);
+
+    await runWatchdog(db(), NOW);
+    expect(await since(d.id)).toEqual({ low: NOW, lost: NOW, updatedAt: before.updatedAt });
+    expect((await since(fine.id)).low).toBeNull();
+
+    const later = new Date(NOW.getTime() + 60_000);
+    await runWatchdog(db(), later);
+    expect(await since(d.id)).toMatchObject({ low: NOW, lost: NOW });
+    expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(2);
+
+    await db().update(devices).set({ charging: true, permissions: OK }).where(eq(devices.id, d.id));
+    await runWatchdog(db(), new Date(later.getTime() + 60_000));
+    expect(await since(d.id)).toMatchObject({ low: null, lost: null });
+  });
+
+  it("update_pending alerts admins who opted into update_failed", async () => {
+    const ws = await makeWorkspace(db(), { targetUpdateId: "u2" });
+    const { person } = await makeAdmin(db(), ws.id);
+    const d = await makeDevice(db(), ws.id, {
+      configVersion: 4,
+      reportedConfigVersion: 4,
+      updateId: "u1",
+      lastSyncAt: ago(1),
+    });
+    await db()
+      .insert(outbox)
+      .values({ workspaceId: ws.id, kind: "push", payload: {}, dedupeKey: `push:${d.id}:4`, createdAt: ago(5) });
+    await runWatchdog(db(), NOW);
+    const jobs = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
+    expect(jobs.map((j) => j.dedupeKey)).toContain(`alert:update_pending:${d.id}:${ago(5).getTime()}:${person.id}`);
   });
 });
