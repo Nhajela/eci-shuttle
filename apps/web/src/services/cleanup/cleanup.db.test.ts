@@ -48,7 +48,7 @@ describe("runCleanup", () => {
       { ...prop, id: confirmed, expiresAt: ago(200), confirmedAt: ago(201) },
     ]);
 
-    await runCleanup(db, NOW, undefined);
+    await runCleanup(db, undefined, NOW);
 
     const logins = await db
       .select()
@@ -88,7 +88,7 @@ describe("runCleanup", () => {
         row("pending", ago(24 * 30)),
       ]);
 
-    await runCleanup(db, NOW, undefined);
+    await runCleanup(db, undefined, NOW);
 
     const left = await db.select().from(outbox).where(eq(outbox.workspaceId, ws.id));
     expect(left.map((r) => r.status).sort()).toEqual(["dead", "pending", "sent"]);
@@ -99,9 +99,9 @@ describe("runCleanup", () => {
     const db = testDb();
     const ws = await makeWorkspace(db);
     const p = await makePing(ws.id);
-    await runCleanup(db, NOW, undefined);
+    await runCleanup(db, undefined, NOW);
     // NOW is 2 Nov in IST but 1 Nov in UTC: the date is read in IST
-    await runCleanup(db, NOW, "2026-11-03");
+    await runCleanup(db, "2026-11-03", NOW);
     expect(await db.select().from(pings).where(eq(pings.id, p.id))).toHaveLength(1);
   });
 
@@ -111,7 +111,7 @@ describe("runCleanup", () => {
     const a = await makePing(ws.id);
     const b = await makePing(ws.id);
 
-    const r = await runCleanup(db, NOW, "2026-11-02");
+    const r = await runCleanup(db, "2026-11-02", NOW);
 
     expect(
       await db
@@ -128,7 +128,7 @@ describe("runCleanup", () => {
     expect(mine).toMatchObject({ actorKind: "system", entity: "pings", workspaceId: null });
 
     // nothing left to purge: no empty audit row the next night
-    const again = await runCleanup(db, new Date(+NOW + 86_400_000), "2026-11-02");
+    const again = await runCleanup(db, "2026-11-02", new Date(+NOW + 86_400_000));
     expect(again.pings).toBe(0);
     const after = await db.select().from(auditLog).where(eq(auditLog.action, "pings.purge"));
     expect(after).toHaveLength(audits.length);
