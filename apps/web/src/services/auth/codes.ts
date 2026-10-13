@@ -90,6 +90,13 @@ export async function createMagicLink(db: Db, personId: string, now: Date): Prom
   return { url: `${origin()}/login/magic?code=${encodeURIComponent(code)}`, expiresAt };
 }
 
+/** When an unclaimed, unexpired deep-link (poll) code was started; null for anything else. Read-only. */
+export async function pendingLoginStartedAt(db: Db, code: string, now: Date): Promise<Date | null> {
+  if (!code.startsWith(PREFIX.poll)) return null;
+  const r = await codeRow(db, code);
+  return r?.expiresAt && live(r, now) && !r.claimedAt ? new Date(r.expiresAt.getTime() - LOGIN_CODE_TTL_MS) : null;
+}
+
 export type LoginState = { status: "pending" } | { status: "expired" } | { status: "ready"; person: Person };
 
 /**

@@ -26,6 +26,7 @@ import { adminActor, resolveWorkspace } from "@/services/auth/actor";
 import { addException, getSchedule } from "@/services/catalog/schedule";
 import { listSpots } from "@/services/catalog/spots";
 import { listVehicles } from "@/services/catalog/vehicles";
+import { updateWorkspace } from "@/services/catalog/workspaces";
 import { killPhone, listPhones, nudgePhone, silencePhone } from "@/services/devices/phones";
 import { vehicleStates } from "@/services/ingest/ingest";
 import { createNotice, listNotices } from "@/services/notices/notices";
@@ -82,6 +83,16 @@ async function asAdmin(ctx: BotContext, slug: string | null): Promise<{ actor: A
 }
 const actorIn = (ctx: BotContext, workspaceId: string) =>
   adminActor(ctx.db, { personId: ctx.person.id, workspaceId, channel: "telegram" });
+
+// ---------------------------------------------------------------- /setgroup
+
+/** `/setgroup [slug]`, sent in the Telegram group: makes it the workspace's group (notices' group channels). admin. */
+export async function onSetGroup(ctx: BotContext, args: string[], inGroup: boolean): Promise<BotReply> {
+  if (!inGroup) return say(ctx, "Send /setgroup in the group you want the shuttle's group notices to go to.");
+  const { actor, ws } = await asAdmin(ctx, args[0] ?? null);
+  await updateWorkspace(ctx.db, actor, { workspaceId: ws.id, groupChatId: ctx.chatId });
+  return say(ctx, `${tag(ws)}This group now gets the shuttle's group notices.`);
+}
 
 // ---------------------------------------------------------------- /status
 

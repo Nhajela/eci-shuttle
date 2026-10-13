@@ -169,7 +169,7 @@ describe("desiredConfig", () => {
       },
     ]);
     expect(exs).toEqual([{ serviceId: s.id, date: "2026-10-16", type: "cancel_day", departure: null, minutes: null }]);
-    expect([from, to]).toEqual([NOW.getTime(), at(48).getTime()]);
+    expect([from, to]).toEqual([at(-24).getTime(), at(48).getTime()]);
     expect(c.vehicleName).toBe("Bus 1");
     expect(c.schedule).toEqual([
       {

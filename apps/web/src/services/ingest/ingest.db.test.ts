@@ -353,7 +353,65 @@ describe("ingestPings", () => {
   it("pings outside any service window keep the vehicle off duty with no service", async () => {
     const w = await world({ svFrom: "10:00:00", svTo: "11:00:00" });
     await w.send(riva);
-    expect(await w.state()).toMatchObject({ phase: "off_duty", serviceId: null, spotId: w.riva.id });
+    // SPEC §4: a driver's phone is only tracked inside windows, so off duty keeps no position
+    expect(await w.state()).toMatchObject({
+      phase: "off_duty",
+      serviceId: null,
+      spotId: w.riva.id,
+      lat: null,
+      lng: null,
+      alongM: null,
+      geofence: null,
+    });
+  });
+
+  it("a special service overlapping the regular one wins (the party run drops out of the regular route)", async () => {
+    const w = await world();
+    const [party] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w.ws.id,
+        name: "Party",
+        kind: "special",
+        routeId: w.route.id,
+        validFrom: "2026-10-11",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "08:30",
+        endTime: "10:00",
+        pattern: { kind: "times", times: ["09:00"] },
+      })
+      .returning();
+    await db()
+      .insert(serviceVehicles)
+      .values({
+        workspaceId: w.ws.id,
+        serviceId: party.id,
+        vehicleId: w.vehicle.id,
+        startsAt: new Date(ist("08:00:00")),
+        endsAt: new Date(ist("10:00:00")),
+      });
+    await w.send(riva);
+    expect((await w.state()).serviceId).toBe(party.id);
+  });
+
+  it("a phone moved to another workspace: its old backlog resolves to no vehicle there", async () => {
+    const w = await world();
+    const other = await makeWorkspace(db());
+    await db()
+      .update(deviceAssignments)
+      .set({ endsAt: new Date(ist("09:30:00")) })
+      .where(eq(deviceAssignments.deviceId, w.device.id));
+    await db().update(devices).set({ workspaceId: other.id }).where(eq(devices.id, w.device.id));
+    const r = await ingestPings(
+      db(),
+      { workspaceId: other.id, deviceId: w.device.id, pings: riva },
+      new Date(ist("09:40:00")),
+    );
+    expect(r).toEqual({ inserted: riva.length, closedTrips: [], vehicleIds: [] });
+    const rows = await db().select().from(pings).where(eq(pings.deviceId, w.device.id));
+    expect(rows.every((p) => p.vehicleId === null && p.workspaceId === other.id)).toBe(true);
+    expect(await w.state()).toBeUndefined();
   });
 });
 
@@ -370,7 +428,14 @@ describe("refreshPhases", () => {
     expect(await refreshPhases(db(), w.ws.id, new Date(ist("09:04:00")))).toEqual([]);
 
     expect(await refreshPhases(db(), w.ws.id, new Date(ist("13:00:00")))).toEqual([w.vehicle.id]);
-    expect(await w.state()).toMatchObject({ phase: "off_duty", serviceId: null });
+    expect(await w.state()).toMatchObject({
+      phase: "off_duty",
+      serviceId: null,
+      lat: null,
+      lng: null,
+      alongM: null,
+      geofence: null,
+    });
 
     // pings bring it back
     await w.send(track(ist("09:10:00"), ist("09:10:30"), RIVA), ist("09:10:30"));

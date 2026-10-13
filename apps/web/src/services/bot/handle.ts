@@ -4,7 +4,7 @@ import { markBlockedBot, upsertPersonFromTelegram } from "../catalog/people";
 import { isSpotName } from "../catalog/spots";
 import { listAllWorkspaces, workspaceBySlug } from "../catalog/workspaces";
 import { isServiceError, systemActor, userMessage } from "../kernel";
-import { onNotice, onSilence, onStatus, onToday } from "./admin";
+import { onNotice, onSetGroup, onSilence, onStatus, onToday } from "./admin";
 import { onShuttle, onStop } from "./attendee";
 import { handleCallback } from "./callbacks";
 import { onLogin, onStart } from "./start";
@@ -23,7 +23,7 @@ const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html
  * - my_chat_member kicked in a private chat → catalog/people.markBlockedBot; empty reply.
  * - "/start <payload>" → start.onStart; "/login" → start.onLogin.
  * - "/shuttle" or a spot's short name / name typed alone ("riva", case-insensitive) → attendee handlers.
- * - "/status", "/today", "/notice", "/silence" → admin handlers (need a membership; otherwise a polite no).
+ * - "/status", "/today", "/notice", "/silence", "/setgroup" → admin handlers (need a membership; otherwise a polite no).
  * - "/stop" → attendee.onStop.
  * - callback_query → callbacks.handleCallback.
  * - anything else in a private chat → a short help text; in groups → nothing.
@@ -58,7 +58,7 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
   const rest = m?.[2]?.trim() || null;
 
   // login needs no shuttle: let staff log in before a workspace is made live
-  const loginOnly = command === "start" || command === "login";
+  const loginOnly = command === "start" || command === "login" || !!query?.data?.startsWith("login:");
   const workspace =
     (await workspaceBySlug(db, null)) ?? (loginOnly ? ((await listAllWorkspaces(db))[0] ?? null) : null);
   if (!workspace) {
@@ -84,6 +84,8 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
         return await onToday(ctx, args);
       case "silence":
         return await onSilence(ctx, args);
+      case "setgroup":
+        return await onSetGroup(ctx, args, chat?.type === "group" || chat?.type === "supergroup");
       case "notice":
         return await onNotice(ctx, text ?? "");
       case "stop":

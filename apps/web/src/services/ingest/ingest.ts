@@ -130,8 +130,10 @@ async function scheduleFor(db: Db, workspaceId: string, vehicleIds: string[] | n
   const rts = routeIds.length ? await db.select().from(routes).where(inArray(routes.id, routeIds)) : [];
   const sv = svs.map((s) => ({ ...s, startsAt: s.startsAt.getTime(), endsAt: s.endsAt.getTime() }));
   // one trackingWindows call per service, so back-to-back services on one vehicle never merge into one window;
-  // core = the unpadded window, which wins where one service's padding overlaps the next service
-  const perService = svcs.map(serviceDef).map((d) => {
+  // core = the unpadded window, which wins where one service's padding overlaps the next service;
+  // special services come first, so a vehicle moved to a party run belongs to it for those hours (SPEC §3)
+  const bySpecial = svcs.toSorted((a, b) => Number(b.kind === "special") - Number(a.kind === "special"));
+  const perService = bySpecial.map(serviceDef).map((d) => {
     const own = sv.filter((s) => s.serviceId === d.id);
     return {
       id: d.id,
@@ -178,7 +180,11 @@ export async function ingestPings(
     if (!device) throw new ServiceError("NOT_FOUND", "Phone not found.");
     if (!input.pings.length) return { inserted: 0, closedTrips: [], vehicleIds: [] };
 
-    const assigns = await tx.select().from(deviceAssignments).where(eq(deviceAssignments.deviceId, deviceId));
+    // this workspace's assignments only: a phone moved here may still upload pings recorded under the old one
+    const assigns = await tx
+      .select()
+      .from(deviceAssignments)
+      .where(and(eq(deviceAssignments.deviceId, deviceId), eq(deviceAssignments.workspaceId, workspaceId)));
     const vehicleAt = (t: number) =>
       assigns.find((a) => a.startsAt.getTime() <= t && (a.endsAt == null || t < a.endsAt.getTime()))?.vehicleId ?? null;
     const rows = await tx
@@ -305,6 +311,8 @@ async function processVehicle(
   // ponytail: a rejoin older than 10 min within one batch still keeps the old start; fine for live phones
   const keep = st.offRouteSince != null && st.offRouteSince.getTime() < lastAt - OFF_ROUTE_LOOKBACK_MS;
   const offRouteSince = offStart == null ? null : keep ? st.offRouteSince : new Date(offStart);
+  // SPEC §4: drivers' phones are only tracked inside windows, so off duty keeps no position
+  const offDuty = phase === "off_duty";
   await tx
     .update(vehicleState)
     .set({
@@ -315,12 +323,12 @@ async function processVehicle(
       since,
       etaS: live?.etaS ?? null,
       lastPingAt: new Date(lastAt),
-      lat: lastGood?.lat ?? st.lat,
-      lng: lastGood?.lng ?? st.lng,
+      lat: offDuty ? null : (lastGood?.lat ?? st.lat),
+      lng: offDuty ? null : (lastGood?.lng ?? st.lng),
       alongM: live?.alongM ?? null,
       offRoute: offRouteSince != null,
       offRouteSince,
-      geofence: gf,
+      geofence: offDuty ? null : gf,
       updatedAt: now,
     })
     .where(eq(vehicleState.vehicleId, vehicleId));
@@ -552,10 +560,20 @@ export async function refreshPhases(db: Db, workspaceId: string, now: Date): Pro
       const serviceId = sched.serviceAt(r.vehicleId, t);
       const silent = !r.lastPingAt || t - r.lastPingAt.getTime() > OFFLINE_MS;
       const phase: Phase | null = !serviceId ? "off_duty" : silent ? "offline" : null;
-      if (!phase || phase === r.phase) continue;
+      if (!phase || (phase === r.phase && (phase !== "off_duty" || r.lat == null))) continue;
+      const offDuty = phase === "off_duty";
+      // off duty drops the position (SPEC §4); since stays when only the leftover position is cleared
+      const clear = offDuty ? { lat: null, lng: null, alongM: null, geofence: null } : {};
       await tx
         .update(vehicleState)
-        .set({ phase, since: now, etaS: null, serviceId: phase === "off_duty" ? null : serviceId, updatedAt: now })
+        .set({
+          phase,
+          since: phase === r.phase ? r.since : now,
+          etaS: null,
+          serviceId: offDuty ? null : serviceId,
+          ...clear,
+          updatedAt: now,
+        })
         .where(eq(vehicleState.vehicleId, r.vehicleId));
       changed.push(r.vehicleId);
     }

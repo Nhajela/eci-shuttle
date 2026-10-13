@@ -6,7 +6,7 @@ import { loginCodes } from "@/db/schema";
 import type { Person, Workspace } from "@/db/types";
 import { finishLogin, LOGIN_CODE_TTL_MS, startLogin } from "../auth/codes";
 import { onShuttle } from "./attendee";
-import { onLogin, onStart } from "./start";
+import { onLogin, onLoginButton, onStart } from "./start";
 import type { BotContext } from "./types";
 
 vi.mock("./attendee", () => ({ onShuttle: vi.fn() }));
@@ -33,19 +33,52 @@ beforeEach(() => {
 });
 
 describe("/start <code>", () => {
-  it("claims the browser's login code for the sender; the browser then logs in", async () => {
+  const tap = (code: string, chatId = 4242) => ({
+    id: "cbq1",
+    from: { id: chatId },
+    message: { message_id: 7, date: 0, chat: { id: chatId, type: "private" as const } },
+    data: `login:${code}`,
+  });
+
+  it("only asks to confirm: the code stays unclaimed and the browser keeps polling", async () => {
     const ws = await makeWorkspace(db());
     const person = await makePerson(db(), { username: "asha", firstName: "Asha" });
     const { code } = await startLogin(db(), NOW);
 
     const r = await onStart(ctxFor(person, ws), code);
-    expect(htmls(r)).toEqual(["You're logged in. Go back to your browser."]);
+    expect(r.send).toHaveLength(1);
     expect(r.send[0]).toMatchObject({ chatId: 4242, kind: "reply", personId: person.id });
+    expect(r.send[0].html).toContain("Only tap if you just pressed Log in on the website (started 10:00)");
+    expect(r.send[0].buttons).toEqual([[{ text: "Yes, log me in", callbackData: `login:${code}` }]]);
+
+    const [row] = await db().select().from(loginCodes).where(eq(loginCodes.code, code));
+    expect(row.claimedAt).toBeNull();
+    expect(await finishLogin(db(), code, "poll", NOW)).toMatchObject({ status: "pending" });
+    expect(onShuttle).not.toHaveBeenCalled();
+  });
+
+  it("[Yes, log me in] claims the code for the presser; the browser then logs in", async () => {
+    const ws = await makeWorkspace(db());
+    const person = await makePerson(db(), { username: "asha", firstName: "Asha" });
+    const { code } = await startLogin(db(), NOW);
+
+    const r = await onLoginButton(ctxFor(person, ws), code, tap(code));
+    expect(r.edit).toMatchObject({ chatId: 4242, messageId: 7, html: "You're logged in. Go back to your browser." });
+    expect(r.answerCallback).toMatchObject({ callbackQueryId: "cbq1" });
 
     const [row] = await db().select().from(loginCodes).where(eq(loginCodes.code, code));
     expect(row).toMatchObject({ telegramId: person.telegramId, username: "asha", firstName: "Asha" });
     expect(await finishLogin(db(), code, "poll", NOW)).toMatchObject({ status: "ok", person: { id: person.id } });
-    expect(onShuttle).not.toHaveBeenCalled();
+  });
+
+  it("a button pressed outside the presser's own chat with the bot claims nothing", async () => {
+    const ws = await makeWorkspace(db());
+    const person = await makePerson(db());
+    const { code } = await startLogin(db(), NOW);
+    const q = { ...tap(code), from: { id: 999 } };
+    const r = await onLoginButton(ctxFor(person, ws), code, q);
+    expect(r.edit).toBeUndefined();
+    expect(await finishLogin(db(), code, "poll", NOW)).toMatchObject({ status: "pending" });
   });
 
   it("unknown, expired or already used → start again from the website", async () => {
@@ -57,11 +90,13 @@ describe("/start <code>", () => {
     const { code } = await startLogin(db(), NOW);
     const late = new Date(NOW.getTime() + LOGIN_CODE_TTL_MS + 1);
     expect(htmls(await onStart(ctxFor(person, ws, late), code))).toEqual([expired]);
+    expect((await onLoginButton(ctxFor(person, ws, late), code, tap(code))).edit?.html).toBe(expired);
 
     const fresh = await startLogin(db(), NOW);
-    await onStart(ctxFor(person, ws), fresh.code);
+    await onLoginButton(ctxFor(person, ws), fresh.code, tap(fresh.code));
     const other = await makePerson(db());
     expect(htmls(await onStart(ctxFor(other, ws), fresh.code))).toEqual([expired]);
+    expect((await onLoginButton(ctxFor(other, ws), fresh.code, tap(fresh.code))).edit?.html).toBe(expired);
   });
 });
 

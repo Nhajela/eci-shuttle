@@ -401,6 +401,9 @@ async function gapWarning(
   return `Cancelling this leaves ${spot} without a shuttle ${[...gaps].join(" and ")} on ${on}.`;
 }
 
+const NO_GROUP =
+  "This workspace has no Telegram group yet, so nothing is posted to a group. An admin can send /setgroup in the group.";
+
 async function oneWarning(db: Db, ws: string, c: McpChange, now: Date): Promise<string | null> {
   switch (c.kind) {
     case "service.exception":
@@ -409,6 +412,10 @@ async function oneWarning(db: Db, ws: string, c: McpChange, now: Date): Promise<
     case "notice.create": {
       if (c.endsAt && c.startsAt && new Date(c.endsAt) <= new Date(c.startsAt)) return "Notice ends before it starts.";
       if (c.endsAt && new Date(c.endsAt) <= now) return "Notice ends before now, so nobody will see it.";
+      if (c.channels.some((ch) => ch === "group" || ch === "group_pin")) {
+        const [w] = await db.select({ group: workspaces.groupChatId }).from(workspaces).where(eq(workspaces.id, ws));
+        if (w?.group == null) return NO_GROUP;
+      }
       return null;
     }
     case "phone.assign":
@@ -544,5 +551,11 @@ export async function liveBoard(
   // listVehicles checks the viewer role before vehicleStates (which takes no actor) is read
   const list = await listVehicles(db, actor, input);
   const states = await vehicleStates(db, input.workspaceId);
-  return list.map((vehicle) => ({ vehicle, state: states.find((s) => s.vehicleId === vehicle.id) ?? null }));
+  // SPEC §4: an off-duty vehicle's last position is never shown (ingest clears it too; this covers old rows)
+  const shown = (s: VehicleState): VehicleState =>
+    s.phase === "off_duty" ? { ...s, lat: null, lng: null, alongM: null, geofence: null } : s;
+  return list.map((vehicle) => {
+    const s = states.find((x) => x.vehicleId === vehicle.id);
+    return { vehicle, state: s ? shown(s) : null };
+  });
 }
