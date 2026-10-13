@@ -16,7 +16,17 @@ import { killPhone, listPhones, nudgePhone, silencePhone } from "@/services/devi
 import { vehicleStates } from "@/services/ingest/ingest";
 import { createNotice, listNotices } from "@/services/notices/notices";
 import { type Actor, ServiceError, type TelegramButton } from "../kernel";
-import { alertButtons, onAdminCallback, onNotice, onSetGroup, onSilence, onStatus, onToday, parseUntil } from "./admin";
+import {
+  alertButtons,
+  onAdminCallback,
+  onInvite,
+  onNotice,
+  onSetGroup,
+  onSilence,
+  onStatus,
+  onToday,
+  parseUntil,
+} from "./admin";
 import type { Callback } from "./callbacks";
 import type { BotContext, TgCallbackQuery } from "./types";
 
@@ -546,5 +556,39 @@ describe("alertButtons", () => {
     expect(alertButtons({ slug: "live", page: "live" })).toEqual([
       [{ text: "Open in admin", url: "http://localhost:3000/admin/live?w=live" }],
     ]);
+  });
+});
+
+describe("onInvite", () => {
+  const roleOf = async (ws: string, personId: string) =>
+    (
+      await db()
+        .select()
+        .from(memberships)
+        .where(and(eq(memberships.workspaceId, ws), eq(memberships.personId, personId)))
+    )[0]?.role ?? null;
+
+  it("an admin makes someone a viewer (default) or admin, and they get a DM with how to log in", async () => {
+    const { ws, ctx } = await setup("admin");
+    const dawn = await makePerson(db(), { username: `dawn${Date.now()}`, firstName: "Dawn" });
+    const r = await onInvite(ctx, [`@${dawn.username}`]);
+    expect(await roleOf(ws.id, dawn.id)).toBe("viewer");
+    expect(r.send[0].html).toContain("viewer");
+    expect(r.send[1]).toMatchObject({ chatId: dawn.telegramId, personId: dawn.id });
+    expect(r.send[1].html).toContain("/login");
+    await onInvite(ctx, [dawn.username as string, "admin"]);
+    expect(await roleOf(ws.id, dawn.id)).toBe("admin");
+    const off = await onInvite(ctx, [dawn.username as string, "remove"]);
+    expect(await roleOf(ws.id, dawn.id)).toBeNull();
+    expect(off.send).toHaveLength(1);
+  });
+
+  it("explains usage, unknown usernames, and refuses non-admins", async () => {
+    const { ctx } = await setup("admin");
+    expect((await onInvite(ctx, [])).send[0].html).toContain("/invite @username");
+    await expect(onInvite(ctx, ["@nobody_here_xyz"])).rejects.toMatchObject({ code: "NOT_FOUND" });
+    const viewer = await setup("viewer");
+    const p = await makePerson(db(), { username: `v${Date.now()}` });
+    await expect(onInvite(viewer.ctx, [p.username as string])).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

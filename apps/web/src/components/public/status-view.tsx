@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ageSeconds, answerParts, contextText, pickSpot, spotCookieName } from "./format";
 import { Notices } from "./notices";
+import { StaffMap } from "./staff-map";
 
 const POLL_MS = 10_000;
 
@@ -16,10 +17,13 @@ export function StatusView({
   initial,
   slug,
   initialSpotId,
+  staff = false,
 }: {
   initial: PublicStatus;
   slug: string | null;
   initialSpotId: string | null;
+  /** a logged-in member of this workspace: adds the live map and says "Admin" */
+  staff?: boolean;
 }) {
   const [status, setStatus] = useState(initial);
   const [chosen, setChosen] = useState(initialSpotId);
@@ -83,7 +87,7 @@ export function StatusView({
           href={slug ? `/admin?w=${encodeURIComponent(slug)}` : "/admin"}
           className="inline-flex h-11 shrink-0 items-center rounded-field border border-ink/15 bg-sand px-3 text-sm font-medium text-ink-soft hover:text-ink"
         >
-          Admin login
+          {staff ? "Admin" : "Admin login"}
         </a>
       </header>
 
@@ -139,6 +143,7 @@ export function StatusView({
 
           <Notices notices={spot.notices} />
           <Answer spot={spot} ageS={ageS} />
+          {staff && <StaffMap slug={slug} />}
           <Schedule spot={spot} />
         </>
       )}

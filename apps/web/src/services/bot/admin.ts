@@ -17,12 +17,13 @@ import {
 } from "@eci-shuttle/shared";
 import { and, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import type { Db } from "@/db";
-import { devices, directives, services } from "@/db/schema";
+import { devices, directives, people, services } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { origin } from "@/lib/env";
 import { escapeHtml } from "@/lib/telegram/html";
 import { detectProblems } from "@/services/alerts/watchdog";
 import { adminActor, resolveWorkspace } from "@/services/auth/actor";
+import { setRole } from "@/services/catalog/people";
 import { addException, getSchedule } from "@/services/catalog/schedule";
 import { listSpots } from "@/services/catalog/spots";
 import { listVehicles } from "@/services/catalog/vehicles";
@@ -209,6 +210,44 @@ export async function onSilence(ctx: BotContext, args: string[]): Promise<BotRep
     ctx,
     `${tag(ws)}Silenced ${esc(v.name)} (${esc(phone.device.label)}) until ${when(until, ctx.now)}. It won't share location until then.`,
   );
+}
+
+// ---------------------------------------------------------------- /invite
+
+const ROLE_WORD = { viewer: "viewer (sees the Live board and the map)", ops: "ops", admin: "admin" } as const;
+
+/**
+ * `/invite @username [viewer|ops|admin|remove] [slug]` (admin only, default viewer): gives that person access to
+ * admin and the staff map, and DMs them how to log in. They must have messaged the bot once (setRole NOT_FOUND).
+ */
+export async function onInvite(ctx: BotContext, args: string[]): Promise<BotReply> {
+  const [user, word = "viewer", slug = null] = args;
+  const role = word.toLowerCase();
+  if (!user || !(role in ROLE_WORD || role === "remove"))
+    return say(ctx, "Use: /invite @username [viewer|ops|admin|remove], e.g. /invite @dawn viewer");
+  const { actor, ws } = await asAdmin(ctx, slug);
+  const username = user.replace(/^@/, "");
+  const m = await setRole(ctx.db, actor, {
+    workspaceId: ws.id,
+    person: { username },
+    role: role === "remove" ? null : (role as keyof typeof ROLE_WORD),
+  });
+  if (!m) return say(ctx, `${tag(ws)}@${esc(username)} no longer has access to ${esc(ws.name)}.`);
+  const [p] = await ctx.db.select().from(people).where(eq(people.id, m.personId));
+  const what = ROLE_WORD[m.role as keyof typeof ROLE_WORD];
+  return {
+    send: [
+      ...say(ctx, `${tag(ws)}@${esc(username)} is now ${what} in ${esc(ws.name)}. I've sent them how to log in.`).send,
+      {
+        chatId: p.telegramId,
+        personId: p.id,
+        kind: "reply",
+        html:
+          `You're now ${what} for the ${esc(ws.name)} shuttles.\n` +
+          `Log in at ${origin()}/login (it confirms here in Telegram). Once logged in, the main page also shows the live map.`,
+      },
+    ],
+  };
 }
 
 // ---------------------------------------------------------------- /notice wizard
