@@ -4,7 +4,7 @@ import { PairingCodeCreateFields, PairRequest, type PairResponse, withWorkspace 
 import { and, count, eq, gt, isNull, sql } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
-import { auditLog, devices, pairingCodes } from "@/db/schema";
+import { auditLog, devices, pairingCodes, workspaces } from "@/db/schema";
 import { origin } from "@/lib/env";
 import { type Actor, mutate, parseInput, requireRole, ServiceError } from "../kernel";
 import { desiredConfig } from "./config";
@@ -73,7 +73,8 @@ const noSuchCode = () =>
  * device in the code's workspace: random 32-byte token, stored as sha256; label from the code's label or the
  * model. Unknown, used and expired all → the same NOT_FOUND, audited device.pair_failed (no workspace), and
  * after MAX_FAILED_PAIRS of those in 10 min every pair → RATE_LIMITED, so 6-digit codes can't be enumerated.
- * Marks the code used. Audited device.pair with the device as actor. Returns the token once, plus the initial
+ * A `simulated` pair is stored as such and refused (FORBIDDEN, code left unused) when the code's workspace is
+ * live. Marks the code used. Audited device.pair with the device as actor. Returns the token once, plus the initial
  * config. `now` for expiry; the throttle window is DB time, like audit_log.at.
  */
 export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise<PairResponse> {
@@ -92,7 +93,12 @@ export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise
   if (misses >= MAX_FAILED_PAIRS)
     throw new ServiceError("RATE_LIMITED", "Too many wrong pairing codes. Wait 10 minutes, then try again.");
 
-  const [code] = await db.select().from(pairingCodes).where(eq(pairingCodes.code, req.code));
+  const [row] = await db
+    .select({ code: pairingCodes, isLive: workspaces.isLive })
+    .from(pairingCodes)
+    .innerJoin(workspaces, eq(workspaces.id, pairingCodes.workspaceId))
+    .where(eq(pairingCodes.code, req.code));
+  const code = row?.code;
   if (!code || code.usedAt || code.expiresAt <= now) {
     const unpaired: Actor = { kind: "device", id: "unpaired", channel: "device", label: req.model };
     await mutate(
@@ -103,6 +109,9 @@ export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise
     );
     throw noSuchCode();
   }
+  // SPEC §3: sims never run in the live workspace. The code stays unused, so a real phone can still take it.
+  if (req.simulated && row.isLive)
+    throw new ServiceError("FORBIDDEN", "Simulated phones only pair into test workspaces, never the live one.");
 
   const deviceId = randomUUID();
   const token = randomBytes(32).toString("base64url");
@@ -132,6 +141,7 @@ export async function pairDevice(db: Db, input: PairRequest, now: Date): Promise
           appVersion: req.appVersion,
           updateId: req.updateId,
           pushToken: req.pushToken,
+          simulated: req.simulated ?? false,
         })
         .returning();
       await tx.update(pairingCodes).set({ deviceId }).where(eq(pairingCodes.code, code.code));

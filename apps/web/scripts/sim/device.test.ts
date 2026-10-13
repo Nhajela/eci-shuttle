@@ -75,7 +75,7 @@ describe("pairSim", () => {
     const h = harness(() => json(res));
     expect(await pairSim("http://x", "123456", h.deps)).toEqual(res);
     expect(h.calls[0].url).toBe("http://x/api/device/pair");
-    expect(JSON.parse(String(h.calls[0].init.body))).toMatchObject({ code: "123456", model: "sim" });
+    expect(JSON.parse(String(h.calls[0].init.body))).toMatchObject({ code: "123456", model: "sim", simulated: true });
   });
 
   it("throws the server's message when pairing fails", async () => {
