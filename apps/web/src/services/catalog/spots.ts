@@ -102,6 +102,27 @@ export async function listSpots(
     .orderBy(sql`${spots.archivedAt} is not null`, asc(spots.name));
 }
 
+/**
+ * System read (no actor: the bot router runs before anyone is known; spot names are public). True when `text`,
+ * trimmed and any case, is exactly a non-archived spot's short name or name in this workspace.
+ */
+export async function isSpotName(db: Db, workspaceId: string, text: string): Promise<boolean> {
+  const q = text.trim().toLowerCase();
+  if (!q) return false;
+  const [hit] = await db
+    .select({ id: spots.id })
+    .from(spots)
+    .where(
+      and(
+        inWorkspace(spots, workspaceId),
+        isNull(spots.archivedAt),
+        sql`(lower(${spots.shortName}) = ${q} or lower(${spots.name}) = ${q})`,
+      ),
+    )
+    .limit(1);
+  return !!hit;
+}
+
 // ---------- overlap warning ----------
 
 type Fence = LatLng & { radiusM: number };

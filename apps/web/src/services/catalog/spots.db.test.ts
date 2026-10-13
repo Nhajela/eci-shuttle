@@ -3,7 +3,15 @@ import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { auditLog, routes } from "@/db/schema";
-import { archiveSpot, createSpot, listSpots, overlapWarnings, spotOverlapWarnings, updateSpot } from "./spots";
+import {
+  archiveSpot,
+  createSpot,
+  isSpotName,
+  listSpots,
+  overlapWarnings,
+  spotOverlapWarnings,
+  updateSpot,
+} from "./spots";
 
 const db = () => testDb();
 const RIVA = { name: "Riva Resort", shortName: "Riva", lat: 15.6705, lng: 73.7135 };
@@ -169,5 +177,20 @@ describe("overlap warning", () => {
     expect(w).toHaveLength(1);
     expect(w[0]).toMatch(/Riva Gate/);
     expect(await spotOverlapWarnings(db(), actor, { workspaceId: ws.id, ...RIVA, spotId: gate.id })).toEqual([]);
+  });
+});
+
+describe("isSpotName", () => {
+  it("matches a non-archived spot's short name or name typed alone, any case, in this workspace only", async () => {
+    const { ws, actor } = await setup();
+    const other = await setup();
+    await createSpot(db(), actor, { workspaceId: ws.id, ...RIVA });
+    const old = await createSpot(db(), actor, { workspaceId: ws.id, ...CIRCLE });
+    await archiveSpot(db(), actor, { workspaceId: ws.id, spotId: old.id, version: 1 });
+    await createSpot(db(), other.actor, { workspaceId: other.ws.id, ...RIVA, name: "Party Venue", shortName: "Party" });
+    for (const t of ["riva", " RIVA ", "riva resort", "Riva Resort"])
+      expect(await isSpotName(db(), ws.id, t)).toBe(true);
+    for (const t of ["circle", "party", "riva please", "", "  ", "%", "riv_"])
+      expect(await isSpotName(db(), ws.id, t)).toBe(false);
   });
 });
