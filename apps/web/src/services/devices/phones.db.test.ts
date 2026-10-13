@@ -428,7 +428,7 @@ describe("listPhones", () => {
     expect(c).toMatchObject({
       vehicle: null,
       desiredMode: "killed",
-      modeMismatch: true,
+      modeMismatch: false, // kill pending: it hasn't synced since
       configBehind: true,
       lastSyncAgoS: null,
       needsNewApk: true,
@@ -479,6 +479,58 @@ describe("listPhones", () => {
         (c) => ({ mode: (c as unknown as { killed: boolean }).killed ? "killed" : "idle" }) as never,
       );
     }
+  });
+});
+
+describe("listPhones modeMismatch (the watchdog's rule)", () => {
+  const MIN = 60_000;
+  async function mismatchOf(over: Partial<typeof devices.$inferInsert>, pushedAgoMs: number | null, intervalS = 10) {
+    const ws = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id, "viewer");
+    const now = new Date();
+    const d = await makeDevice(ws.id, {
+      reportedMode: "active", // told idle (resolveMode mock)
+      configVersion: 2,
+      reportedConfigVersion: 2,
+      lastSyncAt: now,
+      ...over,
+    });
+    if (pushedAgoMs !== null)
+      await db()
+        .insert(outbox)
+        .values({
+          workspaceId: ws.id,
+          kind: "push",
+          payload: { deviceId: d.id },
+          dedupeKey: `push:${d.id}:${d.configVersion}`,
+          createdAt: new Date(now.getTime() - pushedAgoMs),
+        });
+    vi.mocked(desiredConfig).mockImplementationOnce(
+      async () => ({ killed: !!over.killedAt, schedule: [], activeIntervalS: intervalS, idleHeartbeatS: 900 }) as never,
+    );
+    return (await listPhones(db(), actor, { workspaceId: ws.id }, now))[0].modeMismatch;
+  }
+
+  it("flags a phone on its current config, reporting the wrong mode past the grace", async () => {
+    expect(await mismatchOf({}, 5 * MIN)).toBe(true);
+  });
+  it("not within two sync intervals (at least 2 min) of the config change", async () => {
+    expect(await mismatchOf({}, 1 * MIN)).toBe(false);
+    expect(await mismatchOf({}, 5 * MIN, 300)).toBe(false); // 2 x 5 min interval
+  });
+  it("not before the phone has applied the current config", async () => {
+    expect(await mismatchOf({ reportedConfigVersion: 1 }, 5 * MIN)).toBe(false);
+  });
+  it("not when it reports what it should", async () => {
+    expect(await mismatchOf({ reportedMode: "idle" }, 5 * MIN)).toBe(false);
+  });
+  it("killed: only once it synced after the kill on its config and still reports active", async () => {
+    const ago = (ms: number) => new Date(Date.now() - ms);
+    expect(await mismatchOf({ killedAt: ago(MIN), lastSyncAt: ago(5 * MIN) }, null)).toBe(false);
+    expect(await mismatchOf({ killedAt: ago(5 * MIN), lastSyncAt: ago(MIN), reportedConfigVersion: 1 }, null)).toBe(
+      false,
+    );
+    expect(await mismatchOf({ killedAt: ago(5 * MIN), lastSyncAt: ago(MIN) }, null)).toBe(true);
   });
 });
 

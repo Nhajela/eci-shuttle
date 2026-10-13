@@ -18,12 +18,13 @@ import {
   PhoneRevokeFields,
   PhoneSilenceFields,
   resolveMode,
+  type SyncResponse,
   withWorkspace,
 } from "@eci-shuttle/shared";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { deviceAssignments, devices, directives, memberships, vehicles, workspaces } from "@/db/schema";
+import { deviceAssignments, devices, directives, memberships, outbox, vehicles, workspaces } from "@/db/schema";
 import type { Device, DeviceAssignment, Directive, Vehicle } from "@/db/types";
 import { escapeHtml } from "@/lib/telegram/html";
 import { adminButton, raiseAlert } from "../alerts/alerts";
@@ -383,6 +384,43 @@ export function versionBelow(v: string, min: string): boolean {
   return false;
 }
 
+// ponytail: mirrors alerts/watchdog's mode_mismatch rule (it exports no helper and isn't ours to edit);
+// the watchdog should import isModeMismatch so the two can't drift.
+const GRACE_MS = 2 * 60_000;
+
+/** When the "sync now" push for the phone's current config version was queued (config.bumpConfigs dedupe key). */
+async function pushedAt(db: Db, d: Device): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: outbox.createdAt })
+    .from(outbox)
+    .where(eq(outbox.dedupeKey, `push:${d.id}:${d.configVersion}`));
+  return row?.at ?? null;
+}
+
+/**
+ * The watchdog's reports-the-wrong-mode rule. Killed: synced after the kill on its config and still reports active.
+ * Otherwise: on its current config, reported mode ≠ what it was told at its last sync while that is still desired,
+ * for longer than two of its sync intervals (at least 2 min) after the mode or config changed.
+ */
+export function isModeMismatch(d: Device, config: SyncResponse, pushed: Date | null, now: Date): boolean {
+  const applied = d.reportedConfigVersion !== null && d.reportedConfigVersion >= d.configVersion;
+  if (d.killedAt) return d.reportedMode === "active" && !!d.lastSyncAt && d.lastSyncAt > d.killedAt && applied;
+  if (!applied || !d.reportedMode || !d.lastSyncAt) return false;
+  const t = now.getTime();
+  const desired = resolveMode(config, t);
+  const told = resolveMode(config, d.lastSyncAt.getTime()).mode;
+  const lastEnd = Math.max(...(config.schedule ?? []).map((w) => w.endsAt).filter((e) => e <= t));
+  const since = Math.max(desired.window?.startsAt ?? lastEnd, pushed?.getTime() ?? Number.NEGATIVE_INFINITY);
+  const intervalS = d.reportedMode === "active" ? config.activeIntervalS : config.idleHeartbeatS;
+  const graceMs = Math.max(GRACE_MS, 2_000 * (intervalS ?? 0));
+  return (
+    d.reportedMode !== told &&
+    told === desired.mode &&
+    Number.isFinite(since) &&
+    d.lastSyncAt.getTime() - since > graceMs
+  );
+}
+
 const permissionsOk = (p: Permissions | null) =>
   !!p && p.location === "always" && p.preciseLocation && p.notifications && p.batteryOptimizationExempt;
 
@@ -484,7 +522,8 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
     const vehicle = vehicleOf.get(device.id) ?? null;
     const revoked = !!device.revokedAt;
     // ponytail: one desiredConfig per phone (N queries); fine for a handful of phones
-    const desired = revoked ? null : resolveMode(await desiredConfig(db, device.id, now), now.getTime());
+    const config = revoked ? null : await desiredConfig(db, device.id, now);
+    const desired = config ? resolveMode(config, now.getTime()) : null;
     const desiredMode = desired?.mode ?? "revoked";
     // same rule as the watchdog's silent alert, with the phone's last sync for the vehicle's last ping
     const heardAt = Math.max(device.lastSyncAt?.getTime() ?? 0, desired?.window?.startsAt ?? 0);
@@ -493,7 +532,7 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
       vehicle,
       desiredMode,
       silent: !!vehicle && desiredMode === "active" && now.getTime() - heardAt > SILENT_AFTER_MS,
-      modeMismatch: !revoked && device.reportedMode != null && device.reportedMode !== desiredMode,
+      modeMismatch: !!config && isModeMismatch(device, config, await pushedAt(db, device), now),
       configBehind: !revoked && (device.reportedConfigVersion ?? 0) < device.configVersion,
       lastSyncAgoS: device.lastSyncAt ? Math.floor((now.getTime() - device.lastSyncAt.getTime()) / 1000) : null,
       needsNewApk: !!(ws.minAppVersion && device.appVersion && versionBelow(device.appVersion, ws.minAppVersion)),
