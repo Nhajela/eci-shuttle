@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ServiceDef, ServiceExceptionDef, ServiceVehicleDef } from "../contracts";
-import { applyDirectives, trackingWindows } from "./windows";
+import { applyDirectives, inOpsHours, opsHourSpans, trackingWindows } from "./windows";
 
 const SVC = "00000000-0000-4000-8000-000000000001";
 const SVC2 = "00000000-0000-4000-8000-000000000002";
@@ -205,5 +205,34 @@ describe("applyDirectives", () => {
     const out = applyDirectives(base, [d("force_active", "21:00", "23:00"), d("silence_until", "06:00", "23:30")]);
     expect(out).toEqual([]);
     expect(applyDirectives(base, [d("silence_until", "06:00", "23:30", VB)])).toEqual(base);
+  });
+});
+
+describe("opsHourSpans / inOpsHours", () => {
+  const H = { start: "09:00", end: "21:00" };
+  it("gives one IST span per day overlapping [from, to), clipped", () => {
+    expect(opsHourSpans(H, ist("2026-10-12", "10:00"), ist("2026-10-14", "10:00"))).toEqual([
+      { startsAt: ist("2026-10-12", "10:00"), endsAt: ist("2026-10-12", "21:00") },
+      { startsAt: ist("2026-10-13", "09:00"), endsAt: ist("2026-10-13", "21:00") },
+      { startsAt: ist("2026-10-14", "09:00"), endsAt: ist("2026-10-14", "10:00") },
+    ]);
+  });
+  it("crosses midnight when end <= start", () => {
+    expect(
+      opsHourSpans({ start: "22:00", end: "02:00" }, ist("2026-10-13", "01:00"), ist("2026-10-13", "23:00")),
+    ).toEqual([
+      { startsAt: ist("2026-10-13", "01:00"), endsAt: ist("2026-10-13", "02:00") },
+      { startsAt: ist("2026-10-13", "22:00"), endsAt: ist("2026-10-13", "23:00") },
+    ]);
+  });
+  it("is empty without hours", () => {
+    expect(opsHourSpans(null, 0, 10 * 86_400_000)).toEqual([]);
+  });
+  it("inOpsHours is half-open [start, end)", () => {
+    expect(inOpsHours(H, ist("2026-10-13", "09:00"))).toBe(true);
+    expect(inOpsHours(H, ist("2026-10-13", "20:59"))).toBe(true);
+    expect(inOpsHours(H, ist("2026-10-13", "21:00"))).toBe(false);
+    expect(inOpsHours(H, ist("2026-10-13", "08:59"))).toBe(false);
+    expect(inOpsHours(null, ist("2026-10-13", "12:00"))).toBe(false);
   });
 });

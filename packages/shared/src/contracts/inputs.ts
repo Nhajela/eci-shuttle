@@ -23,6 +23,20 @@ export const WorkspaceCreateFields = z.object({
     .refine((s) => s !== "admin" && s !== "api" && s !== "w", "reserved slug"),
   name,
 });
+/**
+ * Daily ops tracking hours (IST): phones assigned to a vehicle track all day in them, off duty, for ops only.
+ * Both null = off. End before start crosses midnight.
+ */
+export const WorkspaceUpdateFields = z.object({ opsHoursStart: HHMM.nullable(), opsHoursEnd: HHMM.nullable() });
+export const checkOpsHours = (
+  h: { opsHoursStart?: string | null; opsHoursEnd?: string | null },
+  ctx: z.RefinementCtx,
+) => {
+  if ((h.opsHoursStart == null) !== (h.opsHoursEnd == null))
+    ctx.addIssue({ code: "custom", message: "Set both a start and an end time for ops hours, or neither." });
+  else if (h.opsHoursStart != null && h.opsHoursStart === h.opsHoursEnd)
+    ctx.addIssue({ code: "custom", message: "Ops hours need different start and end times." });
+};
 
 // ---------- spots ----------
 export const SpotCreateFields = z.object({

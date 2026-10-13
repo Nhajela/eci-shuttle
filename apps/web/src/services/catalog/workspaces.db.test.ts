@@ -125,6 +125,27 @@ describe("updateWorkspace", () => {
     expect(vi.mocked(bumpConfigs).mock.calls[0][1]).toEqual({ workspaceId: ws.id });
   });
 
+  it("sets and clears ops tracking hours: audited, bumps phone configs; both or neither", async () => {
+    const ws = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id);
+    const w = await updateWorkspace(db(), actor, { workspaceId: ws.id, opsHoursStart: "09:00", opsHoursEnd: "21:00" });
+    expect(w).toMatchObject({ opsHoursStart: "09:00", opsHoursEnd: "21:00" });
+    expect(bumpConfigs).toHaveBeenCalledTimes(1);
+    const [row] = await auditFor(ws.id);
+    expect(row.after).toEqual({ opsHoursStart: "09:00", opsHoursEnd: "21:00", version: 2 });
+    const cleared = await updateWorkspace(db(), actor, { workspaceId: ws.id, opsHoursStart: null, opsHoursEnd: null });
+    expect(cleared).toMatchObject({ opsHoursStart: null, opsHoursEnd: null });
+    for (const bad of [
+      { opsHoursStart: "09:00" },
+      { opsHoursStart: "09:00", opsHoursEnd: null },
+      { opsHoursStart: "09:00", opsHoursEnd: "09:00" },
+      { opsHoursStart: "9am", opsHoursEnd: "21:00" },
+    ])
+      await expect(updateWorkspace(db(), actor, { workspaceId: ws.id, ...bad })).rejects.toMatchObject({
+        code: "INVALID",
+      });
+  });
+
   it("setting a device field to its current value does not bump", async () => {
     const ws = await makeWorkspace(db());
     const { actor } = await makeAdmin(db(), ws.id);
