@@ -132,6 +132,26 @@ describe("handleUpdate", () => {
     expect(vi.mocked(onShuttle).mock.calls[3][1]).toBe(`test${n}`);
   });
 
+  it("a spot button from another workspace answers there for its members, live for everyone else", async () => {
+    const n = ++seq;
+    const test = await makeWorkspace(db(), { slug: `btn${n}` });
+    const circle = await makeSpot(db(), test.id, { name: `Circle ${n}`, shortName: `Circle${n}` });
+    const from = user();
+    await handleUpdate(db(), dm(from, "/start"), NOW);
+    const [p] = await db().select().from(people).where(eq(people.telegramId, from.id));
+    await db().insert(memberships).values({ personId: p.id, workspaceId: test.id, role: "admin" });
+    const msg = { message_id: 5, date: 0, chat: { id: from.id, type: "private" as const }, text: "x" };
+    const press = (who: TgUser, data: string): TgUpdate => ({
+      update_id: ++seq,
+      callback_query: { id: `q${seq}`, from: who, message: { ...msg, chat: { id: who.id, type: "private" } }, data },
+    });
+    await handleUpdate(db(), press(from, `spot:${circle.id}`), NOW);
+    expect(ctxOf(vi.mocked(onAttendeeCallback).mock.calls[0]).workspace.id).toBe(test.id);
+    const stranger = user();
+    await handleUpdate(db(), press(stranger, `spot:${circle.id}`), NOW);
+    expect(ctxOf(vi.mocked(onAttendeeCallback).mock.calls[1]).workspace.id).toBe(live.id);
+  });
+
   it("an archived spot or another workspace's spot is not a stop name", async () => {
     const n = ++seq;
     const other = await makeWorkspace(db());

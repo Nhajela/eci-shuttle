@@ -1,5 +1,7 @@
 /** svc-bot: the webhook entry. app/api/telegram/route.ts checks the secret header, then calls handleUpdate. */
+import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
+import { spots } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { markBlockedBot, membershipsOf, upsertPersonFromTelegram } from "../catalog/people";
 import { isSpotName } from "../catalog/spots";
@@ -30,6 +32,19 @@ const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html
  * - anything else in a private chat → a short help text; in groups → nothing.
  * No live workspace → "The shuttle isn't set up yet."
  */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A spot button ("spot:<spotId>", "arrive:…", "nsub:…") whose spot is in a workspace this person is a member of. */
+async function buttonWorkspace(db: Db, personId: string, data: string | undefined): Promise<Workspace | null> {
+  const [action, spotId] = (data ?? "").split(":");
+  if (!["spot", "arrive", "nsub", "nunsub"].includes(action) || !spotId || !UUID.test(spotId)) return null;
+  const [spot] = await db.select({ workspaceId: spots.workspaceId }).from(spots).where(eq(spots.id, spotId));
+  if (!spot) return null;
+  const mine = await membershipsOf(db, personId);
+  if (!mine.some((m) => m.workspaceId === spot.workspaceId)) return null;
+  return (await listAllWorkspaces(db)).find((w) => w.id === spot.workspaceId) ?? null;
+}
+
 /** The last word of the text, when it is the slug of a workspace this person is a member of. */
 async function memberWorkspace(
   db: Db,
@@ -90,7 +105,8 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
   // staff can ask about another workspace they belong to by naming its slug last: "/shuttle test", "riva test"
   const asked =
     !query && (command === "shuttle" || command === null) ? await memberWorkspace(db, person.id, text) : null;
-  const ctx: BotContext = { db, now, person, chatId, workspace: asked?.workspace ?? workspace };
+  const pressedIn = query ? await buttonWorkspace(db, person.id, query.data) : null;
+  const ctx: BotContext = { db, now, person, chatId, workspace: asked?.workspace ?? pressedIn ?? workspace };
   const shuttleArg = asked ? asked.rest : rest;
 
   try {
