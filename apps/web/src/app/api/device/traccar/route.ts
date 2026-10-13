@@ -84,16 +84,21 @@ function fromJson(b: Record<string, unknown>): Fix {
 }
 
 async function handle(req: Request) {
+  let idHint = "?";
+  let shape = "query";
   try {
     const url = new URL(req.url);
     let fix = fromQuery(url.searchParams);
     if (req.method === "POST" && !fix.ping) {
       const type = req.headers.get("content-type") ?? "";
       const text = await req.text();
-      if (type.includes("json") || text.trim().startsWith("{")) fix = fromJson(JSON.parse(text));
+      shape = type.includes("json") || text.trim().startsWith("{") ? "json" : "form";
+      if (shape === "json") fix = fromJson(JSON.parse(text));
       else fix = fromQuery(new URLSearchParams(text));
+      if (!fix.ping) console.log(`[traccar] unparsed ${req.method} ${shape} body: ${text.slice(0, 300)}`);
       if (!fix.id) fix.id = url.searchParams.get("id");
     }
+    idHint = fix.id ? `${fix.id.slice(0, 4)}…` : "none";
     const actor = await authenticateDevice(db(), fix.id);
     const now = new Date();
     const wait = limit(actor.id, now.getTime());
@@ -111,9 +116,12 @@ async function handle(req: Request) {
       clock: now.getTime(),
     };
     await syncDevice(db(), actor, input, now);
+    console.log(`[traccar] ok ${req.method} ${shape} id=${idHint} fix=${fix.ping ? "yes" : "no"}`);
     return new Response(null, { status: 200 });
   } catch (e) {
-    return errorResponse(e);
+    const res = errorResponse(e);
+    console.log(`[traccar] ${res.status} ${req.method} ${shape} id=${idHint} ${(e as Error)?.message ?? e}`);
+    return res;
   }
 }
 
