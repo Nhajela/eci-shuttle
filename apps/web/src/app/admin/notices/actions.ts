@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import type { z } from "zod";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
+import { setWorkspaceInfo } from "@/services/catalog/workspaces";
 import { type Actor, isServiceError, userMessage } from "@/services/kernel";
 import { createNotice, endNotice, updateNotice } from "@/services/notices/notices";
 
@@ -40,4 +41,9 @@ export async function pinNoticeAction(
   version: number,
 ): Promise<ActionResult> {
   return run(w, (workspaceId, actor) => updateNotice(db(), actor, { workspaceId, noticeId, pinned, version }));
+}
+
+/** The public page's info board (markdown; blank clears it). The public page is dynamic, so it shows at once. */
+export async function setInfoAction(w: string | null, infoMd: string, version: number): Promise<ActionResult> {
+  return run(w, (workspaceId, actor) => setWorkspaceInfo(db(), actor, { workspaceId, infoMd, version }));
 }

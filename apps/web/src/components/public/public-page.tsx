@@ -7,6 +7,7 @@ import { membershipsOf } from "@/services/catalog/people";
 import { workspaceBySlug } from "@/services/catalog/workspaces";
 import { publicStatus } from "@/services/public/status";
 import { pickSpot, spotCookieName } from "./format";
+import { InfoBoard } from "./info-board";
 import { StatusView } from "./status-view";
 
 export async function PublicPage({ slug }: { slug: string | null }) {
@@ -17,5 +18,8 @@ export async function PublicPage({ slug }: { slug: string | null }) {
   // a logged-in member of this workspace (any role) also gets the live map
   const person = await currentPerson();
   const staff = !!person && (await membershipsOf(db(), person.id)).some((m) => m.workspaceId === ws.id);
-  return <StatusView initial={status} slug={slug} initialSpotId={spotId} staff={staff} />;
+  // the info board renders here on the server, so the markdown parser stays out of the browser bundle
+  return (
+    <StatusView initial={status} slug={slug} initialSpotId={spotId} staff={staff} info={<InfoBoard md={ws.infoMd} />} />
+  );
 }

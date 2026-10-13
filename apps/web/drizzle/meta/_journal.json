@@ -57,6 +57,13 @@
       "when": 1791872163362,
       "tag": "0007_need_pickup",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791892743228,
+      "tag": "0008_public_info",
+      "breakpoints": true
     }
   ]
 }

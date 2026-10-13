@@ -6,7 +6,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, memberships, workspaces } from "@/db/schema";
 import { bumpConfigs } from "@/services/devices/config";
 import { type Actor, systemActor } from "../kernel";
-import { createWorkspace, listAllWorkspaces, listMyWorkspaces, updateWorkspace, workspaceBySlug } from "./workspaces";
+import {
+  createWorkspace,
+  listAllWorkspaces,
+  listMyWorkspaces,
+  setWorkspaceInfo,
+  updateWorkspace,
+  workspaceBySlug,
+} from "./workspaces";
 
 // svc-devices owns bumpConfigs; here we only check that we call it, in the caller's transaction
 vi.mock("@/services/devices/config", () => ({ bumpConfigs: vi.fn(async () => []) }));
@@ -221,5 +228,40 @@ describe("listMyWorkspaces", () => {
       [b.id, "viewer"],
     ]);
     expect(await listMyWorkspaces(db(), systemActor("seed"))).toEqual([]);
+  });
+});
+
+describe("setWorkspaceInfo", () => {
+  it("ops sets the public info (trimmed, audited, version bumped); blank clears it; no phone bump", async () => {
+    const ws = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id, "ops");
+    const w = await setWorkspaceInfo(db(), actor, { workspaceId: ws.id, infoMd: "  **Nanu** pickup 08:00\n " });
+    expect(w).toMatchObject({ infoMd: "**Nanu** pickup 08:00", version: ws.version + 1 });
+    expect(bumpConfigs).not.toHaveBeenCalled();
+    const [row] = await auditFor(ws.id);
+    expect(row).toMatchObject({ action: "workspace.info", entity: "workspace", workspaceId: ws.id });
+    expect(row.after).toMatchObject({ infoMd: "**Nanu** pickup 08:00" });
+
+    const cleared = await setWorkspaceInfo(db(), actor, { workspaceId: ws.id, infoMd: "   ", version: w.version });
+    expect(cleared.infoMd).toBeNull();
+  });
+
+  it("a stale version is refused; too long is INVALID; a viewer and another workspace are refused", async () => {
+    const ws = await makeWorkspace(db());
+    const other = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id);
+    const { actor: viewer } = await makeAdmin(db(), ws.id, "viewer");
+    const { actor: stranger } = await makeAdmin(db(), other.id);
+    await setWorkspaceInfo(db(), actor, { workspaceId: ws.id, infoMd: "one" });
+    await expect(
+      setWorkspaceInfo(db(), actor, { workspaceId: ws.id, infoMd: "two", version: ws.version }),
+    ).rejects.toMatchObject({ code: "STALE_VERSION" });
+    await expect(setWorkspaceInfo(db(), actor, { workspaceId: ws.id, infoMd: "x".repeat(5001) })).rejects.toMatchObject(
+      { code: "INVALID" },
+    );
+    for (const a of [viewer, stranger])
+      await expect(setWorkspaceInfo(db(), a, { workspaceId: ws.id, infoMd: "x" })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
   });
 });

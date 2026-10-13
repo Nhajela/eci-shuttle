@@ -705,3 +705,35 @@ describe("workspace.update (ops tracking hours)", () => {
     await expectCode(applyChange(db(), ops.actor, ops.ws.id, set, NOW), "FORBIDDEN");
   });
 });
+
+describe("workspace.info (public info board)", () => {
+  const set = { kind: "workspace.info", infoMd: "## Nanu\n**Pickup 08:00**" } as const;
+  const clear = { kind: "workspace.info", infoMd: null } as const;
+
+  it("validates; ops; no version keys", () => {
+    expect(McpChange.safeParse(set).success).toBe(true);
+    expect(McpChange.safeParse(clear).success).toBe(true);
+    expect(McpChange.safeParse({ kind: "workspace.info", infoMd: "x".repeat(5001) }).success).toBe(false);
+    expect(CHANGE_ROLE["workspace.info"]).toBe("ops");
+    expect(versionKeys(set)).toEqual([]);
+  });
+
+  it("describes in plain English, quoting the text", async () => {
+    const { ws } = await setup();
+    await db().update(workspaces).set({ name: "Test" }).where(eq(workspaces.id, ws.id));
+    expect(await describeChange(db(), ws.id, set)).toBe(
+      'Set the info board on the public page of Test to:\n"## Nanu\n**Pickup 08:00**"',
+    );
+    expect(await describeChange(db(), ws.id, clear)).toBe("Remove the info board from the public page of Test");
+  });
+
+  it("applies through catalog/workspaces, audited as workspace.info", async () => {
+    const s = await setup("ops");
+    const actor = { ...s.actor, proposalId: "P-INFOINFO", reason: "test" };
+    await applyChange(db(), actor, s.ws.id, set, NOW);
+    const [w] = await db().select().from(workspaces).where(eq(workspaces.id, s.ws.id));
+    expect(w.infoMd).toBe("## Nanu\n**Pickup 08:00**");
+    const rows = await db().select().from(auditLog).where(eq(auditLog.proposalId, "P-INFOINFO"));
+    expect(rows.map((r) => r.action)).toEqual(["workspace.info"]);
+  });
+});

@@ -36,6 +36,7 @@ import {
   VehicleCreateFields,
   VehicleUpdateFields,
   WorkspaceCreateFields,
+  WorkspaceInfoFields,
   WorkspaceUpdateFields,
 } from "./inputs";
 
@@ -74,6 +75,7 @@ export const McpChange = z.discriminatedUnion("kind", [
   change("notice.end", NoticeEndFields),
   change("workspace.create", WorkspaceCreateFields),
   change("workspace.update", WorkspaceUpdateFields).superRefine(checkOpsHours),
+  change("workspace.info", WorkspaceInfoFields),
   change("ota.rollout", OtaRolloutFields),
   change("ota.rollback", OtaRollbackFields),
   change("ota.phone", OtaPhoneFields),

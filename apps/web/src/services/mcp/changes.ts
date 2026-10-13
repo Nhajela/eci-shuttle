@@ -42,7 +42,7 @@ import {
 } from "../catalog/schedule";
 import { archiveSpot, createSpot, updateSpot } from "../catalog/spots";
 import { createVehicle, listVehicles, updateVehicle } from "../catalog/vehicles";
-import { createWorkspace, updateWorkspace } from "../catalog/workspaces";
+import { createWorkspace, setWorkspaceInfo, updateWorkspace } from "../catalog/workspaces";
 import { rollbackUpdate, rolloutUpdate, setPhoneUpdate } from "../devices/ota";
 import { createPairingCode } from "../devices/pairing";
 import {
@@ -88,6 +88,7 @@ export const CHANGE_ROLE: Record<McpChangeKind, Role> = {
   "notice.end": "ops",
   "workspace.create": "admin",
   "workspace.update": "admin",
+  "workspace.info": "ops",
   "ota.rollout": "admin",
   "ota.rollback": "admin",
   "ota.phone": "admin",
@@ -374,6 +375,12 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
         ? `Track the phones in vehicles in ${name} every day ${c.opsHoursStart}–${c.opsHoursEnd} IST (ops hours), not only during services`
         : `Turn off ops hours in ${name}: phones track only during services`;
     }
+    case "workspace.info": {
+      const name = await workspaceName(db, ws);
+      return c.infoMd
+        ? `Set the info board on the public page of ${name} to:\n"${c.infoMd}"`
+        : `Remove the info board from the public page of ${name}`;
+    }
     case "ota.rollout": {
       const name = await workspaceName(db, ws);
       return c.updateId
@@ -625,6 +632,8 @@ export async function applyChange(
       return createWorkspace(db, actor, { slug: c.slug, name: c.name });
     case "workspace.update":
       return updateWorkspace(db, actor, input(c, ws));
+    case "workspace.info":
+      return setWorkspaceInfo(db, actor, input(c, ws));
     case "ota.rollout":
       return rolloutUpdate(db, actor, input(c, ws));
     case "ota.rollback":

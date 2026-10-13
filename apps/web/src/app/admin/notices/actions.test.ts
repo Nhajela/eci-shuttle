@@ -6,11 +6,13 @@ const session = vi.hoisted(() => ({ requireAdmin: vi.fn() }));
 const svc = vi.hoisted(() => ({ createNotice: vi.fn(), endNotice: vi.fn(), updateNotice: vi.fn() }));
 const cache = vi.hoisted(() => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/session", () => session);
+const ws = vi.hoisted(() => ({ setWorkspaceInfo: vi.fn() }));
 vi.mock("@/services/notices/notices", () => svc);
+vi.mock("@/services/catalog/workspaces", () => ws);
 vi.mock("next/cache", () => cache);
 vi.mock("@/db", () => ({ db: () => "DB" }));
 
-const { createNoticeAction, endNoticeAction, pinNoticeAction } = await import("./actions");
+const { createNoticeAction, endNoticeAction, pinNoticeAction, setInfoAction } = await import("./actions");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -36,6 +38,17 @@ describe("notice actions", () => {
       pinned: true,
       version: 3,
     });
+  });
+
+  it("the info board saves through setWorkspaceInfo (ops)", async () => {
+    expect(await setInfoAction("riva", "**Nanu** 08:00", 4)).toEqual({ ok: true });
+    expect(session.requireAdmin).toHaveBeenCalledWith({ w: "riva", minRole: "ops" });
+    expect(ws.setWorkspaceInfo).toHaveBeenCalledWith("DB", actor, {
+      workspaceId: "ws1",
+      infoMd: "**Nanu** 08:00",
+      version: 4,
+    });
+    expect(cache.revalidatePath).toHaveBeenCalledWith("/admin/notices");
   });
 
   it("a service error comes back as plain text, nothing revalidated", async () => {

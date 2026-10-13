@@ -5,7 +5,7 @@
  */
 import type { AnswerLine, PublicSpot, PublicStatus } from "@eci-shuttle/shared";
 import { cn } from "cn";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ageSeconds, answerParts, contextText, pickSpot, spotCookieName } from "./format";
 import { Notices } from "./notices";
@@ -18,12 +18,15 @@ export function StatusView({
   slug,
   initialSpotId,
   staff = false,
+  info,
 }: {
   initial: PublicStatus;
   slug: string | null;
   initialSpotId: string | null;
   /** a logged-in member of this workspace: adds the live map and says "Admin" */
   staff?: boolean;
+  /** the workspace's info board, rendered on the server (info-board.tsx) */
+  info?: ReactNode;
 }) {
   const [status, setStatus] = useState(initial);
   const [chosen, setChosen] = useState(initialSpotId);
@@ -113,6 +116,7 @@ export function StatusView({
       )}
 
       <Notices notices={status.notices} />
+      {info}
 
       {status.spots.length === 0 || !spot ? (
         <p className="py-10 text-center text-lg text-ink-soft">No public shuttles are running today.</p>

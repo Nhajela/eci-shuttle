@@ -99,6 +99,8 @@ export const workspaces = pgTable(
     /** daily ops tracking hours, IST HH:MM (both or neither): assigned phones track off duty, positions ops-only */
     opsHoursStart: text("ops_hours_start"),
     opsHoursEnd: text("ops_hours_end"),
+    /** markdown shown as an info box on the public page (persistent, unlike notices); null = none */
+    infoMd: text("info_md"),
     version: version(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

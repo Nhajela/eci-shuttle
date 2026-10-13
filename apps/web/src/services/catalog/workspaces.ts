@@ -1,5 +1,5 @@
 /** svc-catalog: workspaces (SPEC §3 Workspaces). */
-import { checkOpsHours, WorkspaceCreateFields, WorkspaceUpdateFields } from "@eci-shuttle/shared";
+import { checkOpsHours, WorkspaceCreateFields, WorkspaceInfoFields, WorkspaceUpdateFields } from "@eci-shuttle/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
@@ -100,6 +100,36 @@ export async function updateWorkspace(
         .where(eq(workspaces.id, workspaceId))
         .returning();
       if (DEVICE_FIELDS.some((k) => before[k] !== after[k])) await bumpConfigs(tx, { workspaceId }, "workspace.update");
+      return { before, after, result: after };
+    },
+  );
+}
+
+export const SetWorkspaceInfoInput = WorkspaceInfoFields.extend({
+  workspaceId: z.uuid(),
+  version: z.number().int().positive().optional(),
+});
+/** ops+. Sets the public page's info box (markdown; blank clears it). Audited as workspace.info; phones untouched. */
+export async function setWorkspaceInfo(
+  db: Db,
+  actor: Actor,
+  input: z.input<typeof SetWorkspaceInfoInput>,
+): Promise<Workspace> {
+  const { workspaceId, version, infoMd } = parseInput(SetWorkspaceInfoInput, input);
+  requireRole(actor, workspaceId, "ops");
+  return mutate(
+    db,
+    actor,
+    { action: "workspace.info", entity: "workspace", entityId: workspaceId, workspaceId },
+    async (tx) => {
+      const [before] = await tx.select().from(workspaces).where(eq(workspaces.id, workspaceId)).for("update");
+      if (!before) throw new ServiceError("NOT_FOUND", "No such workspace.", { entity: "workspace", id: workspaceId });
+      checkVersion(before, version, "workspace");
+      const [after] = await tx
+        .update(workspaces)
+        .set({ infoMd, version: sql`${workspaces.version} + 1`, updatedAt: sql`now()` })
+        .where(eq(workspaces.id, workspaceId))
+        .returning();
       return { before, after, result: after };
     },
   );

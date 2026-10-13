@@ -38,6 +38,16 @@ export const checkOpsHours = (
     ctx.addIssue({ code: "custom", message: "Ops hours need different start and end times." });
 };
 
+/** The public page's info box (markdown). Blank clears it. */
+export const WorkspaceInfoFields = z.object({
+  infoMd: z
+    .string()
+    .trim()
+    .max(5000)
+    .nullable()
+    .transform((v) => v || null),
+});
+
 // ---------- spots ----------
 export const SpotCreateFields = z.object({
   name,

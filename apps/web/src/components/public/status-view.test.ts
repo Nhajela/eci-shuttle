@@ -88,6 +88,20 @@ describe("StatusView (server render)", () => {
     expect(html).not.toContain("Pickup at the side gate");
   });
 
+  it("the info board shows after the workspace notices, before 'Where are you?', even with no spots", () => {
+    const info = createElement("p", null, "Nanu pickup 08:00");
+    const html = renderToString(
+      createElement(StatusView, { initial: status, slug: "test", initialSpotId: "riva", info }),
+    );
+    const at = html.indexOf("Nanu pickup 08:00");
+    expect(at).toBeGreaterThan(html.indexOf("Welcome to Goa"));
+    expect(at).toBeLessThan(html.indexOf("Where are you?"));
+    const empty = renderToString(
+      createElement(StatusView, { initial: { ...status, spots: [] }, slug: null, initialSpotId: null, info }),
+    );
+    expect(empty).toContain("Nanu pickup 08:00");
+  });
+
   it("no spots: says so plainly", () => {
     const html = renderToString(
       createElement(StatusView, { initial: { ...status, spots: [] }, slug: null, initialSpotId: null }),

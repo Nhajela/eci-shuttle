@@ -23,4 +23,9 @@ describe("shuttle_guide", () => {
     for (const topic of ["changes", "phones", "roles"] as const)
       expect(guideFor(topic)).toContain("workspace.update { opsHoursStart");
   });
+
+  it("explains the info board (workspace.info), ops", () => {
+    expect(changeKindsReference()).toContain("- `workspace.info` (ops): infoMd*");
+    expect(guideFor("notices")).toContain("workspace.info { infoMd");
+  });
 });

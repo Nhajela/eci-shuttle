@@ -91,7 +91,8 @@ ${OPS_HOURS_GUIDE}`,
 - Severity info, heads_up or urgent; urgent always comes first. Pinned notices stay on top in sort order until they end.
 - starts_at / ends_at bound when it shows; it disappears by itself after. \`notice.end\` ends one now.
 - Channels on top of the page: subscribers (Telegram subscribers of those spots), group (post in the main group), group_pin (post and pin; unpinned when it ends).
-- Write for attendees: plain, short, IST times, never "late" or "behind schedule".`,
+- Write for attendees: plain, short, IST times, never "late" or "behind schedule".
+- Info board: \`workspace.info { infoMd }\` (ops) sets one markdown text shown on the public page under the top notices, until changed (no times, no channels; null or blank removes it). Use it for standing info (e.g. a stop served only at 08:00); use notices for anything time-bound.`,
   roles: `# Workspaces and roles
 - \`live\` is what attendees see at the public page. Test workspaces have their own phones, vehicles and schedule, at /w/<slug>; use them to try things.
 - ${ROLES_TEXT}
