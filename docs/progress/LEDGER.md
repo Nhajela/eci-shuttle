@@ -113,7 +113,23 @@ admin Notices on `listServices`; admin Vehicles on `listVehicleTrips` (stopgap d
 leg sample counts; admin Phones uses `PhoneHealth.silent`; sims detected by `devices.simulated` only;
 listRoutes' NaN workaround removed (schema reads nulls now); driver `Fix` exported from `location/plan`.
 
+## Lens review round 1 (2026-10-13)
+
+Merged `--no-ff` onto `main`: w2/lens1-0 … lens1-4 (no stacked fix branches, no conflicts). Gates after
+integration: `pnpm test` (118 files, 1046 tests), driver `vitest` (170) + `tsc`, `pnpm typecheck`, `pnpm lint`
+(same 6 test warnings), web build, worker build: all green. Nothing needed wiring (no stubs replaced).
+
+| Key | Status | Notes |
+|---|---|---|
+| lens1-0 | merged | config windows keep their real start (silent/mode_mismatch mid-service); deep-link login asks to confirm (`login:<code>` button) before claiming; ingest drops off-duty positions, scopes assignments to the workspace, prefers special services; public ETAs only count vehicles on the resolved service; `/setgroup` sets the workspace's Telegram group, MCP warns on group notices without one |
+| lens1-1 | merged | cross-midnight gap departures stay on the service date in `trackingWindows` |
+| lens1-2 | merged | Bricolage Grotesque via `next/font` (`--font-bricolage` defined; var() has a fallback) |
+| lens1-3 | merged | admin map isolated under the tab bar; log out from More sheet + desktop sidebar; off-route live line never reads "No more today" |
+| lens1-4 | merged | sim sleeps by the config the sync just returned |
+
 ## Remaining gaps
+
+- The workspace Telegram group can only be set with `/setgroup` in the group; admin Workspaces has no field for it.
 
 - `AlertKind` has no `update_pending`: it is gated by the `update_failed` pref (alerts-2). Adding it needs a
   decision for existing `alert_prefs` rows (otherwise those admins silently stop getting it).
