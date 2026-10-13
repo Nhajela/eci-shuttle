@@ -1,7 +1,7 @@
 "use client";
 /** admin-live: the Live board (SPEC §7). List and map side by side on desktop, a Map/List switch on phones. */
 import type { LatLng } from "@eci-shuttle/shared";
-import { AlertTriangle, Megaphone } from "lucide-react";
+import { AlertTriangle, Megaphone, Users } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -17,6 +17,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { Board } from "./board";
 import { useQuick } from "./quick";
 import { VehicleCard } from "./vehicle-card";
+import type { WaitingView } from "./waiting";
 
 const AdminMap = dynamic(() => import("@/components/admin/shell/admin-map").then((m) => m.AdminMap), { ssr: false });
 
@@ -27,6 +28,7 @@ export type AdminNotice = { id: string; text: string; urgent: boolean };
 export function LiveBoard({
   board,
   notices,
+  waiting,
   spots,
   paths,
   w,
@@ -34,6 +36,8 @@ export function LiveBoard({
 }: {
   board: Board;
   notices: AdminNotice[];
+  /** open /need requests per stop */
+  waiting: WaitingView[];
   spots: MapSpot[];
   paths: LatLng[][];
   w: string | null;
@@ -80,6 +84,8 @@ export function LiveBoard({
           ))}
         </ul>
       )}
+
+      {waiting.length > 0 && <Waiting waiting={waiting} />}
 
       {board.nextDepartures.length > 0 && (
         <section aria-labelledby="next-deps" className="flex flex-col gap-2">
@@ -138,6 +144,35 @@ export function LiveBoard({
         </div>
       </div>
     </div>
+  );
+}
+
+/** People who asked for a shuttle with /need, per stop: count, then each name, where to and since when. */
+function Waiting({ waiting }: { waiting: WaitingView[] }) {
+  return (
+    <section aria-labelledby="waiting" className="flex flex-col gap-2">
+      <h2 id="waiting" className="text-sm font-medium text-muted-foreground">
+        Waiting
+      </h2>
+      {waiting.map((s) => (
+        <div key={s.spotId} className="rounded-xl border p-3">
+          <p className="flex items-center gap-2 font-semibold">
+            <Users className="size-4 shrink-0" aria-hidden />
+            {s.spotName} · {s.count} waiting
+          </p>
+          <ul className="mt-1 flex flex-col gap-1 text-sm">
+            {s.people.map((p) => (
+              <li key={p.id} className="flex flex-wrap gap-x-2">
+                <span className="min-w-0 break-words">
+                  {p.name} → {p.to}
+                </span>
+                <span className="text-muted-foreground tabular-nums">{p.since}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
   );
 }
 

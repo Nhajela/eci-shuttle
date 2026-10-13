@@ -2,6 +2,7 @@ import { istDate } from "@eci-shuttle/shared";
 import type { Metadata } from "next";
 import { buildBoard } from "@/components/admin/live/board";
 import { LiveBoard } from "@/components/admin/live/live-board";
+import { waitingView } from "@/components/admin/live/waiting";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { detectProblems } from "@/services/alerts/watchdog";
@@ -13,6 +14,7 @@ import { listVehicles } from "@/services/catalog/vehicles";
 import { listPhones } from "@/services/devices/phones";
 import { vehicleStates } from "@/services/ingest/ingest";
 import { activeNotices } from "@/services/notices/notices";
+import { waitingAtSpots } from "@/services/subscriptions/need";
 
 /** admin-live (SPEC §7): Live board: every vehicle's phase, ETA, last seen, battery, service; problems flagged; admin notices. Components live in components/admin/live/. */
 export const metadata: Metadata = { title: "Live" };
@@ -24,7 +26,7 @@ export default async function LivePage({ searchParams }: { searchParams: Promise
   const now = new Date();
   const d = db();
   const workspaceId = workspace.id;
-  const [vehicles, states, phones, problems, schedule, spots, routes, notices, breaks] = await Promise.all([
+  const [vehicles, states, phones, problems, schedule, spots, routes, notices, breaks, waiting] = await Promise.all([
     listVehicles(d, actor, { workspaceId }),
     vehicleStates(d, workspaceId),
     listPhones(d, actor, { workspaceId }, now),
@@ -35,6 +37,7 @@ export default async function LivePage({ searchParams }: { searchParams: Promise
     listRoutes(d, actor, { workspaceId }),
     activeNotices(d, workspaceId, now, ["admin"]),
     activeBreaks(d, workspaceId, now),
+    waitingAtSpots(d, actor, { workspaceId }, now),
   ]);
   const board = buildBoard({ vehicles, states, phones, problems, breaks, schedule, spots }, now.getTime());
 
@@ -42,6 +45,7 @@ export default async function LivePage({ searchParams }: { searchParams: Promise
     <LiveBoard
       board={board}
       notices={notices.map((n) => ({ id: n.id, text: n.text, urgent: n.severity === "urgent" }))}
+      waiting={waitingView(waiting, now.getTime())}
       spots={spots.map((s) => ({ id: s.id, name: s.shortName, lat: s.lat, lng: s.lng, radiusM: s.radiusM }))}
       paths={routes.filter((r) => !r.archivedAt).map((r) => r.path)}
       w={w}
