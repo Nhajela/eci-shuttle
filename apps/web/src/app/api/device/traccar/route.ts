@@ -102,9 +102,10 @@ async function handle(req: Request) {
       pings: fix.ping ? [fix.ping] : [],
       battery: fix.battery,
       charging: fix.charging,
-      permissions: { location: "always", preciseLocation: true, notifications: false, batteryOptimizationExempt: true },
+      permissions: { location: "always", preciseLocation: true, notifications: true, batteryOptimizationExempt: true },
       reportedMode: "active",
-      appliedConfigVersion: 0,
+      // Traccar can't apply our config (no modes, kill or OTA); report "up to date" so admin doesn't flag it forever
+      appliedConfigVersion: 2_147_483_647,
       appVersion: "traccar",
       updateId: null,
       clock: now.getTime(),
