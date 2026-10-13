@@ -9,7 +9,7 @@ import { initialSyncState, type SyncState } from "../sync/sync";
 
 /** Screen-owned keys, next to the store's in the same file KV. */
 const SCREENS_KEY = "screens-state";
-// ponytail: where driver-sync persists SyncState is not settled yet; this key is a guess (see contractRequests).
+// The runtime (runtime/runtime.ts) writes SyncState here.
 const SYNC_KEY = "sync-state";
 
 export type ScreenSnapshot = {

@@ -6,15 +6,12 @@
  */
 import type { Mode, ModeResolution, SyncRequest } from "@eci-shuttle/shared/contracts";
 import { resolveMode } from "@eci-shuttle/shared/schedule";
-import { toPing } from "../location/plan";
+import { type Fix, toPing } from "../location/plan";
 import type { DeviceStore } from "../store/deviceStore";
 import { type KV, parseJson, serial } from "../store/kv";
 import type { PingQueue } from "../store/pingQueue";
 import { syncOnce } from "../sync/client";
 import { initialSyncState, nextSyncDelayMs, type SyncState, type Telemetry } from "../sync/sync";
-
-/** expo-location fix, as toPing reads it. */
-export type Fix = Parameters<typeof toPing>[0];
 
 /** Same key the screens read (screens/deviceCore SYNC_KEY) for the server clock and "Last sync". */
 const SYNC_KEY = "sync-state";

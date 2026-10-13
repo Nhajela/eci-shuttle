@@ -54,6 +54,21 @@ on expiry, outbox status, `mcp_tokens.last_used_at`, heartbeat, login/pairing/pr
 - `bot/callbacks`: `arrive:<spotId>[:<leadMin>]`.
 - Shared barrels also export `headwaysFromDepartures`, `applyDirectives`, `VehicleDirective`, `notificationText`.
 
+### Settled at integration (wave 2b)
+- Schema: `devices.permission_lost_since` / `low_battery_since` (episode starts, written by the watchdog: unaudited
+  derived bookkeeping), `vehicle_state.off_route_since` (ingest), `routes.planned_dwell_s` (jsonb
+  `{ spotId: seconds }`, default `{}`), `routes.typical_leg_s` typed `(number | null)[]` (null = not learned).
+- `PairRequest.simulated?`: stored on `devices.simulated`; a simulated pair into the live workspace is `FORBIDDEN`.
+- `service_vehicles` overlap stays a service-level rule (row lock in catalog/schedule); no DB exclusion constraint
+  (drizzle-kit can't emit one).
+- `McpChange` `service.create` / `service.update` carry the service's kind as `serviceKind` (`kind` is the change
+  discriminator); create defaults to `regular`.
+- `DeliveryResult` retry variant has optional `retryAfterMs` (Telegram 429); the queue uses it instead of backoff.
+- New reads: `schedule.listServices` / `getService`, `vehicles.listVehicleTrips`, `spots.isSpotName` (system read),
+  `phones.getPhone` / `getVehiclePhone` / `trackedDevices` (system read), `mcp/changes.actorFor` / `liveBoard`,
+  `mcp/proposals.proposalWorkspace`, `cleanup.runCleanup(db, pingsDeleteAfter, now)`. `lib/telegram/html.escapeHtml`
+  is the one HTML escaper for Telegram text.
+
 ### Actors (`services/kernel/actor.ts`, built by adapters only)
 | Adapter | Builds |
 |---|---|

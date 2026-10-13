@@ -61,7 +61,7 @@ export function planKey(p: LocationPlan): string {
 }
 
 /** Shape of expo-location's LocationObject that we read (kept local so this file stays RN-free). */
-type Fix = {
+export type Fix = {
   timestamp: number;
   coords: {
     latitude: number;
