@@ -457,7 +457,7 @@ describe("listPhones", () => {
 });
 
 describe("getPhone / getVehiclePhone", () => {
-  it("getPhone reads one phone's health by id, in whatever workspace it is", async () => {
+  it("getPhone reads one phone's health by id; another workspace's phone is NOT_FOUND", async () => {
     const { ws, phone } = await setup();
     const { actor } = await makeAdmin(db(), ws.id, "viewer");
     const v = await makeVehicle(ws.id);
@@ -466,7 +466,7 @@ describe("getPhone / getVehiclePhone", () => {
     expect(h).toMatchObject({ device: { id: phone.id }, vehicle: { id: v.id }, desiredMode: "idle", silent: false });
     const other = await setup();
     await expect(getPhone(db(), other.actor, { deviceId: phone.id }, new Date())).rejects.toMatchObject({
-      code: "FORBIDDEN",
+      code: "NOT_FOUND",
     });
     await expect(getPhone(db(), actor, { deviceId: randomUUID() }, new Date())).rejects.toMatchObject({
       code: "NOT_FOUND",

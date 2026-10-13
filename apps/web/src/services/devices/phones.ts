@@ -27,6 +27,7 @@ import type { Device, DeviceAssignment, Directive, Vehicle } from "@/db/types";
 import { SILENT_AFTER_MS } from "../alerts/watchdog";
 import {
   type Actor,
+  can,
   enqueue,
   getInWorkspace,
   inWorkspace,
@@ -369,12 +370,13 @@ export async function listPhones(
   return healthOf(db, workspaceId, phones, now);
 }
 
-/** viewer+, any workspace the actor reads (bot callbacks only carry the id). */
+/** viewer+, any workspace the actor reads (bot callbacks only carry the id); others' phones are NOT_FOUND. */
 export async function getPhone(db: Db, actor: Actor, input: { deviceId: string }, now: Date): Promise<PhoneHealth> {
   const { deviceId } = parseInput(z.object({ deviceId: Id }), input);
   const [d] = await db.select().from(devices).where(eq(devices.id, deviceId));
-  if (!d) throw new ServiceError("NOT_FOUND", "No such phone.", { entity: "phone", id: deviceId });
-  readable(actor, d.workspaceId);
+  // A phone the actor can't read is "missing", so ids from other workspaces don't leak (CONTRACTS: NOT_FOUND).
+  if (!d || !can(actor, d.workspaceId, "viewer"))
+    throw new ServiceError("NOT_FOUND", "No such phone.", { entity: "phone", id: deviceId });
   return (await healthOf(db, d.workspaceId, [d], now))[0];
 }
 
