@@ -14,7 +14,13 @@ const schedules = new Map<string, Window[]>();
 vi.mock("@/services/devices/config", () => ({
   desiredConfig: vi.fn(
     async (_db: unknown, deviceId: string) =>
-      ({ killed: false, revoked: false, schedule: schedules.get(deviceId) ?? [] }) as unknown as SyncResponse,
+      ({
+        killed: false,
+        revoked: false,
+        schedule: schedules.get(deviceId) ?? [],
+        activeIntervalS: 10,
+        idleHeartbeatS: 900,
+      }) as unknown as SyncResponse,
   ),
 }));
 vi.mock("@eci-shuttle/shared", async (orig) => ({
@@ -136,22 +142,31 @@ describe("detectProblems", () => {
 
   it("mode_mismatch: kill pending, reported ≠ desired after a sync, config behind > 2 min after the push", async () => {
     const ws = await makeWorkspace(db());
-    const killed = await makeDevice(db(), ws.id, { label: "K", killedAt: ago(5), reportedMode: "active" });
-    await makeDevice(db(), ws.id, { label: "K done", killedAt: ago(5), reportedMode: "killed" });
-    await makeDevice(db(), ws.id, { label: "K new", killedAt: ago(1), reportedMode: "active" });
+    // synced after the kill on the kill's config version and still reports active
+    const killed = await makeDevice(db(), ws.id, {
+      label: "K",
+      killedAt: ago(5),
+      reportedMode: "active",
+      lastSyncAt: ago(1),
+      configVersion: 2,
+      reportedConfigVersion: 2,
+    });
+    await makeDevice(db(), ws.id, { label: "K done", killedAt: ago(5), reportedMode: "killed", lastSyncAt: ago(1) });
     const wrong = await makeAssignedDevice(db(), ws.id, {
-      device: { label: "W", reportedMode: "idle", lastSyncAt: ago(1) },
+      device: { label: "W", reportedMode: "idle", lastSyncAt: ago(1), reportedConfigVersion: 1 },
       state: { lastPingAt: ago(1) },
     });
-    schedules.set(wrong.device.id, activeSince(10));
+    // an idle phone gets two idle heartbeats (2 × 15 min) to wake up
+    schedules.set(wrong.device.id, activeSince(40));
     const notSynced = await makeAssignedDevice(db(), ws.id, {
       vehicle: { name: "Bus 2" },
       device: { label: "N", reportedMode: "idle", lastSyncAt: ago(11) },
       state: { lastPingAt: ago(1) },
     });
     schedules.set(notSynced.device.id, activeSince(10));
-    const behind = await makeDevice(db(), ws.id, { label: "B", configVersion: 3, reportedConfigVersion: 2 });
-    const behindNew = await makeDevice(db(), ws.id, { label: "B new", configVersion: 3, reportedConfigVersion: 2 });
+    const active = { reportedMode: "active", configVersion: 3, reportedConfigVersion: 2 } as const;
+    const behind = await makeDevice(db(), ws.id, { label: "B", ...active });
+    const behindNew = await makeDevice(db(), ws.id, { label: "B new", ...active });
     await db()
       .insert(outbox)
       .values([
@@ -163,7 +178,7 @@ describe("detectProblems", () => {
     expect(problems.map((p) => [p.kind, p.deviceId, p.since])).toEqual(
       expect.arrayContaining([
         ["mode_mismatch", killed.id, ago(5)],
-        ["mode_mismatch", wrong.device.id, ago(10)],
+        ["mode_mismatch", wrong.device.id, ago(40)],
         ["mode_mismatch", behind.id, ago(3)],
       ]),
     );
@@ -177,10 +192,11 @@ describe("detectProblems", () => {
     const ws = await makeWorkspace(db());
     const ended = (min: number): Window[] => [{ ...activeSince(60)[0], endsAt: ago(min).getTime() }];
     // window ended 1 min ago; the phone synced inside it reporting active: it was right
-    const justEnded = await makeDevice(db(), ws.id, { label: "J", reportedMode: "active", lastSyncAt: ago(2) });
+    const synced = { reportedMode: "active", reportedConfigVersion: 1 } as const;
+    const justEnded = await makeDevice(db(), ws.id, { label: "J", ...synced, lastSyncAt: ago(2) });
     schedules.set(justEnded.id, ended(1));
     // window ended 10 min ago; the phone synced since then and still reports active
-    const stuck = await makeDevice(db(), ws.id, { label: "S", reportedMode: "active", lastSyncAt: ago(1) });
+    const stuck = await makeDevice(db(), ws.id, { label: "S", ...synced, lastSyncAt: ago(1) });
     schedules.set(stuck.id, ended(10));
 
     expect(await detectProblems(db(), ws.id, NOW)).toEqual([
@@ -193,6 +209,69 @@ describe("detectProblems", () => {
         message: "S reports active but should be idle",
       },
     ]);
+  });
+
+  it("a killed phone that stopped syncing, or only synced its old config, is not a kill pending", async () => {
+    const ws = await makeWorkspace(db());
+    const k = { killedAt: ago(5), reportedMode: "active", configVersion: 2 } as const;
+    // last sync before the kill; then it stopped syncing
+    await makeDevice(db(), ws.id, { ...k, lastSyncAt: ago(6), reportedConfigVersion: 1 });
+    // synced once after the kill, reporting its state from before it applied the kill
+    await makeDevice(db(), ws.id, { ...k, lastSyncAt: ago(4), reportedConfigVersion: 1 });
+    // killed while idle: synced after the kill on the new config, reporting idle
+    await makeDevice(db(), ws.id, { ...k, reportedMode: "idle", lastSyncAt: ago(1), reportedConfigVersion: 2 });
+    await makeDevice(db(), ws.id, { ...k, lastSyncAt: null, reportedConfigVersion: null });
+    expect(await detectProblems(db(), ws.id, NOW)).toEqual([]);
+  });
+
+  it("mode_mismatch waits for the phone to apply a changed config, and never dates it from midnight", async () => {
+    const ws = await makeWorkspace(db());
+    const push = (deviceId: string, v: number, min: number) => ({
+      workspaceId: ws.id,
+      kind: "push" as const,
+      payload: {},
+      dedupeKey: `push:${deviceId}:${v}`,
+      createdAt: ago(min),
+    });
+    // moved off its vehicle (config 2, now idle) since its last sync on config 1, where it was active
+    const moved = await makeDevice(db(), ws.id, {
+      reportedMode: "active",
+      lastSyncAt: ago(1),
+      configVersion: 2,
+      reportedConfigVersion: 1,
+    });
+    // idle phone, config pushed 3 min ago: it gets two idle heartbeats before "hasn't picked up"
+    const idleBehind = await makeDevice(db(), ws.id, {
+      reportedMode: "idle",
+      lastSyncAt: ago(10),
+      configVersion: 2,
+      reportedConfigVersion: 1,
+    });
+    // on its current config with no windows and no known change time: no "since 00:00"
+    await makeDevice(db(), ws.id, { reportedMode: "active", lastSyncAt: ago(1), reportedConfigVersion: 1 });
+    // applied a config pushed 1 min ago that made it idle: too soon
+    const fresh = await makeDevice(db(), ws.id, {
+      reportedMode: "active",
+      lastSyncAt: ago(0),
+      configVersion: 2,
+      reportedConfigVersion: 2,
+    });
+    await db()
+      .insert(outbox)
+      .values([push(moved.id, 2, 0.5), push(idleBehind.id, 2, 3), push(fresh.id, 2, 1)]);
+    expect(await detectProblems(db(), ws.id, NOW)).toEqual([]);
+
+    // much later the idle phone still hasn't picked it up; the moved phone synced on its new config, still active
+    const later = new Date(NOW.getTime() + 31 * 60_000);
+    await db().update(devices).set({ lastSyncAt: later, reportedConfigVersion: 2 }).where(eq(devices.id, moved.id));
+    const problems = await detectProblems(db(), ws.id, later);
+    expect(problems.map((p) => [p.deviceId, p.since, p.message])).toEqual(
+      expect.arrayContaining([
+        [moved.id, ago(0.5), "Ravi's phone reports active but should be idle"],
+        [idleBehind.id, ago(3), "Ravi's phone hasn't picked up its new settings"],
+      ]),
+    );
+    expect(problems.filter((p) => p.deviceId !== fresh.id)).toHaveLength(2);
   });
 
   it("update_failed when the phone isn't running its target after a failed update; revoked phones are ignored", async () => {
