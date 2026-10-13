@@ -3,8 +3,9 @@
  * full (36 chars), so one uuid plus a short arg fits. Every press goes through the service layer with channel
  * "telegram" and is audited like any other change (SPEC §6c).
  */
-import { notImplemented } from "@eci-shuttle/shared";
 import { z } from "zod";
+import { onAdminCallback } from "./admin";
+import { onAttendeeCallback } from "./attendee";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
 export const CallbackAction = z.enum([
@@ -46,5 +47,9 @@ export function decodeCallback(data: string | undefined): Callback | null {
  * Unknown/old buttons → answerCallback "This button has expired".
  */
 export async function handleCallback(ctx: BotContext, query: TgCallbackQuery): Promise<BotReply> {
-  return notImplemented(ctx, query);
+  const cb = decodeCallback(query.data);
+  if (!cb) return { send: [], answerCallback: { callbackQueryId: query.id, text: "This button has expired" } };
+  return ATTENDEE_ACTIONS.has(cb.action) ? onAttendeeCallback(ctx, cb, query) : onAdminCallback(ctx, cb, query);
 }
+
+const ATTENDEE_ACTIONS = new Set<CallbackAction>(["spot", "arrive", "nsub", "nunsub"]);
