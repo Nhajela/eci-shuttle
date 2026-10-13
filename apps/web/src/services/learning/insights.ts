@@ -1,6 +1,6 @@
 /** learning: admin Insights and MCP shuttle_insights / shuttle_suggestions (SPEC §6a.5–6). viewer+ reads. */
 import { IST_TZ, IsoDate, istHHMM } from "@eci-shuttle/shared";
-import { and, desc, eq, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import { learningExclusions, proposals, services, suggestions } from "@/db/schema";
@@ -136,19 +136,29 @@ const InsightsInput = z
   .object({ workspaceId: z.uuid(), from: IsoDate, to: IsoDate })
   .refine((i) => i.from <= i.to, { message: "from must be on or before to", path: ["to"] });
 
-/** viewer+. Open first. */
+/**
+ * viewer+. Open first. An accepted suggestion whose proposal expired unconfirmed (or was cleaned up) reads as
+ * "open" again, so it comes back on every surface that lists open ones and can be accepted afresh.
+ */
 export async function listSuggestions(
   db: Db,
   actor: Actor,
   input: { workspaceId: string; status?: Suggestion["status"] },
+  now: Date = new Date(),
 ): Promise<Suggestion[]> {
   const { workspaceId, status } = parseInput(ListSuggestionsInput, input);
   readable(actor, workspaceId);
+  // ponytail: a cleanup job that deletes confirmed proposals would reopen their suggestions; it must keep those.
+  const effective = sql<Suggestion["status"]>`(case when ${suggestions.status} = 'accepted'
+    and ${suggestions.proposalId} is not null and not exists (
+      select 1 from ${proposals} where ${proposals.id} = ${suggestions.proposalId}
+        and (${proposals.confirmedAt} is not null or ${proposals.expiresAt} > ${now.toISOString()}::timestamptz)
+    ) then 'open' else ${suggestions.status}::text end)`;
   return db
-    .select()
+    .select({ ...getTableColumns(suggestions), status: effective })
     .from(suggestions)
-    .where(and(eq(suggestions.workspaceId, workspaceId), status ? eq(suggestions.status, status) : undefined))
-    .orderBy(sql`${suggestions.status} = 'open' desc`, desc(suggestions.createdAt));
+    .where(and(eq(suggestions.workspaceId, workspaceId), status ? sql`${effective} = ${status}` : undefined))
+    .orderBy(sql`${effective} = 'open' desc`, desc(suggestions.createdAt));
 }
 
 const ListSuggestionsInput = z.object({
@@ -162,9 +172,10 @@ const SuggestionInput = z.object({ workspaceId: z.uuid(), suggestionId: z.uuid()
  * to the actor, the suggestion's summary as its reason) and stores its id; the timetable only changes when someone
  * confirms it. Audited suggestion.accept. Informational suggestions (no proposedChanges) → CONFLICT.
  *
- * Expiry: the suggestion stays "accepted" with the proposal id. While that proposal is live, or once it was
- * confirmed, accepting again → CONFLICT. Once it expired unconfirmed (or the cleanup job deleted it), accepting
- * again makes a fresh proposal and replaces the id, so an accept that nobody confirmed is never a dead end.
+ * Expiry: the suggestion is stored "accepted" with the proposal id. While that proposal is live, or once it was
+ * confirmed, accepting again → CONFLICT. Once it expired unconfirmed (or the cleanup job deleted it),
+ * listSuggestions reports it "open" again (admin Insights, shuttle_initialize, the digest) and accepting again
+ * makes a fresh proposal and replaces the id, so an accept that nobody confirmed is never a dead end.
  */
 export async function acceptSuggestion(
   db: Db,

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
 import { auditLog, proposals, spots, suggestions } from "@/db/schema";
 import { PROPOSAL_TTL_MS } from "../mcp/proposals";
-import { acceptSuggestion } from "./insights";
+import { acceptSuggestion, listSuggestions } from "./insights";
 
 // changes.ts is svc-mcp's dispatch (another task): fake the read side over the spots table.
 vi.mock("@/services/mcp/changes", async (orig) => {
@@ -121,5 +121,30 @@ describe("acceptSuggestion", () => {
     await db().delete(proposals).where(eq(proposals.id, second.proposalCode));
     const third = await acceptSuggestion(db(), actor, input, later(PROPOSAL_TTL_MS + 5_000));
     expect((await row(s.id)).proposalId).toBe(third.proposalCode);
+  });
+
+  it("an accept nobody confirmed shows as open again once its proposal expires; a confirmed one does not", async () => {
+    const { actor, s, input, ws } = await setup();
+    const openIds = async (at: Date) =>
+      (await listSuggestions(db(), actor, { workspaceId: ws.id, status: "open" }, at)).map((x) => x.id);
+    const first = await acceptSuggestion(db(), actor, input, NOW);
+    expect(await openIds(later(60_000))).toEqual([]);
+    expect(await openIds(later(PROPOSAL_TTL_MS))).toEqual([s.id]);
+    expect((await listSuggestions(db(), actor, { workspaceId: ws.id }, later(PROPOSAL_TTL_MS)))[0].status).toBe("open");
+
+    const second = await acceptSuggestion(db(), actor, input, later(PROPOSAL_TTL_MS));
+    await db()
+      .update(proposals)
+      .set({ confirmedAt: later(PROPOSAL_TTL_MS + 1) })
+      .where(eq(proposals.id, second.proposalCode));
+    expect(await openIds(later(3 * PROPOSAL_TTL_MS))).toEqual([]);
+    const accepted = await listSuggestions(
+      db(),
+      actor,
+      { workspaceId: ws.id, status: "accepted" },
+      later(3 * PROPOSAL_TTL_MS),
+    );
+    expect(accepted.map((x) => x.id)).toEqual([s.id]);
+    expect(first.proposalCode).not.toBe(second.proposalCode);
   });
 });
