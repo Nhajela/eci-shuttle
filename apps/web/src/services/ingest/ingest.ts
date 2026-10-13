@@ -447,7 +447,7 @@ async function matchDay(tx: Db, svc: Service, sched: Schedule, spotId: string, a
     const planned = expandServiceDepartures(serviceDef(svc), sched.exceptions, date);
     if (!planned.length) continue;
     if (at < planned[0].at - MATCH_TOL_MS || at > planned[planned.length - 1].at + MATCH_TOL_MS) continue;
-    await matchDate(tx, svc, spotId, date, planned, now);
+    await matchDate(tx, svc, sched, spotId, date, planned, now);
   }
 }
 
@@ -477,16 +477,25 @@ export async function matchDue(db: Db, workspaceId: string, now: Date): Promise<
           ),
         );
       const seen = new Set(have.map((h) => h.plannedAt.getTime()));
-      if (due.some((p) => !seen.has(p.at))) await matchDate(db, svc, spotId, date, planned, now);
+      if (due.some((p) => !seen.has(p.at))) await matchDate(db, svc, sched, spotId, date, planned, now);
     }
   }
 }
 
 /**
  * Re-match one service day's planned departures from the route's first spot against every actual departure
- * (dwells at that spot on that service). Passed planned departures with no match are written as missed.
+ * (dwells at that spot on that service). Passed planned departures with no match are written as missed, but only
+ * if some vehicle was assigned to run them.
  */
-async function matchDate(tx: Db, svc: Service, spotId: string, date: string, planned: Departure[], now: Date) {
+async function matchDate(
+  tx: Db,
+  svc: Service,
+  sched: Schedule,
+  spotId: string,
+  date: string,
+  planned: Departure[],
+  now: Date,
+) {
   const lo = planned[0].at - MATCH_TOL_MS;
   const hi = planned[planned.length - 1].at + MATCH_TOL_MS;
   const actual = await tx
@@ -508,8 +517,8 @@ async function matchDate(tx: Db, svc: Service, spotId: string, date: string, pla
   for (const m of res.matches) {
     const plannedAt = new Date(Number(m.plannedId));
     const dwell = actual.find((d) => d.id === m.actualId);
-    if (!dwell && plannedAt.getTime() + MATCH_TOL_MS > now.getTime()) {
-      // not due yet: drop a match an earlier run made, if the re-match moved it
+    if (!dwell && (plannedAt.getTime() + MATCH_TOL_MS > now.getTime() || !sched.staffed(svc.id, plannedAt.getTime()))) {
+      // not due yet, or nobody was assigned to run it: drop a match an earlier run made, if the re-match moved it
       await tx
         .delete(departureMatches)
         .where(

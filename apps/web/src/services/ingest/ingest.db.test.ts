@@ -299,6 +299,22 @@ describe("ingestPings", () => {
     expect(ms[1].delayMin).toBeGreaterThan(1);
   });
 
+  it("a passed departure no vehicle was assigned to run is not marked missed", async () => {
+    // the bus only starts at 09:30, so nobody was meant to run 09:00
+    const w = await world({ svFrom: "09:30:00" });
+    await w.send([
+      ...track(ist("09:35:00"), ist("09:40:30"), RIVA),
+      ...track(ist("09:40:40"), ist("09:43:00"), RIVA, CIRCLE),
+    ]);
+    await refreshPhases(db(), w.ws.id, new Date(ist("10:10:00")));
+    const ms = await db()
+      .select()
+      .from(departureMatches)
+      .where(eq(departureMatches.serviceId, w.service.id))
+      .orderBy(departureMatches.plannedAt);
+    expect(ms.map((m) => [m.plannedAt.getTime(), m.missed])).toEqual([[ist("09:40:00"), false]]);
+  });
+
   it("a backlog whose newest fix is > 2 min old is processed but leaves the vehicle offline, not live", async () => {
     const w = await world();
     // the phone reconnects at 09:06 and uploads 08:58–09:01
