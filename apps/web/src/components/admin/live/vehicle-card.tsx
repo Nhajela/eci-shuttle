@@ -44,7 +44,14 @@ export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null
           </ul>
         )}
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-sm">
-          <Fact icon={<Clock className="size-4" />} label="Last seen" value={card.lastSeenText} />
+          <div className="col-span-2 flex min-w-0 items-start gap-1.5">
+            <Clock className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <dt className="sr-only">Last seen</dt>
+            <dd>
+              {card.locationText}
+              {card.checkInText && ` · ${card.checkInText}`}
+            </dd>
+          </div>
           <Fact icon={<BatteryMedium className="size-4" />} label="Battery" value={card.batteryText ?? "–"} />
           <Fact icon={<Route className="size-4" />} label="Service" value={card.serviceName ?? "None now"} />
           <Fact icon={<Smartphone className="size-4" />} label="Phone" value={card.phoneLabel ?? "No phone"} />

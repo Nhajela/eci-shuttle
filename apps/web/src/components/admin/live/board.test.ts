@@ -89,7 +89,7 @@ describe("buildBoard", () => {
             lng: 73.71,
           }),
         ],
-        phones: [phone("d1", bus, { battery: 64.4, charging: true })],
+        phones: [phone("d1", bus, { battery: 64.4, charging: true, lastSyncAt: new Date(NOW - 20_000) })],
         schedule: [
           {
             date: "2026-10-12",
@@ -106,7 +106,8 @@ describe("buildBoard", () => {
       phase: "en_route",
       phaseText: "To Circle",
       etaText: "6 min",
-      lastSeenText: "12s ago",
+      locationText: "Location 12s ago",
+      checkInText: "Phone checked in 20s ago",
       batteryText: "64% · charging",
       serviceName: "Riva ↔ Circle",
       deviceId: "d1",
@@ -122,11 +123,27 @@ describe("buildBoard", () => {
       phase: "off_duty",
       phaseText: "Off duty",
       etaText: null,
-      lastSeenText: "never",
+      locationText: "No location yet",
+      checkInText: null,
       batteryText: null,
       deviceId: null,
       position: null,
     });
+  });
+
+  it("shows a phone that checks in without a GPS fix as checked in, not as never seen", () => {
+    const bus = vehicle("v1", "Bus 1");
+    const out = buildBoard(
+      base({
+        vehicles: [bus],
+        states: [state("v1")],
+        phones: [phone("d1", bus, { battery: 80, lastSyncAt: new Date(NOW - 3 * 60_000) })],
+      }),
+      NOW,
+    );
+    expect(out.cards[0]).toMatchObject({ locationText: "No location yet", checkInText: "Phone checked in 3 min ago" });
+    const never = buildBoard(base({ vehicles: [bus], phones: [phone("d1", bus, { lastSyncAt: null })] }), NOW);
+    expect(never.cards[0].checkInText).toBe("Phone never checked in");
   });
 
   it("names the spot when at a spot, and shows ETA under a minute as 'now'", () => {

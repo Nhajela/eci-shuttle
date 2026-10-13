@@ -26,7 +26,10 @@ export type VehicleCard = {
   phaseText: string;
   /** "6 min" / "now" when en route with an ETA */
   etaText: string | null;
-  lastSeenText: string;
+  /** last GPS fix: "Location 3 min ago" / "No location yet" */
+  locationText: string;
+  /** last phone sync, which also happens without a fix: "Phone checked in 20s ago"; null with no phone */
+  checkInText: string | null;
   batteryText: string | null;
   serviceName: string | null;
   deviceId: string | null;
@@ -86,7 +89,12 @@ export function buildBoard(input: BoardInput, now: number): Board {
         phaseText: phaseText(phase, st, spotName),
         etaText:
           phase === "en_route" && st?.etaS != null ? (st.etaS < 60 ? "now" : `${Math.round(st.etaS / 60)} min`) : null,
-        lastSeenText: agoText(st?.lastPingAt ?? null, now),
+        locationText: st?.lastPingAt ? `Location ${agoText(st.lastPingAt, now)}` : "No location yet",
+        checkInText: !dev
+          ? null
+          : dev.lastSyncAt
+            ? `Phone checked in ${agoText(dev.lastSyncAt, now)}`
+            : "Phone never checked in",
         batteryText: dev?.battery == null ? null : `${Math.round(dev.battery)}%${dev.charging ? " · charging" : ""}`,
         serviceName: st?.serviceId ? (serviceName.get(st.serviceId) ?? null) : null,
         deviceId: dev?.id ?? null,
