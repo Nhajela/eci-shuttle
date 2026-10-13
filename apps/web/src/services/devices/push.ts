@@ -9,7 +9,7 @@ export const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 /** Expo per-message errors worth another try; everything else (InvalidCredentials, MessageTooBig …) is final. */
 const RETRYABLE = new Set(["MessageRateExceeded"]);
 
-type Ticket = { status: "ok" | "error"; message?: string; details?: { error?: string } };
+type Ticket = { status: "ok" | "error"; id?: string; message?: string; details?: { error?: string } };
 
 /**
  * Data-only Expo push ("sync now") to the device's push_token via https://exp.host/--/api/v2/push/send
@@ -58,7 +58,11 @@ export async function deliverPush(db: Db, job: OutboxJob, fetchImpl: typeof fetc
   }
   const ticket = body.data?.[0];
   if (!ticket) return { ok: false, retry: false, error: `Expo: ${JSON.stringify(body.errors ?? body).slice(0, 300)}` };
-  if (ticket.status === "ok") return { ok: true };
+  if (ticket.status === "ok") {
+    // delivery to FCM is only known from the receipt: keep the ticket id findable in the worker log
+    console.log(`[push] device ${deviceId} ticket ${ticket.id ?? "?"}`);
+    return { ok: true };
+  }
 
   const code = ticket.details?.error ?? "unknown";
   const error = `Expo ${code}: ${ticket.message ?? ""}`.trim();
