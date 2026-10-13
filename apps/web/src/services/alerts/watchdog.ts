@@ -2,7 +2,7 @@
  * svc-alerts: problem detection (SPEC §2b watchdog, §7 Live board flags). The same list feeds the live board,
  * MCP shuttle_initialize ("open problems") and the watchdog alerts.
  */
-import { type AlertKind, istDate, istHHMM, istToEpoch, resolveMode } from "@eci-shuttle/shared";
+import { type AlertKind, istHHMM, resolveMode } from "@eci-shuttle/shared";
 import { and, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, outbox, vehicleState, vehicles, workspaces } from "@/db/schema";
@@ -38,14 +38,14 @@ export type Problem = {
  * silent (inside its tracking window, last ping > SILENT_AFTER_MS ago), off_route (vehicle_state.off_route),
  * low_battery (< LOW_BATTERY_PCT and not charging, since devices.low_battery_since), permission_lost (location
  * not "always", or notifications off, since devices.permission_lost_since; both since `now` until the watchdog
- * stamps them), mode_mismatch (reported mode ≠ what it was told at its last sync while that is still desired, or reported
- * config version behind for > 2 min after a push), update_failed (update_failed_at after the target was set),
+ * stamps them), mode_mismatch (on its current config, reported mode ≠ what it was told at its last sync while that is
+ * still desired, or config version behind, either for longer than two of its sync intervals (at least 2 min) after the
+ * mode or config changed), update_failed (update_failed_at after the target was set),
  * update_pending (still not on the target after syncing > 2 min past its push). Killed/revoked phones
- * only show as mode_mismatch while their kill is pending.
+ * only show as mode_mismatch while their kill is pending: synced after the kill on its config, still active.
  */
 export async function detectProblems(db: Db, workspaceId: string, now: Date): Promise<Problem[]> {
   const t = now.getTime();
-  const dayStart = new Date(istToEpoch(istDate(t), "00:00"));
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!ws) return [];
   const rows = await db
@@ -69,9 +69,16 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
         message: onVehicle ? message : `${d.label}${message}`,
       });
 
+    // A killed phone stops syncing, so its last report is from before the kill (or the sync that delivered it).
     if (d.killedAt) {
-      if (d.reportedMode !== "killed" && t - d.killedAt.getTime() > GRACE_MS)
-        add("mode_mismatch", d.killedAt, ` was killed but still reports ${d.reportedMode ?? "nothing"}`);
+      if (
+        d.reportedMode === "active" &&
+        d.lastSyncAt &&
+        d.lastSyncAt > d.killedAt &&
+        d.reportedConfigVersion !== null &&
+        d.reportedConfigVersion >= d.configVersion
+      )
+        add("mode_mismatch", d.killedAt, " was killed but still reports active");
       continue;
     }
 
@@ -95,26 +102,32 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     ].filter(Boolean);
     if (lost.length) add("permission_lost", d.permissionLostSince ?? now, `: ${lost.join(", ")}`);
 
-    // When the desired mode began: its window's start, or (idle) the end of the last window.
-    // ponytail: the schedule only holds windows still ending in the next 48h, so long idle falls back to the IST day.
+    // When the desired mode began: its window's start, or (idle) the end of the last window; or its config's push, if later.
+    // ponytail: the schedule only holds windows still ending in the next 48h, so long idle with no push record isn't judged.
     const lastEnd = Math.max(...(config?.schedule ?? []).map((w) => w.endsAt).filter((e) => e <= t));
-    const mismatchSince = windowStart ?? (Number.isFinite(lastEnd) ? new Date(lastEnd) : dayStart);
     const pushedAt = await pushedAtFor(db, d.id, d.configVersion);
-    // Judge the report against what the phone was told at its last sync, and only while that is still desired.
+    const mismatchSince = Math.max(windowStart?.getTime() ?? lastEnd, pushedAt?.getTime() ?? Number.NEGATIVE_INFINITY);
+    // A phone syncs once per interval of the mode it is in (idle: the heartbeat), so give it two to act on a change.
+    const intervalS = d.reportedMode === "active" ? config?.activeIntervalS : config?.idleHeartbeatS;
+    const graceMs = Math.max(GRACE_MS, 2_000 * (intervalS ?? 0));
+    const applied = d.reportedConfigVersion !== null && d.reportedConfigVersion >= d.configVersion;
+    // Judge the report against what the phone was told at its last sync (on its current config), while still desired.
     const told = d.lastSyncAt && resolveMode(config, d.lastSyncAt.getTime()).mode;
     if (
+      applied &&
       d.reportedMode &&
       d.lastSyncAt &&
       d.reportedMode !== told &&
       told === desired.mode &&
-      d.lastSyncAt.getTime() - mismatchSince.getTime() > GRACE_MS
+      Number.isFinite(mismatchSince) &&
+      d.lastSyncAt.getTime() - mismatchSince > graceMs
     )
-      add("mode_mismatch", mismatchSince, ` reports ${d.reportedMode} but should be ${desired.mode}`);
+      add("mode_mismatch", new Date(mismatchSince), ` reports ${d.reportedMode} but should be ${desired.mode}`);
     else if (
       d.reportedConfigVersion !== null &&
       d.reportedConfigVersion < d.configVersion &&
       pushedAt &&
-      t - pushedAt.getTime() > GRACE_MS
+      t - pushedAt.getTime() > graceMs
     )
       add("mode_mismatch", pushedAt, " hasn't picked up its new settings");
 

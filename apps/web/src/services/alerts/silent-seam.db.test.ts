@@ -16,7 +16,7 @@ const ago = (min: number) => new Date(NOW.getTime() - min * 60_000);
 async function runningService() {
   const ws = await makeWorkspace(db());
   const { vehicle, device } = await makeAssignedDevice(db(), ws.id, {
-    device: { lastSyncAt: ago(10), reportedMode: "idle" },
+    device: { lastSyncAt: ago(10), reportedMode: "idle", reportedConfigVersion: 1 },
     state: { lastPingAt: ago(30), phase: "en_route" },
   });
   const [r] = await db().insert(routes).values({ workspaceId: ws.id, name: "Loop", spotIds: [] }).returning();
