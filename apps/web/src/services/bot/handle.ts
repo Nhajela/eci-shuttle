@@ -1,6 +1,7 @@
 /** svc-bot: the webhook entry. app/api/telegram/route.ts checks the secret header, then calls handleUpdate. */
 import type { Db } from "@/db";
-import { markBlockedBot, upsertPersonFromTelegram } from "../catalog/people";
+import type { Workspace } from "@/db/types";
+import { markBlockedBot, membershipsOf, upsertPersonFromTelegram } from "../catalog/people";
 import { isSpotName } from "../catalog/spots";
 import { listAllWorkspaces, workspaceBySlug } from "../catalog/workspaces";
 import { isServiceError, systemActor, userMessage } from "../kernel";
@@ -29,6 +30,26 @@ const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html
  * - anything else in a private chat → a short help text; in groups → nothing.
  * No live workspace → "The shuttle isn't set up yet."
  */
+/** The last word of the text, when it is the slug of a workspace this person is a member of. */
+async function memberWorkspace(
+  db: Db,
+  personId: string,
+  text: string | undefined,
+): Promise<{ workspace: Workspace; rest: string | null } | null> {
+  const words = (text ?? "")
+    .replace(/^\/\w+(?:@\w+)?/, "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const slug = words.at(-1)?.toLowerCase();
+  if (!slug) return null;
+  const mine = await membershipsOf(db, personId);
+  if (!mine.length) return null;
+  const ws = await workspaceBySlug(db, slug);
+  if (!ws || !mine.some((m) => m.workspaceId === ws.id)) return null;
+  return { workspace: ws, rest: words.slice(0, -1).join(" ") || null };
+}
+
 export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise<BotReply> {
   const { message, callback_query: query, my_chat_member: member } = update;
   const from = query?.from ?? message?.from ?? member?.from;
@@ -66,18 +87,26 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
       return { send: [], answerCallback: { callbackQueryId: query.id, text: "The shuttle isn't set up yet." } };
     return isPrivate || command ? say(chatId, "The shuttle isn't set up yet.") : NONE;
   }
-  const ctx: BotContext = { db, now, person, chatId, workspace };
+  // staff can ask about another workspace they belong to by naming its slug last: "/shuttle test", "riva test"
+  const asked =
+    !query && (command === "shuttle" || command === null) ? await memberWorkspace(db, person.id, text) : null;
+  const ctx: BotContext = { db, now, person, chatId, workspace: asked?.workspace ?? workspace };
+  const shuttleArg = asked ? asked.rest : rest;
 
   try {
     if (query) return await handleCallback(ctx, query);
     const args = rest?.split(/\s+/) ?? [];
+    if (asked && command === null) {
+      if (asked.rest && (await isSpotName(db, asked.workspace.id, asked.rest))) return await onShuttle(ctx, asked.rest);
+      return isPrivate ? say(chatId, HELP) : NONE;
+    }
     switch (command) {
       case "start":
         return await onStart(ctx, rest);
       case "login":
         return await onLogin(ctx);
       case "shuttle":
-        return await onShuttle(ctx, rest);
+        return await onShuttle(ctx, shuttleArg);
       case "status":
         return await onStatus(ctx, args);
       case "today":

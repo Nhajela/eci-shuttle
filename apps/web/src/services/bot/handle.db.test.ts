@@ -3,7 +3,7 @@ import { makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, people, workspaces } from "@/db/schema";
+import { auditLog, memberships, people, workspaces } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { ServiceError } from "../kernel";
 import { onAdminCallback, onNotice, onSilence, onStatus, onToday } from "./admin";
@@ -104,6 +104,32 @@ describe("handleUpdate", () => {
     expect(await handleUpdate(db(), inGroup(from, "hello all"), NOW)).toEqual({ send: [] });
     expect(await handleUpdate(db(), inGroup(from, "/wat"), NOW)).toEqual({ send: [] });
     expect(onShuttle).toHaveBeenCalledTimes(2);
+  });
+
+  it("a member can ask about their other workspace by naming its slug last; others always get live", async () => {
+    const n = ++seq;
+    const test = await makeWorkspace(db(), { slug: `test${n}` });
+    await makeSpot(db(), test.id, { name: `Circle ${n}`, shortName: `Circle${n}` });
+    const from = user();
+    await handleUpdate(db(), dm(from, "/start"), NOW); // creates the person
+    const [p] = await db().select().from(people).where(eq(people.telegramId, from.id));
+    await db().insert(memberships).values({ personId: p.id, workspaceId: test.id, role: "admin" });
+
+    await handleUpdate(db(), dm(from, `/shuttle test${n}`), NOW);
+    expect(ctxOf(vi.mocked(onShuttle).mock.calls[0]).workspace.id).toBe(test.id);
+    expect(vi.mocked(onShuttle).mock.calls[0][1]).toBeNull();
+    await handleUpdate(db(), dm(from, `/shuttle circle${n} test${n}`), NOW);
+    expect(ctxOf(vi.mocked(onShuttle).mock.calls[1]).workspace.id).toBe(test.id);
+    expect(vi.mocked(onShuttle).mock.calls[1][1]).toBe(`circle${n}`);
+    await handleUpdate(db(), dm(from, `circle${n} test${n}`), NOW);
+    expect(ctxOf(vi.mocked(onShuttle).mock.calls[2]).workspace.id).toBe(test.id);
+    expect(vi.mocked(onShuttle).mock.calls[2][1]).toBe(`circle${n}`);
+
+    // not a member: the slug is just text, and the answer stays live
+    const stranger = user();
+    await handleUpdate(db(), dm(stranger, `/shuttle test${n}`), NOW);
+    expect(ctxOf(vi.mocked(onShuttle).mock.calls[3]).workspace.id).toBe(live.id);
+    expect(vi.mocked(onShuttle).mock.calls[3][1]).toBe(`test${n}`);
   });
 
   it("an archived spot or another workspace's spot is not a stop name", async () => {
