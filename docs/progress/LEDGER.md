@@ -130,6 +130,21 @@ the driver app.config test now expects `appVersion`, Biome ignores the generated
 | lens1-3 | merged | admin map isolated under the tab bar; log out from More sheet + desktop sidebar; off-route live line never reads "No more today" |
 | lens1-4 | merged | sim sleeps by the config the sync just returned |
 
+## Fix round (2026-10-13)
+
+Merged `--no-ff` onto `main`: fx/mcp-ota, fx/health, fx/missed-deps, fx/ota-fail, fx/phone-mismatch, fx/playwright-390
+(no conflicts). Gates: `pnpm test` (122 files, 1077 tests), driver `vitest` (176 + 1 skipped) + `tsc`,
+`pnpm typecheck`, `pnpm lint` (same 6 test warnings), web build: all green. `pnpm test:ui` not run at integration.
+
+| Key | Status | Notes |
+|---|---|---|
+| fx/mcp-ota | merged | MCP `ota.rollout` / `ota.rollback` / `ota.phone` change kinds (admin), target shown in phones/initialize |
+| fx/health | merged | `HOSTNAME=::` dual-stack listen; `/api/health?live=1` liveness for Coolify's container check |
+| fx/missed-deps | merged | ingest marks only staffed departures `missed` |
+| fx/ota-fail | merged | driver reports `updateFailed` after 3 mismatches; transient errors retry; rollback applies after emergency launch (JS-only, needs OTA publish) |
+| fx/phone-mismatch | merged | `PhoneHealth.modeMismatch` uses the watchdog's grace rule |
+| fx/playwright-390 | merged | `pnpm test:ui`: 390×844 layout checks for 13 admin + public pages |
+
 ## Remaining gaps
 
 - The workspace Telegram group can only be set with `/setgroup` in the group; admin Workspaces has no field for it.
