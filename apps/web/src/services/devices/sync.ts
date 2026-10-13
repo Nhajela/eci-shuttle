@@ -8,6 +8,7 @@ import { ingestPings } from "../ingest/ingest";
 import { type Actor, mutate, parseInput, requireDevice, ServiceError } from "../kernel";
 import { onTripClosed } from "../learning/learning";
 import { desiredConfig } from "./config";
+import { alertKillResume } from "./phones";
 
 /** Pings stamped further ahead of server time than this are dropped (a bad phone clock would poison ingest). */
 export const MAX_FUTURE_MS = 2 * 60_000;
@@ -58,6 +59,7 @@ export async function syncDevice(db: Db, actor: Actor, raw: SyncRequest, now: Da
 
     let killedAt = d.killedAt;
     if (input.resume && killedAt && !d.revokedAt) {
+      const wasKilledAt = killedAt;
       await mutate(tx, actor, { ...meta, action: "device.resume" }, async (t) => {
         const [after] = await t
           .update(devices)
@@ -69,6 +71,7 @@ export async function syncDevice(db: Db, actor: Actor, raw: SyncRequest, now: Da
           })
           .where(eq(devices.id, d.id))
           .returning();
+        await alertKillResume(t, after, "resumed", wasKilledAt, now);
         return { before: d, after, result: after };
       });
       killedAt = null;

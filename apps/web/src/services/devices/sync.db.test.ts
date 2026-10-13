@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Ping, SyncRequest, SyncResponse } from "@eci-shuttle/shared";
-import { makeWorkspace } from "@tests/factories/core";
+import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, devices } from "@/db/schema";
+import { auditLog, devices, outbox } from "@/db/schema";
 import type { Trip } from "@/db/types";
 
 // ingest, learning and config are other tasks' services: stubbed at their exported interfaces.
@@ -192,6 +192,19 @@ describe("syncDevice", () => {
     expect(a[0]).toMatchObject({ actorKind: "device", actorId: device.id, channel: "device", entity: "device" });
     expect(a[0].after).toMatchObject({ killedAt: null });
     expect(ingestPings).toHaveBeenCalledTimes(1);
+  });
+
+  it("resume raises the kill_resume alert to the workspace's admins", async () => {
+    const { ws, device, actor } = await makeDevice({ killedAt: new Date(NOW.getTime() - 3_600_000) });
+    const { person } = await makeAdmin(db(), ws.id);
+    await syncDevice(db(), actor, req({ resume: true }), NOW);
+    const alerts = await db()
+      .select()
+      .from(outbox)
+      .where(and(eq(outbox.workspaceId, ws.id), eq(outbox.kind, "telegram")));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].payload).toMatchObject({ kind: "alert", personId: person.id });
+    expect((alerts[0].payload as { html: string }).html).toContain(`Phone '${device.label}' resumed`);
   });
 
   it("resume on a phone that isn't killed, or is revoked, does nothing", async () => {

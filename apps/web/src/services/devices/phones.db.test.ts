@@ -5,7 +5,16 @@ import { testDb } from "@tests/helpers/db";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
-import { auditLog, deviceAssignments, devices, directives, memberships, outbox, vehicles } from "@/db/schema";
+import {
+  alertPrefs,
+  auditLog,
+  deviceAssignments,
+  devices,
+  directives,
+  memberships,
+  outbox,
+  vehicles,
+} from "@/db/schema";
 import { SILENT_AFTER_MS } from "../alerts/watchdog";
 import { enqueue } from "../kernel";
 import { bumpConfigs, desiredConfig } from "./config";
@@ -280,6 +289,23 @@ describe("kill / revoke", () => {
     expect(await pushes(phone.id)).toHaveLength(1);
     expect((await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).killedAt).toEqual(d.killedAt);
     expect((await audits(phone.id)).map((a) => a.action)).toEqual(["phone.kill"]);
+  });
+
+  it("kill raises the kill_resume alert to members who want it, once", async () => {
+    const { ws, actor, person, phone } = await setup();
+    const { person: optedOut } = await makeAdmin(db(), ws.id);
+    await db()
+      .insert(alertPrefs)
+      .values({ personId: optedOut.id, workspaceId: ws.id, kinds: ["low_battery"] });
+    await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+    await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+    const alerts = await db()
+      .select()
+      .from(outbox)
+      .where(and(eq(outbox.workspaceId, ws.id), eq(outbox.kind, "telegram")));
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].payload).toMatchObject({ kind: "alert", personId: person.id });
+    expect((alerts[0].payload as { html: string }).html).toContain("Phone 'Phone' killed");
   });
 
   it("revoke sets revoked_at, closes the assignment, and still pushes so the phone learns it", async () => {

@@ -7,6 +7,7 @@ import {
   type DirectiveKind,
   Id,
   IST_TZ,
+  istHHMM,
   type Permissions,
   PhoneAssignFields,
   PhoneForceActiveFields,
@@ -24,6 +25,8 @@ import { z } from "zod";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, directives, memberships, vehicles, workspaces } from "@/db/schema";
 import type { Device, DeviceAssignment, Directive, Vehicle } from "@/db/types";
+import { escapeHtml } from "@/lib/telegram/html";
+import { adminButton, raiseAlert } from "../alerts/alerts";
 import { SILENT_AFTER_MS } from "../alerts/watchdog";
 import {
   type Actor,
@@ -231,6 +234,30 @@ export async function nudgePhone(db: Db, actor: Actor, input: z.input<typeof Nud
   });
 }
 
+/**
+ * The kill_resume ops alert (SPEC §6c) in the caller's transaction; prefs and quiet hours apply via raiseAlert.
+ * Keyed on the kill time, so each kill and its resume alert once.
+ */
+export async function alertKillResume(
+  tx: Db,
+  phone: Device,
+  event: "killed" | "resumed",
+  killedAt: Date,
+  now: Date,
+): Promise<void> {
+  await raiseAlert(
+    tx,
+    {
+      workspaceId: phone.workspaceId,
+      kind: "kill_resume",
+      key: `${event}:${phone.id}:${killedAt.getTime()}`,
+      html: `<b>Phone '${escapeHtml(phone.label)}' ${event}</b> at ${istHHMM(now)}`,
+      buttons: [[await adminButton(tx, phone.workspaceId, "phones")]],
+    },
+    now,
+  );
+}
+
 /** admin. Sets killed_at; the phone latches killed on next sync. Only the driver's Resume clears it. */
 export async function killPhone(db: Db, actor: Actor, input: z.input<typeof KillPhoneInput>): Promise<Device> {
   const { workspaceId, deviceId } = parseInput(KillPhoneInput, input);
@@ -239,12 +266,14 @@ export async function killPhone(db: Db, actor: Actor, input: z.input<typeof Kill
   if (phone.killedAt) return phone;
   return mutate(db, actor, { action: "phone.kill", entity: "device", entityId: deviceId, workspaceId }, async (tx) => {
     const before = await livePhone(tx, workspaceId, deviceId, true);
+    const now = new Date();
     await tx
       .update(devices)
-      .set({ killedAt: new Date(), ...edited() })
+      .set({ killedAt: now, ...edited() })
       .where(eq(devices.id, deviceId));
     await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.kill");
     const after = await getInWorkspace(tx, devices, workspaceId, deviceId, "phone");
+    await alertKillResume(tx, after, "killed", now, now);
     return { before, after, result: after };
   });
 }
