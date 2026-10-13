@@ -23,7 +23,7 @@ export function answerParts(line: AnswerLine, single: boolean, ageS = 0): Answer
   if (isStale(line, ageS) || (line.kind === "live" && line.minutes === null))
     return line.nextAtLabel
       ? { label: label ?? "Next scheduled", value: line.nextAtLabel, range: null }
-      : { label: label ?? "Shuttle", value: "Live tracking off", range: null, small: true };
+      : { label: label ?? "Shuttle", value: "Running now", range: null, small: true };
   if (line.kind === "live" && line.minutes !== null) {
     if (line.minutes === 0) return { label: label ?? "Shuttle is", value: "here now", range: null };
     const { rangeLo: lo, rangeHi: hi } = line;
@@ -35,15 +35,26 @@ export function answerParts(line: AnswerLine, single: boolean, ageS = 0): Answer
   }
   if (line.kind === "timetable" && line.nextAtLabel)
     return { label: label ?? "Next scheduled", value: line.nextAtLabel, range: null };
+  // a loop service inside its hours has no fixed next time: it is running, not finished
+  if (line.kind === "timetable") return { label: label ?? "Shuttle", value: "Running now", range: null, small: true };
   return { label: line.serviceName, value: "No more today", range: null };
 }
 
 /** The small line under it. `ageS` = how old the answer is (edge cache, failed polls), added to last seen. */
 export function contextText(line: AnswerLine, ageS: number): string {
-  if (line.lastSeenS === null) return line.phaseText;
+  // attendees aren't told about tracking: "about every 18 min", never "· live tracking off"
+  const phase = quiet(line.phaseText);
+  if (line.lastSeenS === null) return phase;
   const s = line.lastSeenS + ageS;
-  return `${isStale(line, ageS) ? "live tracking off" : line.phaseText} · last seen ${s < 60 ? `${s}s` : `${Math.round(s / 60)} min`} ago`;
+  const seen = `last seen ${s < 60 ? `${s}s` : `${Math.round(s / 60)} min`} ago`;
+  return isStale(line, ageS) || !phase ? seen : `${phase} · ${seen}`;
 }
+
+const quiet = (phase: string) =>
+  phase
+    .split(" · ")
+    .filter((p) => p.trim().toLowerCase() !== "live tracking off")
+    .join(" · ");
 
 export function ageSeconds(generatedAt: string, now: Date): number {
   return Math.max(0, Math.round((now.getTime() - Date.parse(generatedAt)) / 1000));

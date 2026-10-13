@@ -76,6 +76,21 @@ export function StatusView({
         )}
       </header>
 
+      <aside
+        aria-label="Beta"
+        className="flex flex-col gap-1.5 rounded-card border-2 border-marigold bg-sand px-4 py-3"
+      >
+        <p className="flex items-center gap-2 font-heading text-base font-semibold text-ink">
+          <span className="rounded-full bg-marigold px-2 py-0.5 text-xs font-bold tracking-wide text-paper">BETA</span>
+          Fresh out of the garage
+        </p>
+        <p className="text-sm leading-snug text-ink-soft">
+          This tracker is a few days old and still learning the roads of Mandrem. Shuttles loop roughly every 20–25
+          minutes and wait a little at each stop so everyone can hop on. If it says "here now" and you only see cows,
+          tell us via @eci_shuttles_bot on Telegram.
+        </p>
+      </aside>
+
       {failed && (
         <p role="status" className="rounded-field bg-sand px-3 py-2 text-sm text-ink-soft">
           Can't reach the server right now. Showing the last answer we got.

@@ -21,6 +21,19 @@ const line = (over: Partial<AnswerLine> = {}): AnswerLine => ({
 });
 
 describe("answerParts", () => {
+  it("a loop service inside its hours reads 'Running now', never 'No more today'", () => {
+    const loop = line({
+      kind: "timetable",
+      minutes: null,
+      rangeLo: null,
+      rangeHi: null,
+      lastSeenS: null,
+      phaseText: "about every 18 min · live tracking off",
+    });
+    expect(answerParts(loop, true).value).toBe("Running now");
+    expect(contextText(loop, 0)).toBe("about every 18 min");
+  });
+
   it("live, one service: 'Shuttle will be here in 6 min (5–9)'", () => {
     expect(answerParts(line(), true)).toEqual({ label: "Shuttle will be here in", value: "6 min", range: "5–9" });
   });
@@ -62,7 +75,7 @@ describe("live with no minutes (the only vehicle is off route) never says 'No mo
   const off = line({ minutes: null, rangeLo: null, rangeHi: null, phaseText: "off the usual route" });
 
   it("says live tracking is off, in the small style", () => {
-    expect(answerParts(off, true)).toEqual({ label: "Shuttle", value: "Live tracking off", range: null, small: true });
+    expect(answerParts(off, true)).toEqual({ label: "Shuttle", value: "Running now", range: null, small: true });
   });
 
   it("shows the next scheduled time when known", () => {
@@ -78,7 +91,7 @@ describe("stale live data (>2 min since last seen) never pretends to be live", (
   it("no minutes once lastSeenS + ageS > 120", () => {
     const p = answerParts(line(), true, 200);
     expect(p.value).not.toMatch(/min/);
-    expect(p).toEqual({ label: "Shuttle", value: "Live tracking off", range: null, small: true });
+    expect(p).toEqual({ label: "Shuttle", value: "Running now", range: null, small: true });
   });
 
   it("falls back to the next scheduled time when known", () => {
@@ -94,7 +107,7 @@ describe("stale live data (>2 min since last seen) never pretends to be live", (
   });
 
   it("context says live tracking is off", () => {
-    expect(contextText(line(), 200)).toBe("live tracking off · last seen 4 min ago");
+    expect(contextText(line(), 200)).toBe("last seen 4 min ago");
   });
 });
 
@@ -105,10 +118,8 @@ describe("contextText", () => {
     expect(contextText(line({ lastSeenS: 100 }), 0)).toBe("leaving Riva now · last seen 2 min ago");
   });
 
-  it("no last seen when not live", () => {
-    expect(contextText(line({ kind: "timetable", lastSeenS: null, phaseText: "live tracking off" }), 30)).toBe(
-      "live tracking off",
-    );
+  it("no last seen when not live, and never 'live tracking off' to attendees", () => {
+    expect(contextText(line({ kind: "timetable", lastSeenS: null, phaseText: "live tracking off" }), 30)).toBe("");
   });
 
   it("the timetable and none phase lines are passed through", () => {
