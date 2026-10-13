@@ -55,6 +55,8 @@ export const PairRequest = z.object({
   appVersion: z.string().max(50),
   updateId: z.string().max(100).nullable(),
   pushToken: z.string().max(500).nullable(),
+  /** `pnpm sim` device; the server refuses it in the live workspace */
+  simulated: z.boolean().optional(),
 });
 export type PairRequest = z.infer<typeof PairRequest>;
 
