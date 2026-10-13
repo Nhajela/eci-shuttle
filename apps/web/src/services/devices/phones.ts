@@ -384,6 +384,13 @@ export function versionBelow(v: string, min: string): boolean {
   return false;
 }
 
+/**
+ * Traccar Client (api/device/traccar) and Telegram live location (bot/live) report through sync but can't take our
+ * config: always "active", no APK, no OTA. Mode, APK and update checks don't apply to them.
+ */
+export const isOutsideApp = (d: Pick<Device, "appVersion">) =>
+  d.appVersion === "traccar" || d.appVersion === "telegram";
+
 // ponytail: mirrors alerts/watchdog's mode_mismatch rule (it exports no helper and isn't ours to edit);
 // the watchdog should import isModeMismatch so the two can't drift.
 const GRACE_MS = 2 * 60_000;
@@ -405,7 +412,7 @@ async function pushedAt(db: Db, d: Device): Promise<Date | null> {
 export function isModeMismatch(d: Device, config: SyncResponse, pushed: Date | null, now: Date): boolean {
   const applied = d.reportedConfigVersion !== null && d.reportedConfigVersion >= d.configVersion;
   if (d.killedAt) return d.reportedMode === "active" && !!d.lastSyncAt && d.lastSyncAt > d.killedAt && applied;
-  if (!applied || !d.reportedMode || !d.lastSyncAt) return false;
+  if (!applied || !d.reportedMode || !d.lastSyncAt || isOutsideApp(d)) return false;
   const t = now.getTime();
   const desired = resolveMode(config, t);
   const told = resolveMode(config, d.lastSyncAt.getTime()).mode;
@@ -535,7 +542,12 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
       modeMismatch: !!config && isModeMismatch(device, config, await pushedAt(db, device), now),
       configBehind: !revoked && (device.reportedConfigVersion ?? 0) < device.configVersion,
       lastSyncAgoS: device.lastSyncAt ? Math.floor((now.getTime() - device.lastSyncAt.getTime()) / 1000) : null,
-      needsNewApk: !!(ws.minAppVersion && device.appVersion && versionBelow(device.appVersion, ws.minAppVersion)),
+      needsNewApk: !!(
+        ws.minAppVersion &&
+        device.appVersion &&
+        !isOutsideApp(device) &&
+        versionBelow(device.appVersion, ws.minAppVersion)
+      ),
       updateFailed: !!device.updateFailedAt,
       permissionsOk: permissionsOk(device.permissions),
       permissions: device.permissions,

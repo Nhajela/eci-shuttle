@@ -524,6 +524,16 @@ describe("listPhones modeMismatch (the watchdog's rule)", () => {
   it("not when it reports what it should", async () => {
     expect(await mismatchOf({ reportedMode: "idle" }, 5 * MIN)).toBe(false);
   });
+  it("never for an outside app (Telegram live location, Traccar): it always reports active", async () => {
+    expect(await mismatchOf({ appVersion: "telegram" }, 5 * MIN)).toBe(false);
+    expect(await mismatchOf({ appVersion: "traccar" }, 5 * MIN)).toBe(false);
+  });
+  it("an outside app never needs a new APK", async () => {
+    const ws = await makeWorkspace(db(), { minAppVersion: "1.4.0" });
+    const { actor } = await makeAdmin(db(), ws.id, "viewer");
+    await makeDevice(ws.id, { appVersion: "telegram" });
+    expect((await listPhones(db(), actor, { workspaceId: ws.id }, new Date()))[0].needsNewApk).toBe(false);
+  });
   it("killed: only once it synced after the kill on its config and still reports active", async () => {
     const ago = (ms: number) => new Date(Date.now() - ms);
     expect(await mismatchOf({ killedAt: ago(MIN), lastSyncAt: ago(5 * MIN) }, null)).toBe(false);

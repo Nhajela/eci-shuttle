@@ -211,6 +211,22 @@ describe("detectProblems", () => {
     ]);
   });
 
+  it("an outside app (Telegram live location) is never mode_mismatch or update_pending: it can't take either", async () => {
+    const ws = await makeWorkspace(db(), { targetUpdateId: "u2" });
+    const d = await makeDevice(db(), ws.id, {
+      appVersion: "telegram",
+      reportedMode: "active",
+      configVersion: 4,
+      reportedConfigVersion: 2_147_483_647,
+      lastSyncAt: ago(1),
+    });
+    schedules.set(d.id, [{ ...activeSince(60)[0], endsAt: ago(10).getTime() }]);
+    await db()
+      .insert(outbox)
+      .values({ workspaceId: ws.id, kind: "push", payload: {}, dedupeKey: `push:${d.id}:4`, createdAt: ago(5) });
+    expect(await detectProblems(db(), ws.id, NOW)).toEqual([]);
+  });
+
   it("a killed phone that stopped syncing, or only synced its old config, is not a kill pending", async () => {
     const ws = await makeWorkspace(db());
     const k = { killedAt: ago(5), reportedMode: "active", configVersion: 2 } as const;
