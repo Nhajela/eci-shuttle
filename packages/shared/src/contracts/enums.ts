@@ -58,7 +58,7 @@ export type TripQuality = z.infer<typeof TripQuality>;
 export const SuggestionStatus = z.enum(["open", "accepted", "dismissed"]);
 export type SuggestionStatus = z.infer<typeof SuggestionStatus>;
 
-export const SubscriptionKind = z.enum(["arrival_alert", "notices"]);
+export const SubscriptionKind = z.enum(["arrival_alert", "notices", "updates"]);
 export type SubscriptionKind = z.infer<typeof SubscriptionKind>;
 
 /** How a public answer line was produced (SPEC §6). */

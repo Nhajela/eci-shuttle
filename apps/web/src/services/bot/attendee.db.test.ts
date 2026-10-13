@@ -7,7 +7,7 @@ import type { Spot } from "@/db/types";
 import { attendeeActor } from "../auth/actor";
 import { publicStatus, spotAnswer } from "../public/status";
 import { mySubscriptions } from "../subscriptions/subscriptions";
-import { onAttendeeCallback, onShuttle, onSpot, onStop, renderAnswer } from "./attendee";
+import { onAttendeeCallback, onShuttle, onSpot, onStop, onSubscribe, renderAnswer } from "./attendee";
 import type { BotContext } from "./types";
 
 vi.mock("../public/status", () => ({ publicStatus: vi.fn(), spotAnswer: vi.fn() }));
@@ -191,5 +191,43 @@ describe("buttons and /stop", () => {
     const r = await onAttendeeCallback(ctx, { action: "spot", args: [circle.id] }, press("x"));
     expect(r.answerCallback).toEqual({ callbackQueryId: "cbq1" });
     expect(r.send[0].html).toContain("<b>The Circle</b>");
+  });
+});
+
+describe("/subscribe", () => {
+  const query = { id: "q1", from: { id: 1 }, data: "" } as never;
+  it("asks which stop (or all), then subscribes with the answer now and a stop button", async () => {
+    const { ctx, riva } = await setup();
+    const ask = await onSubscribe(ctx, null);
+    expect(ask.send[0].html).toContain("every 15 min");
+    expect(buttonData(ask)).toEqual([`usub:${riva.id}`, expect.stringMatching(/^usub:/), "usub:all"]);
+
+    const r = await onAttendeeCallback(ctx, { action: "usub", args: [riva.id] }, query);
+    expect(r.send[0].html).toContain("<b>Riva Beach</b>");
+    expect(r.send[0].html).toContain("every 15 min");
+    const [sub] = await mySubscriptions(
+      db(),
+      attendee(ctx.person, ctx.workspace.id),
+      { workspaceId: ctx.workspace.id },
+      NOW,
+    );
+    expect(sub).toMatchObject({ kind: "updates", spotId: riva.id });
+    expect(buttonData(r)).toEqual([`nunsub:${sub.id}`]);
+  });
+
+  it("'/subscribe riva' subscribes straight away; all stops too", async () => {
+    const { ctx, riva } = await setup();
+    const r = await onSubscribe(ctx, "riva");
+    expect(r.send[0].html).toContain("every 15 min");
+    const all = await onAttendeeCallback(ctx, { action: "usub", args: ["all"] }, query);
+    expect(all.send[0].html).toContain("every stop");
+    const subs = await mySubscriptions(
+      db(),
+      attendee(ctx.person, ctx.workspace.id),
+      { workspaceId: ctx.workspace.id },
+      NOW,
+    );
+    expect(subs.map((x) => x.spotId)).toEqual([null]);
+    expect(riva).toBeTruthy();
   });
 });

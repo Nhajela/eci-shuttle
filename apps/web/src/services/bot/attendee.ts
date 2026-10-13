@@ -9,6 +9,7 @@ import { attendeeActor } from "../auth/actor";
 import { findInWorkspace, isServiceError, type TelegramButton, userMessage } from "../kernel";
 import { publicStatus } from "../public/status";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
+import { subscribeUpdates, updateText } from "../subscriptions/updates";
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
@@ -23,11 +24,11 @@ const say = (ctx: BotContext, html: string, buttons?: TelegramButton[][]): BotRe
   send: [{ chatId: ctx.chatId, html, kind: "reply", ...(buttons?.length ? { buttons } : {}) }],
 });
 
-/** Spot buttons, three to a row. */
-function spotButtons(list: PublicSpot[]): TelegramButton[][] {
+/** Spot buttons, three to a row (`action` "usub" for /subscribe). */
+function spotButtons(list: PublicSpot[], action: CallbackAction = "spot"): TelegramButton[][] {
   const rows: TelegramButton[][] = [];
   for (let i = 0; i < list.length; i += 3)
-    rows.push(list.slice(i, i + 3).map((s) => btn(s.shortName, "spot", s.spotId)));
+    rows.push(list.slice(i, i + 3).map((s) => btn(s.shortName, action, s.spotId)));
   return rows;
 }
 
@@ -98,11 +99,41 @@ export function renderAnswer(spotName: string, lines: AnswerLine[]): string {
   return [`<b>${esc(spotName)}</b>`, ...body].join("\n");
 }
 
+/** `/subscribe [spot]`: which stop (or all) to get an update for every 15 min, or subscribe to that stop now. */
+export async function onSubscribe(ctx: BotContext, arg: string | null): Promise<BotReply> {
+  const st = await status(ctx);
+  const q = arg?.trim().toLowerCase();
+  const spot = q ? st.spots.find((s) => s.shortName.toLowerCase() === q || s.name.toLowerCase() === q) : undefined;
+  if (spot || q === "all") return subscribed(ctx, spot?.spotId ?? null);
+  if (st.spots.length === 0) return say(ctx, "No shuttles are running today.");
+  return say(ctx, "I'll send you where the shuttle is every 15 min while it runs. For which stop?", [
+    ...spotButtons(st.spots, "usub"),
+    [btn("All stops", "usub", "all")],
+  ]);
+}
+
+async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotReply> {
+  const actor = attendeeActor(ctx.person, ctx.workspace.id);
+  const sub = await subscribeUpdates(ctx.db, actor, { workspaceId: ctx.workspace.id, spotId }, ctx.now);
+  const st = await status(ctx);
+  const list = spotId ? st.spots.filter((s) => s.spotId === spotId) : st.spots;
+  const where = spotId ? `<b>${esc(list[0]?.name ?? "that stop")}</b>` : "every stop";
+  const now = updateText(list);
+  return say(
+    ctx,
+    `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} every 15 min while the shuttle runs. /stop ends it.`,
+    [[btn("Stop updates", "nunsub", sub.id)]],
+  );
+}
+
 /** `/stop`: cancel all of the person's subscriptions (subscriptions.unsubscribe "all"). */
 export async function onStop(ctx: BotContext): Promise<BotReply> {
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
   const n = await unsubscribe(ctx.db, actor, { workspaceId: ctx.workspace.id, subscriptionId: "all" }, ctx.now);
-  return say(ctx, n ? "Done. I've turned off your alerts and notices." : "You had nothing turned on. Nothing to stop.");
+  return say(
+    ctx,
+    n ? "Done. I've turned off your alerts, updates and notices." : "You had nothing turned on. Nothing to stop.",
+  );
 }
 
 /** Buttons spot / arrive / nsub / nunsub. */
@@ -145,6 +176,8 @@ export async function onAttendeeCallback(ctx: BotContext, cb: Callback, query: T
           answerCallback: ack("Subscribed"),
         };
       }
+      case "usub":
+        return { ...(await subscribed(ctx, arg === "all" ? null : arg)), answerCallback: ack("Subscribed") };
       case "nunsub": {
         const n = await unsubscribe(ctx.db, actor, { workspaceId, subscriptionId: arg }, ctx.now);
         return { send: [], answerCallback: ack(n ? "Turned off." : "That was already off.") };

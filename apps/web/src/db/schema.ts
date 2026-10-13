@@ -659,6 +659,8 @@ export const subscriptions = pgTable(
     expiresAt: ts("expires_at"),
     firedAt: ts("fired_at"),
     cancelledAt: ts("cancelled_at"),
+    /** updates: when the last 15-min update went out (worker bookkeeping, not audited) */
+    lastSentAt: ts("last_sent_at"),
     createdAt: createdAt(),
   },
   (t) => [

@@ -6,7 +6,8 @@ import { heartbeat } from "./heartbeat";
 import { learning } from "./learning";
 import { notices } from "./notices";
 import { queue } from "./queue";
+import { updates } from "./updates";
 import { watchdog } from "./watchdog";
 import { windows } from "./windows";
 
-export const jobs: Job[] = [heartbeat, watchdog, windows, arrivalAlerts, notices, queue, learning, cleanup];
+export const jobs: Job[] = [heartbeat, watchdog, windows, arrivalAlerts, updates, notices, queue, learning, cleanup];

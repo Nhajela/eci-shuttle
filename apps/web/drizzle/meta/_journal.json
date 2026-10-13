@@ -29,6 +29,13 @@
       "when": 1791870075804,
       "tag": "0003_vehicle_breaks",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791870491876,
+      "tag": "0004_subscription_updates",
+      "breakpoints": true
     }
   ]
 }
