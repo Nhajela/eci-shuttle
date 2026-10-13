@@ -1,5 +1,5 @@
 /** admin-live: pure view model for the Live board (SPEC §7). Built on the server from service reads; `now` in epoch ms. */
-import { formatIst, type HHMM, type IsoDate, istDate, istHHMM, type Phase } from "@eci-shuttle/shared";
+import { formatIst, type HHMM, type IsoDate, istDate, istHHMM, mapPin, type Phase } from "@eci-shuttle/shared";
 import type { Spot, Vehicle, VehicleBreak, VehicleState } from "@/db/types";
 import type { Problem } from "@/services/alerts/watchdog";
 import type { ScheduleDay } from "@/services/catalog/schedule";
@@ -44,6 +44,7 @@ export type VehicleCard = {
   onBreak: boolean;
   /** "On break till 13:20" / "On break" (until ended by hand) */
   breakText: string | null;
+  /** map pin; null with no fix in the last 15 min (mapPin), so a quiet vehicle doesn't look parked */
   position: { lat: number; lng: number } | null;
 };
 
@@ -127,7 +128,7 @@ export function buildBoard(input: BoardInput, now: number): Board {
         problems: problems.map(line),
         onBreak: !!brk,
         breakText: brk ? (brkEnd ? `On break till ${istHHMM(brkEnd)}` : "On break") : null,
-        position: st?.lat != null && st.lng != null ? { lat: st.lat, lng: st.lng } : null,
+        position: mapPin(st, now),
       };
     })
     .sort((a, b) => Number(b.problems.length > 0) - Number(a.problems.length > 0) || a.name.localeCompare(b.name));

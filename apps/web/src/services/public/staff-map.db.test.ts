@@ -8,7 +8,7 @@ const db = () => testDb();
 const NOW = new Date("2026-10-13T06:00:00Z");
 
 describe("staffMap", () => {
-  it("spots, active route paths and every vehicle with a position, for any member; breaks are named", async () => {
+  it("spots, active route paths and every vehicle with a fresh position, for any member; breaks are named", async () => {
     const ws = await makeWorkspace(db());
     const { actor } = await makeAdmin(db(), ws.id, "viewer");
     const [riva] = await db()
@@ -26,20 +26,38 @@ describe("staffMap", () => {
           { lat: 3, lng: 4 },
         ],
       });
-    const [s1, s2, s3] = await db()
+    const [s1, s2, s3, s4] = await db()
       .insert(vehicles)
       .values([
         { workspaceId: ws.id, name: "Shuttle 1" },
         { workspaceId: ws.id, name: "Shuttle 2" },
         { workspaceId: ws.id, name: "Old", active: false },
+        { workspaceId: ws.id, name: "Gone quiet" },
       ])
       .returning();
     await db()
       .insert(vehicleState)
       .values([
-        { vehicleId: s1.id, workspaceId: ws.id, phase: "en_route", lat: 15.66, lng: 73.71, offRoute: true },
+        {
+          vehicleId: s1.id,
+          workspaceId: ws.id,
+          phase: "en_route",
+          lat: 15.66,
+          lng: 73.71,
+          offRoute: true,
+          lastPingAt: NOW,
+        },
         { vehicleId: s2.id, workspaceId: ws.id, phase: "offline" },
-        { vehicleId: s3.id, workspaceId: ws.id, phase: "at_spot", lat: 15.6, lng: 73.7 },
+        { vehicleId: s3.id, workspaceId: ws.id, phase: "at_spot", lat: 15.6, lng: 73.7, lastPingAt: NOW },
+        // last fix 16 min ago: no pin, or it looks parked there
+        {
+          vehicleId: s4.id,
+          workspaceId: ws.id,
+          phase: "offline",
+          lat: 15.62,
+          lng: 73.72,
+          lastPingAt: new Date(NOW.getTime() - 16 * 60_000),
+        },
       ]);
     await db().insert(vehicleBreaks).values({ workspaceId: ws.id, vehicleId: s1.id, startsAt: NOW, endsAt: null });
     const m = await staffMap(db(), actor, { workspaceId: ws.id }, new Date(NOW.getTime() + 1000));

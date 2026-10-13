@@ -154,6 +154,17 @@ describe("buildBoard", () => {
     expect(out.cards[1]).toMatchObject({ phaseText: "Off duty · on the road", position: { lat: 15.65, lng: 73.75 } });
   });
 
+  it("drops the map pin when the last fix is over 15 min old, but the card still says when it was", () => {
+    const out = buildBoard(
+      base({
+        vehicles: [vehicle("v1", "Bus 1")],
+        states: [state("v1", { lat: 15.6, lng: 73.7, lastPingAt: new Date(NOW - 16 * 60_000) })],
+      }),
+      NOW,
+    );
+    expect(out.cards[0]).toMatchObject({ locationText: "Location 16 min ago", position: null });
+  });
+
   it("shows a phone that checks in without a GPS fix as checked in, not as never seen", () => {
     const bus = vehicle("v1", "Bus 1");
     const out = buildBoard(

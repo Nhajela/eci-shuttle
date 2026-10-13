@@ -1,8 +1,8 @@
 /**
  * svc-public: the map logged-in staff (any member: viewer+) see on the main page under the answer: spots, route
- * paths and each active vehicle's last position, like the Live board's map. Attendees never get this.
+ * paths and each active vehicle's last position (none once it's over 15 min old), like the Live board's map. Attendees never get this.
  */
-import type { LatLng } from "@eci-shuttle/shared";
+import { type LatLng, mapPin } from "@eci-shuttle/shared";
 import type { Db } from "@/db";
 import { activeBreaks } from "../catalog/breaks";
 import { listRoutes } from "../catalog/routes";
@@ -33,11 +33,10 @@ export async function staffMap(db: Db, actor: Actor, input: { workspaceId: strin
     paths: routeRows.filter((r) => !r.archivedAt).map((r) => r.path),
     markers: vs.flatMap((v) => {
       const s = stateOf.get(v.id);
-      if (!v.active || s?.lat == null || s.lng == null) return [];
+      const pin = mapPin(s, now.getTime());
+      if (!v.active || !s || !pin) return [];
       const name = breaks.has(v.id) ? `${v.name} · on break` : v.name;
-      return [
-        { id: v.id, name, colour: v.colour, lat: s.lat, lng: s.lng, problem: s.offRoute || s.phase === "offline" },
-      ];
+      return [{ id: v.id, name, colour: v.colour, ...pin, problem: s.offRoute || s.phase === "offline" }];
     }),
   };
 }
