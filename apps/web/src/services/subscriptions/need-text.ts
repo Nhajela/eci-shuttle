@@ -99,3 +99,29 @@ export function groupWaiting(
   }
   return [...by.values()];
 }
+
+/**
+ * `/need riva circle`, `/need from Riva Beach to The Circle`, `/need riva → circle`: matched against the stops'
+ * short names and names (case-insensitive). One stop alone = where they are. Anything else = unknown.
+ */
+export function matchNeed<S extends { name: string; shortName: string }>(
+  text: string,
+  stops: S[],
+): { from: S; to?: S } | { unknown: string } {
+  const words = text.toLowerCase().replace(/→|->/g, " to ").split(/\s+/).filter(Boolean);
+  if (words[0] === "from") words.shift();
+  const find = (ws: string[]) => {
+    const q = ws.join(" ");
+    return q ? stops.find((s) => s.shortName.toLowerCase() === q || s.name.toLowerCase() === q) : undefined;
+  };
+  const whole = find(words);
+  if (whole) return { from: whole };
+  for (let k = 1; k < words.length; k++) {
+    const right = words.slice(k);
+    if (right[0] === "to") right.shift();
+    const from = find(words.slice(0, k));
+    const to = find(right);
+    if (from && to) return { from, to };
+  }
+  return { unknown: text.trim() };
+}

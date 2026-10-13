@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   type AlertVehicle,
   groupWaiting,
+  matchNeed,
   needSpots,
   notRunningText,
   requesterName,
@@ -118,6 +119,27 @@ describe("needSpots / notRunningText", () => {
     expect(out).toEqual({ spots: [], nextStart: "12:00" });
     expect(notRunningText(out.nextStart)).toBe("No shuttle is running right now. The next one starts at 12:00.");
     expect(notRunningText(needSpots(st([spot("a", [done])])).nextStart)).toBe("No shuttle is running right now.");
+  });
+});
+
+describe("matchNeed", () => {
+  const stops = [
+    { name: "Riva Beach Resort", shortName: "Riva" },
+    { name: "Circle co-work", shortName: "Circle" },
+    { name: "Nanu Resort", shortName: "Nanu" },
+  ];
+  const [riva, circle] = stops;
+  it("two stops in one go, by short name or full name, with or without from / to / →", () => {
+    expect(matchNeed("riva circle", stops)).toEqual({ from: riva, to: circle });
+    expect(matchNeed("from Riva Beach Resort to Circle co-work", stops)).toEqual({ from: riva, to: circle });
+    expect(matchNeed("Riva → circle", stops)).toEqual({ from: riva, to: circle });
+    expect(matchNeed("riva->circle", stops)).toEqual({ from: riva, to: circle });
+  });
+  it("one stop = where they are; unknown words", () => {
+    expect(matchNeed("RIVA", stops)).toEqual({ from: riva });
+    expect(matchNeed("riva beach resort", stops)).toEqual({ from: riva });
+    expect(matchNeed("the moon", stops)).toEqual({ unknown: "the moon" });
+    expect(matchNeed("riva moon", stops)).toEqual({ unknown: "riva moon" });
   });
 });
 

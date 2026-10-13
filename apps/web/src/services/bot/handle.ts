@@ -11,6 +11,7 @@ import { onInvite, onNotice, onSetGroup, onSilence, onStatus, onToday } from "./
 import { onShuttle, onStop, onSubscribe, onUnsubscribe } from "./attendee";
 import { handleCallback } from "./callbacks";
 import { onLocation, onPair } from "./live";
+import { onNeed } from "./need";
 import { onLogin, onStart } from "./start";
 import type { BotContext, BotReply, TgUpdate } from "./types";
 
@@ -19,7 +20,8 @@ const NONE: BotReply = { send: [] };
 const HELP =
   "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
   "/subscribe sends you where the shuttle is every 15 min; /unsubscribe stops it.\n" +
-  "/stop turns off your alerts, updates and notices.\n" +
+  "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you when it's here.\n" +
+  "/stop turns off your alerts, updates, notices and shuttle request.\n" +
   "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
 
@@ -41,7 +43,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** A spot button ("spot:<spotId>", "arrive:…", "nsub:…") whose spot is in a workspace this person is a member of. */
 async function buttonWorkspace(db: Db, personId: string, data: string | undefined): Promise<Workspace | null> {
   const [action, spotId] = (data ?? "").split(":");
-  if (!["spot", "arrive", "nsub", "nunsub"].includes(action) || !spotId || !UUID.test(spotId)) return null;
+  if (!["spot", "arrive", "nsub", "nunsub", "need", "needto"].includes(action) || !spotId || !UUID.test(spotId))
+    return null;
   const [spot] = await db.select({ workspaceId: spots.workspaceId }).from(spots).where(eq(spots.id, spotId));
   if (!spot) return null;
   const mine = await membershipsOf(db, personId);
@@ -112,7 +115,9 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
   }
   // staff can ask about another workspace they belong to by naming its slug last: "/shuttle test", "riva test"
   const asked =
-    !query && (command === "shuttle" || command === null) ? await memberWorkspace(db, person.id, text) : null;
+    !query && (command === "shuttle" || command === "need" || command === null)
+      ? await memberWorkspace(db, person.id, text)
+      : null;
   const pressedIn = query ? await buttonWorkspace(db, person.id, query.data) : null;
   const ctx: BotContext = { db, now, person, chatId, workspace: asked?.workspace ?? pressedIn ?? workspace };
   const shuttleArg = asked ? asked.rest : rest;
@@ -143,6 +148,9 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
         return await onSetGroup(ctx, args, chat?.type === "group" || chat?.type === "supergroup");
       case "notice":
         return await onNotice(ctx, text ?? "");
+      case "need":
+        // the "here" message comes by private message, which needs the person to have started the bot
+        return isPrivate ? await onNeed(ctx, shuttleArg) : say(chatId, "Send /need to me in a private chat.");
       case "subscribe":
         // updates come by private message, which needs the person to have started the bot
         return isPrivate ? await onSubscribe(ctx, rest) : say(chatId, "Send /subscribe to me in a private chat.");

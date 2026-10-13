@@ -10,6 +10,7 @@ import { onAdminCallback, onNotice, onSilence, onStatus, onToday } from "./admin
 import { onAttendeeCallback, onShuttle, onStop } from "./attendee";
 import { handleUpdate } from "./handle";
 import { onLocation, onPair } from "./live";
+import { onNeed } from "./need";
 import { onLogin, onStart } from "./start";
 import type { BotContext, BotReply, TgUpdate, TgUser } from "./types";
 
@@ -23,6 +24,7 @@ vi.mock("./admin", () => ({
 }));
 vi.mock("./attendee", () => ({ onShuttle: vi.fn(), onStop: vi.fn(), onAttendeeCallback: vi.fn() }));
 vi.mock("./live", () => ({ onPair: vi.fn(), onLocation: vi.fn() }));
+vi.mock("./need", () => ({ onNeed: vi.fn() }));
 
 const db = () => testDb();
 const NOW = new Date("2026-10-12T04:30:00Z");
@@ -32,7 +34,19 @@ let live: Workspace;
 let seq = 0;
 beforeEach(async () => {
   vi.clearAllMocks();
-  for (const f of [onStart, onLogin, onStatus, onToday, onSilence, onNotice, onShuttle, onStop, onPair, onLocation])
+  for (const f of [
+    onStart,
+    onLogin,
+    onStatus,
+    onToday,
+    onSilence,
+    onNotice,
+    onShuttle,
+    onStop,
+    onPair,
+    onLocation,
+    onNeed,
+  ])
     vi.mocked(f).mockResolvedValue(OK);
   vi.mocked(onAdminCallback).mockResolvedValue(OK);
   vi.mocked(onAttendeeCallback).mockResolvedValue(OK);
@@ -88,6 +102,18 @@ describe("handleUpdate", () => {
     // a group command addressed to the bot by name
     await handleUpdate(db(), inGroup(from, "/status@eci_shuttle_bot"), NOW);
     expect(onStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("/need in private goes to onNeed (with its words); in a group it asks for a private chat", async () => {
+    const from = user();
+    await handleUpdate(db(), dm(from, "/need riva circle"), NOW);
+    expect(vi.mocked(onNeed).mock.calls[0][1]).toBe("riva circle");
+    expect(ctxOf(vi.mocked(onNeed).mock.calls[0]).workspace.id).toBe(live.id);
+    await handleUpdate(db(), dm(from, "/need"), NOW);
+    expect(vi.mocked(onNeed).mock.calls[1][1]).toBeNull();
+    const r = await handleUpdate(db(), inGroup(from, "/need riva circle"), NOW);
+    expect(r.send[0]).toMatchObject({ chatId: -100, html: "Send /need to me in a private chat." });
+    expect(onNeed).toHaveBeenCalledTimes(2);
   });
 
   it("a spot's name typed alone goes to /shuttle; other text gets help in private, nothing in groups", async () => {
