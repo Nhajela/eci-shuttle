@@ -29,7 +29,7 @@ export async function createWorkspaceAction(_prev: ActionState, fd: FormData): P
 
 export async function startSimAction(_prev: ActionState, fd: FormData): Promise<NonNullable<ActionState>> {
   const { actor, workspace } = await requireAdmin({ w: fd.get("w") as string | null, minRole: "admin" });
-  // ponytail: the live-workspace refusal belongs in the pairing service (contract request); checked here until then.
+  // pairDevice also refuses a simulated pair into the live workspace; this just avoids minting a useless code.
   if (workspace.isLive) return { ok: false, message: "Simulated phones only run in test workspaces." };
   const vehicle = str(fd, "vehicle").trim();
   if (!vehicle) return { ok: false, message: "Pick a vehicle." };

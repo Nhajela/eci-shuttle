@@ -63,7 +63,7 @@ describe("placementLabel", () => {
     expect(placementLabel(`spot:${SPOT}`, names)).toBe("At Riva");
     expect(placementLabel(`service:${SVC}`, names)).toBe("Party shuttle");
     expect(placementLabel(`spot:${SVC.replace("2", "3")}`, names)).toBe("At a removed spot");
-    expect(placementLabel(`service:${SPOT.replace("1", "3")}`, names)).toBe("A service not on the schedule");
+    expect(placementLabel(`service:${SPOT.replace("1", "3")}`, names)).toBe("A removed service");
   });
 });
 

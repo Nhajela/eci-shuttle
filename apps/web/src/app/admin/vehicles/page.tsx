@@ -7,11 +7,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { getSchedule } from "@/services/catalog/schedule";
-import { listVehicles } from "@/services/catalog/vehicles";
+import { listVehicles, listVehicleTrips } from "@/services/catalog/vehicles";
 import { listPhones } from "@/services/devices/phones";
 import { can } from "@/services/kernel";
 import { saveVehicle } from "./actions";
-import { recentTrips } from "./trips";
 
 /** admin-vehicles (SPEC §7): CRUD, current phone, current service, trip history. */
 export const metadata: Metadata = { title: "Vehicles" };
@@ -29,7 +28,7 @@ export default async function VehiclesPage({ searchParams }: { searchParams: Pro
     listPhones(d, actor, input, now),
     // from yesterday: an assignment that started before midnight can still be running
     getSchedule(d, actor, { ...input, from: istDate(+now - DAY_MS), days: 2 }),
-    recentTrips(d, actor, { ...input, since: new Date(+now - 7 * DAY_MS), perVehicle: SHOWN_TRIPS }),
+    listVehicleTrips(d, actor, { ...input, since: new Date(+now - 7 * DAY_MS), perVehicle: SHOWN_TRIPS }),
   ]);
   const action = can(actor, workspace.id, "ops") ? saveVehicle : null;
 

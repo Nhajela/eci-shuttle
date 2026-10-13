@@ -58,7 +58,7 @@ export function placementLabel(p: string, names: Record<string, string>): string
   if (p === "admin") return "Admin home";
   const [kind, id] = p.split(":");
   if (kind === "spot") return names[id] ? `At ${names[id]}` : "At a removed spot";
-  return names[id] ?? "A service not on the schedule";
+  return names[id] ?? "A removed service";
 }
 
 /** The list's "Until" cell. No endsAt and not ended means it is still showing until someone ends it. */

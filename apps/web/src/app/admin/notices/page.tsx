@@ -1,11 +1,10 @@
-import { istDate } from "@eci-shuttle/shared";
 import type { Metadata } from "next";
 import { NoticeForm } from "@/components/admin/notices/notice-form";
 import { NoticeList } from "@/components/admin/notices/notice-list";
 import { noticeState } from "@/components/admin/notices/notices";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
-import { getSchedule } from "@/services/catalog/schedule";
+import { listServices } from "@/services/catalog/schedule";
 import { listSpots } from "@/services/catalog/spots";
 import { can } from "@/services/kernel";
 import { listNotices } from "@/services/notices/notices";
@@ -19,26 +18,14 @@ export default async function NoticesPage({ searchParams }: { searchParams: Prom
   const now = Date.now();
   const d = db();
   const input = { workspaceId: workspace.id };
-  const today = istDate(now);
-  const [notices, spots, schedule] = await Promise.all([
+  const [notices, spots, services] = await Promise.all([
     listNotices(d, actor, { ...input, includeHistory: true }),
     listSpots(d, actor, { ...input, includeArchived: true }),
-    // ponytail: no listServices contract, so services come from the schedule, 14 days back to 14 ahead. The form
-    // offers the upcoming ones; the list names any in the window. Older services read "not on the schedule".
-    getSchedule(d, actor, { ...input, from: istDate(now - 14 * 86_400_000), days: 28 }),
+    listServices(d, actor, input),
   ]);
   const toOption = (s: { id: string; name: string }) => ({ id: s.id, name: s.name });
-  const services = [
-    ...new Map(
-      schedule
-        .filter((day) => day.date >= today)
-        .flatMap((day) => day.services.map(({ service: s }) => [s.id, toOption(s)])),
-    ).values(),
-  ];
   const spotOptions = spots.filter((s) => !s.archivedAt).map(toOption);
-  const names = Object.fromEntries(
-    [...spots, ...schedule.flatMap((day) => day.services.map(({ service }) => service))].map((o) => [o.id, o.name]),
-  );
+  const names = Object.fromEntries([...spots, ...services].map((o) => [o.id, o.name]));
   const canEdit = can(actor, workspace.id, "ops");
 
   return (
@@ -49,7 +36,7 @@ export default async function NoticesPage({ searchParams }: { searchParams: Prom
           <NoticeForm
             w={workspace.slug}
             spots={spotOptions}
-            services={services}
+            services={services.map(toOption)}
             others={notices.filter((n) => noticeState(n, now) !== "over")}
             now={now}
           />

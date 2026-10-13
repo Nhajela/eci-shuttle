@@ -191,8 +191,6 @@ export async function listRoutes(db: Db, actor: Actor, input: { workspaceId: str
   const n = new Map(stats.map((s) => [`${s.from}>${s.to}`, s.n]));
   return rows.map((r) => ({
     ...r,
-    // drizzle parses a NULL element of integer[] as NaN (schema types it number[]; learning writes nulls)
-    typicalLegS: r.typicalLegS.map((s) => (Number.isNaN(s) ? null : s)),
     legSamples: r.spotIds.slice(1).map((to, i) => n.get(`${r.spotIds[i]}>${to}`) ?? 0),
   }));
 }

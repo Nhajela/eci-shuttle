@@ -128,7 +128,7 @@ describe("phoneProblems", () => {
     ]);
   });
   it("low battery while charging is fine; silent tracker is flagged", () => {
-    expect(phoneProblems(health({ lastSyncAgoS: 600 }, { battery: 9, charging: true }), NOW)).toEqual([
+    expect(phoneProblems(health({ lastSyncAgoS: 600, silent: true }, { battery: 9, charging: true }), NOW)).toEqual([
       "Silent for 10 min",
     ]);
   });

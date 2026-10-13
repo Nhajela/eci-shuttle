@@ -11,10 +11,9 @@ describe("sim helpers", () => {
     expect(simCommand("test", 'Say "hi"', "1")).toBe('pnpm sim test "Say \\"hi\\"" 1');
   });
 
-  it("treats simulated devices and sim-labelled ones as sims, not revoked ones", () => {
-    expect(isSimDevice({ simulated: true, label: "x", revokedAt: null })).toBe(true);
-    expect(isSimDevice({ simulated: false, label: "Sim: Bus 1", revokedAt: null })).toBe(true);
-    expect(isSimDevice({ simulated: false, label: "Ravi's phone", revokedAt: null })).toBe(false);
-    expect(isSimDevice({ simulated: true, label: "x", revokedAt: new Date() })).toBe(false);
+  it("a sim is a simulated device that is not revoked (the label doesn't count)", () => {
+    expect(isSimDevice({ simulated: true, revokedAt: null })).toBe(true);
+    expect(isSimDevice({ simulated: false, revokedAt: null })).toBe(false);
+    expect(isSimDevice({ simulated: true, revokedAt: new Date() })).toBe(false);
   });
 });

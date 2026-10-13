@@ -5,7 +5,6 @@ import type { PhoneHealth } from "@/services/devices/phones";
 
 export type Tone = "ok" | "warn" | "bad" | "muted";
 
-const SILENT_AFTER_S = 5 * 60; // SPEC §7 watchdog: expected active but silent > 5 min
 const LOW_BATTERY = 15;
 const MAX_HOURS = 48; // the device schedule only covers 48h
 
@@ -55,8 +54,8 @@ export function phoneProblems(h: PhoneView, now: number): string[] {
   if (killPending) return [`Kill sent, phone hasn't synced since ${istWhen(killPending, now)}`];
   if (d.killedAt) return [];
   const out: string[] = [];
-  if (h.desiredMode === "active" && h.lastSyncAgoS !== null && h.lastSyncAgoS > SILENT_AFTER_S)
-    out.push(`Silent for ${Math.floor(h.lastSyncAgoS / 60)} min`);
+  // h.silent is the watchdog's rule (services/devices/phones), so the page and the alert agree
+  if (h.silent) out.push(h.lastSyncAgoS === null ? "Silent" : `Silent for ${Math.floor(h.lastSyncAgoS / 60)} min`);
   if (h.modeMismatch) out.push(`Told ${h.desiredMode}, reports ${d.reportedMode ?? "nothing"}`);
   if (h.configBehind) out.push("Hasn't picked up the latest config");
   if (h.needsNewApk) out.push("Needs new APK");

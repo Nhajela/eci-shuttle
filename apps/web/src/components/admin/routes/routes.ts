@@ -13,11 +13,19 @@ export function formatLeg(seconds: number | null | undefined): string {
 
 export type LegRow = { from: string; to: string; time: string; learned: boolean };
 
-/** One row per leg; typicalLegS[i] is the learned median for spotIds[i] → spotIds[i+1] (null = unknown). */
-export function legRows(route: { spotIds: string[]; typicalLegS: (number | null)[] }, names: Names): LegRow[] {
+/**
+ * One row per leg; typicalLegS[i] is the learned median for spotIds[i] → spotIds[i+1] (null = unknown), and
+ * legSamples[i] how many trips it was learned from.
+ */
+export function legRows(
+  route: { spotIds: string[]; typicalLegS: (number | null)[]; legSamples?: number[] },
+  names: Names,
+): LegRow[] {
   return route.spotIds.slice(1).map((to, i) => {
     const s = route.typicalLegS[i];
-    return { from: nameOf(names, route.spotIds[i]), to: nameOf(names, to), time: formatLeg(s), learned: s != null };
+    const n = route.legSamples?.[i];
+    const time = s != null && n ? `${formatLeg(s)} (${n} ${n === 1 ? "trip" : "trips"})` : formatLeg(s);
+    return { from: nameOf(names, route.spotIds[i]), to: nameOf(names, to), time, learned: s != null };
   });
 }
 

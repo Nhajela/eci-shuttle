@@ -22,6 +22,12 @@ describe("legRows", () => {
       { from: "Circle", to: "Riva", time: "not learned yet", learned: false },
     ]);
   });
+  it("says how many trips a learned leg comes from", () => {
+    expect(legRows({ spotIds: ["a", "b", "a"], typicalLegS: [600, null], legSamples: [24, 0] }, names)).toEqual([
+      { from: "Riva", to: "Circle", time: "10 min (24 trips)", learned: true },
+      { from: "Circle", to: "Riva", time: "not learned yet", learned: false },
+    ]);
+  });
   it("treats a missing typical_leg_s entry as unknown and names a spot it can't find", () => {
     expect(legRows({ spotIds: ["a", "zz"], typicalLegS: [] }, names)).toEqual([
       { from: "Riva", to: "Unknown spot", time: "not learned yet", learned: false },
