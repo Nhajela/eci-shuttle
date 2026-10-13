@@ -384,17 +384,19 @@ async function gapWarning(
   const spot = (await get(db, ws, "spot", route.spotIds[0])).name;
   const on = day(c.date);
   if (!after.length) return `Cancelling this leaves ${spot} without a shuttle all day on ${on}.`;
-  const from = Math.min(...removed.map((d) => d.at));
-  const to = Math.max(...removed.map((d) => d.at));
-  const prev = after.filter((d) => d.at < from).sort((a, b) => b.at - a.at)[0];
-  const next = after.filter((d) => d.at > to).sort((a, b) => a.at - b.at)[0];
-  const span =
-    prev && next
-      ? `${istHHMM(prev.at)}–${istHHMM(next.at)}`
-      : prev
-        ? `after ${istHHMM(prev.at)}`
-        : `until ${istHHMM(next.at)}`;
-  return `Cancelling this leaves ${spot} without a shuttle ${span} on ${on}.`;
+  // Each removed departure falls in the gap between its nearest remaining neighbours (either may be missing).
+  const times = [...new Set(after.map((d) => d.at))].sort((a, b) => a - b);
+  const gaps = new Set<string>();
+  for (const { at } of removed) {
+    if (times.includes(at)) continue; // another service still leaves then
+    const prev = times.findLast((t) => t < at);
+    const next = times.find((t) => t > at);
+    if (prev !== undefined && next !== undefined) gaps.add(`${istHHMM(prev)}–${istHHMM(next)}`);
+    else if (prev !== undefined) gaps.add(`after ${istHHMM(prev)}`);
+    else if (next !== undefined) gaps.add(`until ${istHHMM(next)}`);
+  }
+  if (!gaps.size) return null;
+  return `Cancelling this leaves ${spot} without a shuttle ${[...gaps].join(" and ")} on ${on}.`;
 }
 
 async function oneWarning(db: Db, ws: string, c: McpChange, now: Date): Promise<string | null> {

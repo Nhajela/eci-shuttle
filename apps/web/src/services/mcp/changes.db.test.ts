@@ -234,6 +234,39 @@ describe("changeWarnings", () => {
     ).toEqual(["Cancelling this leaves Riva without a shuttle all day on Mon 12 Oct."]);
   });
 
+  it("counts other services on the route when measuring the gap", async () => {
+    const { ws, route, service } = await setup();
+    const extra = (times: string[]) =>
+      db()
+        .insert(services)
+        .values({
+          workspaceId: ws.id,
+          name: `Extra ${times.join(",")}`,
+          kind: "regular",
+          routeId: route.id,
+          validFrom: "2026-10-10",
+          validTo: "2026-10-20",
+          daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+          startTime: times[0],
+          endTime: times[times.length - 1],
+          pattern: { kind: "times", times },
+        });
+    const cancelDay = { ...cancel1020(service.id), type: "cancel_day" as const, departure: null };
+    // Extra at 10:30 only: Morning's 10:00–11:00 sit on both sides of it
+    await extra(["10:30"]);
+    expect(await changeWarnings(db(), ws.id, [cancelDay], NOW)).toEqual([
+      "Cancelling this leaves Riva without a shuttle until 10:30 and after 10:30 on Mon 12 Oct.",
+    ]);
+    expect(await changeWarnings(db(), ws.id, [cancel1020(service.id)], NOW)).toEqual([
+      "Cancelling this leaves Riva without a shuttle 10:00–10:30 on Mon 12 Oct.",
+    ]);
+    // with 09:40 and 11:00 too, the 10:30 still splits the day
+    await extra(["09:40", "11:00"]);
+    expect(await changeWarnings(db(), ws.id, [cancelDay], NOW)).toEqual([
+      "Cancelling this leaves Riva without a shuttle 09:40–10:30 and 10:30–11:00 on Mon 12 Oct.",
+    ]);
+  });
+
   it("warns about phones and vehicles running right now", async () => {
     const { ws, phone, sv, bus } = await setup();
     expect(await changeWarnings(db(), ws.id, [{ kind: "phone.kill", deviceId: phone.id }], NOW)).toEqual([
