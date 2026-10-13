@@ -8,7 +8,7 @@ import { isSpotName } from "../catalog/spots";
 import { listAllWorkspaces, workspaceBySlug } from "../catalog/workspaces";
 import { isServiceError, systemActor, userMessage } from "../kernel";
 import { onNotice, onSetGroup, onSilence, onStatus, onToday } from "./admin";
-import { onShuttle, onStop } from "./attendee";
+import { onShuttle, onStop, onSubscribe } from "./attendee";
 import { handleCallback } from "./callbacks";
 import { onLocation, onPair } from "./live";
 import { onLogin, onStart } from "./start";
@@ -18,7 +18,8 @@ const BOT = systemActor("bot", "telegram");
 const NONE: BotReply = { send: [] };
 const HELP =
   "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
-  "/stop turns off your alerts and notices.\n" +
+  "/subscribe sends you where the shuttle is every 15 min.\n" +
+  "/stop turns off your alerts, updates and notices.\n" +
   "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
 
@@ -140,6 +141,9 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
         return await onSetGroup(ctx, args, chat?.type === "group" || chat?.type === "supergroup");
       case "notice":
         return await onNotice(ctx, text ?? "");
+      case "subscribe":
+        // updates come by private message, which needs the person to have started the bot
+        return isPrivate ? await onSubscribe(ctx, rest) : say(chatId, "Send /subscribe to me in a private chat.");
       case "stop":
         return await onStop(ctx);
       case "pair":

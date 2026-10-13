@@ -10,6 +10,12 @@ vi.mock("@/services/catalog/vehicles", () => ({ listVehicles: vi.fn() }));
 vi.mock("@/services/catalog/schedule", () => ({ getSchedule: vi.fn() }));
 vi.mock("@/services/devices/phones", () => ({ listPhones: vi.fn() }));
 vi.mock("@/services/ingest/ingest", () => ({ vehicleStates: vi.fn() }));
+vi.mock("@/services/catalog/breaks", () => ({
+  activeBreaks: vi.fn(
+    async () => new Map([["v2", { vehicleId: "v2", endsAt: new Date("2026-10-12T20:20:00Z"), endedAt: null }]]),
+  ),
+  breakEnd: (b: { endsAt: Date | null; endedAt: Date | null }) => b.endedAt ?? b.endsAt,
+}));
 vi.mock("@/services/public/status", () => ({ publicStatus: vi.fn() }));
 vi.mock("@/services/learning/insights", () => ({ getInsights: vi.fn(), listSuggestions: vi.fn() }));
 vi.mock("@/services/activity/activity", async (orig) => ({
@@ -152,8 +158,9 @@ describe("tools", () => {
         {
           vehicle: { id: "v1", name: "Bus 1" },
           state: { vehicleId: "v1", phase: "moving", lastPingAt: "Tue 13 Oct, 01:29 IST" },
+          onBreakUntil: null,
         },
-        { vehicle: { id: "v2", name: "Bus 2" }, state: null },
+        { vehicle: { id: "v2", name: "Bus 2" }, state: null, onBreakUntil: "01:50" },
       ],
     });
   });

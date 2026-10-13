@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
+import { endBreak, startBreak } from "@/services/catalog/breaks";
 import { addException } from "@/services/catalog/schedule";
 import { nudgePhone, silencePhone } from "@/services/devices/phones";
 import { type Actor, userMessage } from "@/services/kernel";
@@ -55,4 +56,17 @@ export async function cancelDepartureAction(
   return run(w, (actor, workspaceId) =>
     addException(db(), actor, { workspaceId, serviceId, date, type: "cancel_departure", departure }),
   );
+}
+
+/** A driver's break from now: `minutes` long, or until ended by hand (null). */
+export async function startBreakAction(
+  w: string | null,
+  vehicleId: string,
+  minutes: number | null,
+): Promise<ActionResult> {
+  return run(w, (actor, workspaceId) => startBreak(db(), actor, { workspaceId, vehicleId, minutes }, new Date()));
+}
+
+export async function endBreakAction(w: string | null, vehicleId: string): Promise<ActionResult> {
+  return run(w, (actor, workspaceId) => endBreak(db(), actor, { workspaceId, vehicleId }, new Date()));
 }

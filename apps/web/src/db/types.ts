@@ -9,6 +9,7 @@ export type Route = typeof s.routes.$inferSelect;
 export type Service = typeof s.services.$inferSelect;
 export type ServiceException = typeof s.serviceExceptions.$inferSelect;
 export type ServiceVehicle = typeof s.serviceVehicles.$inferSelect;
+export type VehicleBreak = typeof s.vehicleBreaks.$inferSelect;
 export type Notice = typeof s.notices.$inferSelect;
 export type DeviceAssignment = typeof s.deviceAssignments.$inferSelect;
 export type Directive = typeof s.directives.$inferSelect;

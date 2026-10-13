@@ -1,6 +1,6 @@
 /** admin-live: pure view model for the Live board (SPEC §7). Built on the server from service reads; `now` in epoch ms. */
 import { formatIst, type HHMM, type IsoDate, istDate, istHHMM, type Phase } from "@eci-shuttle/shared";
-import type { Spot, Vehicle, VehicleState } from "@/db/types";
+import type { Spot, Vehicle, VehicleBreak, VehicleState } from "@/db/types";
 import type { Problem } from "@/services/alerts/watchdog";
 import type { ScheduleDay } from "@/services/catalog/schedule";
 import type { PhoneHealth } from "@/services/devices/phones";
@@ -10,6 +10,8 @@ export type BoardInput = {
   states: VehicleState[];
   phones: PhoneHealth[];
   problems: Problem[];
+  /** vehicle id → its driver's break running now (catalog/breaks.activeBreaks) */
+  breaks: Map<string, VehicleBreak>;
   /** yesterday and today, so last night's run past midnight is included */
   schedule: ScheduleDay[];
   spots: Spot[];
@@ -37,6 +39,9 @@ export type VehicleCard = {
   /** IST HH:MM while a silence directive runs */
   silencedUntilText: string | null;
   problems: ProblemLine[];
+  onBreak: boolean;
+  /** "On break till 13:20" / "On break" (until ended by hand) */
+  breakText: string | null;
   position: { lat: number; lng: number } | null;
 };
 
@@ -81,6 +86,8 @@ export function buildBoard(input: BoardInput, now: number): Board {
       const silence = ph?.activeDirectives.find(
         (d) => d.kind === "silence_until" && !d.cancelledAt && d.startsAt.getTime() <= now && d.endsAt.getTime() > now,
       );
+      const brk = input.breaks.get(v.id);
+      const brkEnd = brk && (brk.endedAt ?? brk.endsAt);
       return {
         vehicleId: v.id,
         name: v.name,
@@ -101,6 +108,8 @@ export function buildBoard(input: BoardInput, now: number): Board {
         phoneLabel: dev?.label ?? null,
         silencedUntilText: silence ? istHHMM(silence.endsAt) : null,
         problems: problems.map(line),
+        onBreak: !!brk,
+        breakText: brk ? (brkEnd ? `On break till ${istHHMM(brkEnd)}` : "On break") : null,
         position: st?.lat != null && st.lng != null ? { lat: st.lat, lng: st.lng } : null,
       };
     })

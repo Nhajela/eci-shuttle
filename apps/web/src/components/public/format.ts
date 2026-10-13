@@ -7,6 +7,9 @@ import type { AnswerLine } from "@eci-shuttle/shared";
 /** `small`: not a time, so it is shown in the small style. */
 export type AnswerParts = { label: string; value: string; range: string | null; small?: true };
 
+/** status.ts ON_BREAK: every shuttle on the service is on a driver's break. */
+const ON_BREAK = "on a short break";
+
 /** Past this, a live answer is no longer live (SPEC §6.2). */
 const STALE_S = 120;
 
@@ -33,6 +36,10 @@ export function answerParts(line: AnswerLine, single: boolean, ageS = 0): Answer
       range: lo !== null && hi !== null && lo !== hi ? `${lo}–${hi}` : null,
     };
   }
+  if (line.kind === "timetable" && line.phaseText === ON_BREAK)
+    return line.nextAtLabel
+      ? { label: label ?? "Shuttle back around", value: line.nextAtLabel, range: null }
+      : { label: label ?? "Shuttle", value: "On a short break", range: null, small: true };
   if (line.kind === "timetable" && line.nextAtLabel)
     return { label: label ?? "Next scheduled", value: line.nextAtLabel, range: null };
   // a loop service inside its hours has no fixed next time: it is running, not finished
@@ -43,7 +50,8 @@ export function answerParts(line: AnswerLine, single: boolean, ageS = 0): Answer
 /** The small line under it. `ageS` = how old the answer is (edge cache, failed polls), added to last seen. */
 export function contextText(line: AnswerLine, ageS: number): string {
   // only what we know about the tracked shuttle: no "about every N min" estimates, no "live tracking off"
-  const phase = quiet(line.phaseText);
+  // an open-ended break already says so in the big line
+  const phase = line.phaseText === ON_BREAK && !line.nextAtLabel ? "" : quiet(line.phaseText);
   if (line.lastSeenS === null) return phase;
   const s = line.lastSeenS + ageS;
   const seen = `last seen ${s < 60 ? `${s}s` : `${Math.round(s / 60)} min`} ago`;

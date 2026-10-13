@@ -1,8 +1,9 @@
 "use client";
 /** admin-live: one vehicle on the Live board, with its flags and the phone quick actions. */
 import { istHHMM } from "@eci-shuttle/shared";
-import { AlertTriangle, BatteryMedium, Clock, Route, Smartphone } from "lucide-react";
-import { nudgeAction, silenceAction } from "@/app/admin/live/actions";
+import { AlertTriangle, BatteryMedium, Clock, Coffee, Route, Smartphone } from "lucide-react";
+import { useState } from "react";
+import { endBreakAction, nudgeAction, silenceAction, startBreakAction } from "@/app/admin/live/actions";
 import { ConfirmButton } from "@/components/admin/shell/confirm-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,7 @@ const PHASE_TONE: Record<Card_["phase"], string> = {
 
 export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null; canAct: boolean }) {
   const { pending, run } = useQuick();
+  const [picking, setPicking] = useState(false);
   const flagged = card.problems.length > 0;
   return (
     <Card className={flagged ? "ring-2 ring-orange-500/60" : undefined}>
@@ -30,6 +32,7 @@ export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null
             {card.phaseText}
             {card.etaText && ` · ${card.etaText}`}
           </Badge>
+          {card.breakText && <Badge className="bg-amber-100 text-amber-900">{card.breakText}</Badge>}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -58,6 +61,59 @@ export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null
         </dl>
         {card.silencedUntilText && (
           <p className="text-sm text-muted-foreground">Silenced till {card.silencedUntilText}</p>
+        )}
+        {canAct && (
+          <div className="flex flex-col gap-2">
+            {card.onBreak ? (
+              <Button
+                variant="outline"
+                className="h-11"
+                disabled={pending}
+                onClick={() => run(() => endBreakAction(w, card.vehicleId), `${card.name} is back from the break`)}
+              >
+                <Coffee className="size-4" aria-hidden /> End break
+              </Button>
+            ) : (
+              <Button variant="outline" className="h-11" disabled={pending} onClick={() => setPicking((p) => !p)}>
+                <Coffee className="size-4" aria-hidden /> {picking ? "Cancel" : "Driver on a break"}
+              </Button>
+            )}
+            {picking && !card.onBreak && (
+              <div className="grid grid-cols-3 gap-2">
+                {[10, 15, 20, 30, 45, 60].map((m) => (
+                  <Button
+                    key={m}
+                    variant="secondary"
+                    className="h-11"
+                    disabled={pending}
+                    onClick={() =>
+                      run(
+                        () => startBreakAction(w, card.vehicleId, m),
+                        `${card.name} on a break till ${istHHMM(Date.now() + m * 60_000)}`,
+                        () => setPicking(false),
+                      )
+                    }
+                  >
+                    {m} min
+                  </Button>
+                ))}
+                <Button
+                  variant="secondary"
+                  className="col-span-3 h-11"
+                  disabled={pending}
+                  onClick={() =>
+                    run(
+                      () => startBreakAction(w, card.vehicleId, null),
+                      `${card.name} on a break until you end it`,
+                      () => setPicking(false),
+                    )
+                  }
+                >
+                  Until I end it
+                </Button>
+              </div>
+            )}
+          </div>
         )}
         {canAct && card.deviceId && (
           <div className="flex flex-wrap gap-2">
