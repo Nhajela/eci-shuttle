@@ -9,6 +9,7 @@ import {
   deviceAssignments,
   devices,
   dwells,
+  legStats,
   pings,
   routes,
   services,
@@ -214,10 +215,34 @@ describe("ingestPings", () => {
       p.recordedAt >= ist("09:02:00") && p.recordedAt <= ist("09:03:10") ? { ...p, lng: p.lng + 0.0028 } : p,
     );
     await w.send([...riva, ...detour.filter((p) => p.recordedAt <= ist("09:03:10"))]);
-    expect((await w.state()).offRoute).toBe(true);
+    expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(ist("09:02:00")) });
     const r = await w.send([...detour.filter((p) => p.recordedAt > ist("09:03:10")), ...atCircle]);
-    expect((await w.state()).offRoute).toBe(false);
+    expect(await w.state()).toMatchObject({ offRoute: false, offRouteSince: null });
     expect(r.closedTrips[0].quality).toBe("off_route");
+  });
+
+  it("off_route_since keeps the start of a stretch longer than the 10 min look-back", async () => {
+    const w = await world();
+    const east = { lat: RIVA.lat + 0.005, lng: RIVA.lng + 0.0028 };
+    await w.send([...riva, ...track(ist("09:01:10"), ist("09:04:00"), RIVA, east)]);
+    const since = (await w.state()).offRouteSince?.getTime() as number;
+    expect(since).toBeLessThan(ist("09:03:00"));
+    await w.send(track(ist("09:04:10"), ist("09:15:00"), east));
+    expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(since) });
+  });
+
+  it("off_route_since restarts when a batch rejoins the path between two stretches", async () => {
+    const w = await world();
+    const mid = { lat: 15.705, lng: 73.7 };
+    const off = { lat: 15.705, lng: 73.7028 };
+    await w.send([
+      ...riva,
+      ...track(ist("09:01:10"), ist("09:01:50"), RIVA, mid),
+      ...track(ist("09:02:00"), ist("09:04:00"), off),
+    ]);
+    expect(await w.state()).toMatchObject({ offRouteSince: new Date(ist("09:02:00")) });
+    await w.send([...track(ist("09:04:10"), ist("09:04:40"), mid), ...track(ist("09:04:50"), ist("09:06:30"), off)]);
+    expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(ist("09:04:50")) });
   });
 
   it("a short excursion off the path (< 1 min) is not off route", async () => {
@@ -227,6 +252,30 @@ describe("ingestPings", () => {
     );
     const r = await w.send([...riva, ...blip, ...atCircle]);
     expect(r.closedTrips[0].quality).toBe("clean");
+  });
+
+  it("ETA at a spot uses the route's planned dwell where nothing is learned, the learned dwell where it is", async () => {
+    const w = await world();
+    await db()
+      .update(routes)
+      .set({ plannedDwellS: { [w.riva.id]: 900 } })
+      .where(eq(routes.id, w.route.id));
+    // at Riva since 08:58:00, now 09:01:02: 15 min planned dwell leaves ~12 min + the ~2.7 min drive
+    await w.send(riva);
+    expect((await w.state()).etaS).toBeGreaterThan(800);
+
+    await db().insert(legStats).values({
+      workspaceId: w.ws.id,
+      kind: "dwell",
+      fromSpotId: w.riva.id,
+      n: 10,
+      medianS: 200,
+      p20S: 150,
+      p80S: 250,
+      level: "leg_day",
+    });
+    await w.send([ping(ist("09:01:05"), RIVA)]);
+    expect((await w.state()).etaS).toBeLessThan(300);
   });
 
   it("planned departures that passed with no actual departure are marked missed", async () => {
