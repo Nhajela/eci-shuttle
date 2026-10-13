@@ -140,6 +140,21 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(await s.queue.size()).toBe(0);
   });
 
+  it("judges each fix by its own time: a stale fix from before the window is not queued", async () => {
+    const s = await setup();
+    // first active wake (the idle service's low-accuracy wake) carries a cached fix from before startsAt
+    await s.rt.wake([fix(T - 5 * MIN), fix(T)]);
+    expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T })]);
+  });
+
+  it("judges each fix by its own time: a batch delivered after endsAt keeps the in-window fixes", async () => {
+    const s = await setup();
+    s.at(T + 61 * MIN); // window ended at T+60
+    await s.rt.wake([fix(T + 59 * MIN), fix(T + 61 * MIN)]);
+    expect(s.bodies[0]).toMatchObject({ reportedMode: "idle" });
+    expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T + 59 * MIN })]);
+  });
+
   it("idle: drops fixes, heartbeats every idleHeartbeatS, and syncs at once when the mode flips", async () => {
     const s = await setup();
     s.at(T + 61 * MIN); // after the window

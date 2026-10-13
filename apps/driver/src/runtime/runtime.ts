@@ -76,18 +76,22 @@ export function createRuntime(deps: RuntimeDeps) {
     await deps.location.apply(r, dc?.idleHeartbeatS ?? 900, serverNow).catch((e) => {
       console.warn("location service", e instanceof Error ? e.message : e);
     });
-    return r;
+    return { r, dc };
   }
 
   async function cycle(fixes: Fix[], force: boolean) {
     const now = deps.now();
     let p = await loadPersisted();
-    const r = await apply(p);
+    const { r, dc } = await apply(p);
 
-    if (r.mode === "active" && fixes.length) {
+    // each fix by its own (server) time: a cached fix from before the window or a late batch after it
+    const inWindow = fixes.filter((f) => resolveMode(dc, f.timestamp + p.clockOffsetMs).mode === "active");
+    if (inWindow.length) {
       const battery = await deps.battery();
-      const pings = fixes.flatMap((f) => toPing(f, battery) ?? []);
-      await deps.queue.push(pings, now);
+      await deps.queue.push(
+        inWindow.flatMap((f) => toPing(f, battery) ?? []),
+        now,
+      );
     }
 
     const [st, token, origins] = await Promise.all([deps.store.state(), deps.store.token(), deps.store.origins()]);
