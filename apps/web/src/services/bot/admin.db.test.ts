@@ -284,6 +284,20 @@ describe("onSilence", () => {
     expect(r.send[0].html).toContain("Silenced Bus 1 (Ravi's phone) until 12:00");
   });
 
+  it("silences every source on the vehicle (backups too)", async () => {
+    const { ws, ctx } = await fleet();
+    const [bus1] = await listVehicles(db(), {} as never, { workspaceId: ws.id });
+    const a = await makeDevice(db(), ws.id, { label: "App" });
+    const b = await makeDevice(db(), ws.id, { label: "Telegram" });
+    vi.mocked(listPhones).mockResolvedValue([
+      { device: a, vehicle: bus1 },
+      { device: b, vehicle: bus1 },
+    ] as never);
+    const r = await onSilence(ctx, ["bus", "1", "2h"]);
+    expect(vi.mocked(silencePhone).mock.calls.map((c) => c[2].deviceId)).toEqual([a.id, b.id]);
+    expect(r.send[0].html).toContain("Silenced Bus 1 (App, Telegram) until 12:00");
+  });
+
   it("asks which one when the name is ambiguous; says so when unknown or phoneless", async () => {
     const { ctx } = await fleet();
     expect((await onSilence(ctx, ["bus", "16:00"])).send[0].html).toContain("Which one? Bus 1, Bus 10");

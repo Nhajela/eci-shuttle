@@ -140,7 +140,15 @@ export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null
               variant="default"
               disabled={pending}
               onConfirm={() =>
-                run(() => silenceAction(w, card.deviceId as string, 1), `${card.name} silenced for an hour`)
+                run(
+                  () =>
+                    silenceAction(
+                      w,
+                      card.sources.map((s) => s.deviceId),
+                      1,
+                    ),
+                  `${card.name} silenced for an hour`,
+                )
               }
             />
           </div>
