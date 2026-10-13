@@ -16,6 +16,7 @@ import {
   spots,
   vehicleState,
   vehicles,
+  workspaces,
 } from "@/db/schema";
 import type { ServiceError, ServiceErrorCode } from "../kernel";
 import { actorFor, applyChange, changeWarnings, describeChange, liveBoard, loadVersions, versionKeys } from "./changes";
@@ -283,6 +284,28 @@ describe("changeWarnings", () => {
     expect(
       await changeWarnings(db(), ws.id, [{ kind: "phone.kill", deviceId: phone.id }], new Date("2026-10-12T09:00:00Z")),
     ).toEqual([]);
+  });
+
+  it("warns that a group notice won't post while the workspace has no Telegram group", async () => {
+    const { ws } = await setup();
+    const notice = (channels: ("subscribers" | "group" | "group_pin")[]): McpChange => ({
+      kind: "notice.create",
+      text: "Hi",
+      severity: "info",
+      pinned: false,
+      sort: 0,
+      startsAt: null,
+      endsAt: null,
+      placements: ["everywhere"],
+      channels,
+    });
+    const warning =
+      "This workspace has no Telegram group yet, so nothing is posted to a group. An admin can send /setgroup in the group.";
+    expect(await changeWarnings(db(), ws.id, [notice(["subscribers", "group"])], NOW)).toEqual([warning]);
+    expect(await changeWarnings(db(), ws.id, [notice(["group_pin"])], NOW)).toEqual([warning]);
+    expect(await changeWarnings(db(), ws.id, [notice(["subscribers"])], NOW)).toEqual([]);
+    await db().update(workspaces).set({ groupChatId: -100123 }).where(eq(workspaces.id, ws.id));
+    expect(await changeWarnings(db(), ws.id, [notice(["group"])], NOW)).toEqual([]);
   });
 
   it("warns about notices that end before they start or before now, and past dates", async () => {

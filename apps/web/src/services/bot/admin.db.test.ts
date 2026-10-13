@@ -16,7 +16,7 @@ import { killPhone, listPhones, nudgePhone, silencePhone } from "@/services/devi
 import { vehicleStates } from "@/services/ingest/ingest";
 import { createNotice, listNotices } from "@/services/notices/notices";
 import { type Actor, ServiceError, type TelegramButton } from "../kernel";
-import { alertButtons, onAdminCallback, onNotice, onSilence, onStatus, onToday, parseUntil } from "./admin";
+import { alertButtons, onAdminCallback, onNotice, onSetGroup, onSilence, onStatus, onToday, parseUntil } from "./admin";
 import type { Callback } from "./callbacks";
 import type { BotContext, TgCallbackQuery } from "./types";
 
@@ -103,6 +103,27 @@ function lineUp(n = 2) {
   });
 }
 const actorArg = (fn: unknown) => (vi.mocked(fn as () => void).mock.calls[0] as unknown[])[1] as Actor;
+
+describe("/setgroup", () => {
+  const groupOf = async (id: string) =>
+    (await db().select().from(workspaces).where(eq(workspaces.id, id)))[0].groupChatId;
+
+  it("an admin in a group makes it the workspace's Telegram group (audited via updateWorkspace)", async () => {
+    const { ws, ctx } = await setup("admin");
+    const r = await onSetGroup({ ...ctx, chatId: -100123 }, [], true);
+    expect(await groupOf(ws.id)).toBe(-100123);
+    expect(r.send[0]).toMatchObject({ chatId: -100123 });
+    expect(r.send[0].html).toContain("group notices");
+  });
+
+  it("refused in a private chat; ops can't change it", async () => {
+    const { ws, ctx } = await setup("admin");
+    expect((await onSetGroup(ctx, [], false)).send[0].html).toContain("in the group");
+    expect(await groupOf(ws.id)).toBeNull();
+    const ops = await setup("ops");
+    await expect(onSetGroup({ ...ops.ctx, chatId: -100123 }, [], true)).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
 
 describe("parseUntil", () => {
   it("relative hours and minutes", () => {
