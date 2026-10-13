@@ -42,7 +42,7 @@ export function answerParts(line: AnswerLine, single: boolean, ageS = 0): Answer
 
 /** The small line under it. `ageS` = how old the answer is (edge cache, failed polls), added to last seen. */
 export function contextText(line: AnswerLine, ageS: number): string {
-  // attendees aren't told about tracking: "about every 18 min", never "· live tracking off"
+  // only what we know about the tracked shuttle: no "about every N min" estimates, no "live tracking off"
   const phase = quiet(line.phaseText);
   if (line.lastSeenS === null) return phase;
   const s = line.lastSeenS + ageS;
@@ -53,7 +53,7 @@ export function contextText(line: AnswerLine, ageS: number): string {
 const quiet = (phase: string) =>
   phase
     .split(" · ")
-    .filter((p) => p.trim().toLowerCase() !== "live tracking off")
+    .filter((p) => !/^(live tracking off|about every \d+ min)$/i.test(p.trim()))
     .join(" · ");
 
 export function ageSeconds(generatedAt: string, now: Date): number {

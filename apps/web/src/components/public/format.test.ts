@@ -31,7 +31,7 @@ describe("answerParts", () => {
       phaseText: "about every 18 min · live tracking off",
     });
     expect(answerParts(loop, true).value).toBe("Running now");
-    expect(contextText(loop, 0)).toBe("about every 18 min");
+    expect(contextText(loop, 0)).toBe("");
   });
 
   it("live, one service: 'Shuttle will be here in 6 min (5–9)'", () => {

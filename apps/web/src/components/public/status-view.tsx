@@ -180,7 +180,7 @@ function Schedule({ spot }: { spot: PublicSpot }) {
       <Notices notices={notices} />
       {loops.map((l) => (
         <p key={l.serviceId} className="text-[15px] text-ink">
-          {l.serviceName}: about every {l.everyMin} min
+          {l.serviceName}: running today
         </p>
       ))}
       {rows.length === 0 && loops.length === 0 && <p className="text-[15px] text-ink-soft">No departures today.</p>}
