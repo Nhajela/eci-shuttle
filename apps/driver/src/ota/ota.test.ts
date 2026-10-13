@@ -142,14 +142,13 @@ describe("createOta (SPEC §5: server-controlled OTA)", () => {
       expect(await t.ota.report()).toEqual({ updateId: "u1" });
     });
 
-    it("reports updateFailed after OTA_MAX_TRIES fetch errors, then stops fetching", async () => {
+    it("never gives up or reports updateFailed on transient errors (network, store, reload)", async () => {
       const t = setup();
-      t.updates.fetchUpdateAsync.mockRejectedValue(new Error("bad bundle"));
-      for (let i = 1; i < OTA_MAX_TRIES; i++) expect(await t.ota.reconcile("u2")).toBe("error");
-      expect(await t.ota.reconcile("u2")).toBe("failed");
-      expect(await t.ota.report()).toEqual({ updateId: "u1", updateFailed: true });
-      expect(await t.ota.reconcile("u2")).toBe("failed");
-      expect(t.updates.fetchUpdateAsync).toHaveBeenCalledTimes(OTA_MAX_TRIES);
+      t.updates.fetchUpdateAsync.mockRejectedValue(new Error("offline"));
+      for (let i = 0; i < OTA_MAX_TRIES + 1; i++) expect(await t.ota.reconcile("u2")).toBe("error");
+      expect(await t.ota.report()).toEqual({ updateId: "u1" });
+      t.updates.fetchUpdateAsync.mockResolvedValue({ manifest: { id: "u2" } });
+      expect(await t.ota.reconcile("u2")).toBe("apply");
     });
 
     it("counts tries per target: a new target starts fresh", async () => {
@@ -165,6 +164,12 @@ describe("createOta (SPEC §5: server-controlled OTA)", () => {
       expect(t.updates.checkForUpdateAsync).not.toHaveBeenCalled();
       expect(await t.ota.report()).toEqual({ updateId: null, updateFailed: true });
       expect(await t.ota.reconcile("u3")).toBe("mismatch");
+    });
+
+    it("after an emergency launch from a reload we made, takes the admin's rollback target", async () => {
+      const t = setup({ running: null, emergency: true, attempted: "u2", fetched: "u0" });
+      expect(await t.ota.reconcile("u0")).toBe("apply");
+      expect(t.attempted()).toBe("u0");
     });
   });
 

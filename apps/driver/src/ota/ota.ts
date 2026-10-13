@@ -15,7 +15,7 @@ export type AttemptStore = { get: () => Promise<string | null>; set: (id: string
 
 export type OtaResult = "none" | "wait" | "apply" | "mismatch" | "failed" | "error" | "busy";
 
-/** Mismatches or errors on one target before the phone gives up on it and reports updateFailed. */
+/** Mismatches (target not servable) on one target before the phone gives up on it and reports updateFailed. */
 export const OTA_MAX_TRIES = 3;
 
 export function createOta({
@@ -58,6 +58,7 @@ export function createOta({
       if (gaveUp !== targetUpdateId) gaveUp = null;
       try {
         let attempted = await store.get();
+        const hadAttempt = attempted !== null; // the crash that caused an emergency launch was this attempt, already handled below
         // launched fine, or the server moved on (new target / rollback): the attempt no longer matters
         if (attempted !== null && (attempted === updates.updateId || attempted !== targetUpdateId)) {
           await store.set(null);
@@ -80,8 +81,10 @@ export function createOta({
           // expo-updates fell back to the embedded bundle: chasing the target risks another crash, so wait for a new one
           if (emergency) {
             emergency = false;
-            gaveUp = targetUpdateId;
-            return "failed";
+            if (!hadAttempt) {
+              gaveUp = targetUpdateId;
+              return "failed";
+            }
           }
           // EAS serves only the channel's latest. Check before fetching: a stored non-target update would launch on the next cold start.
           if ((await updates.checkForUpdateAsync()).manifest?.id !== targetUpdateId) {
@@ -102,7 +105,8 @@ export function createOta({
         }
         return next;
       } catch {
-        return miss(targetUpdateId, "error");
+        // transient (network, store, reload): retried next sync, never counted as a failed update
+        return "error";
       } finally {
         busy = false;
       }
