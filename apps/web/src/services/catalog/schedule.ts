@@ -17,7 +17,7 @@ import {
   ServiceVehicleUnassignFields,
   withWorkspace,
 } from "@eci-shuttle/shared";
-import { and, eq, gt, gte, inArray, isNull, lt, lte } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lt, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import { routes, serviceExceptions, services, serviceVehicles, vehicles } from "@/db/schema";
@@ -25,6 +25,7 @@ import type { Service, ServiceException, ServiceVehicle } from "@/db/types";
 import { bumpConfigs } from "../devices/config";
 import {
   type Actor,
+  can,
   checkVersion,
   getInWorkspace,
   inWorkspace,
@@ -294,6 +295,28 @@ export async function unassignServiceVehicle(
       return { before, after: null, result: undefined };
     },
   );
+}
+
+/** viewer+. Non-archived services of the workspace, by name. */
+export async function listServices(db: Db, actor: Actor, input: { workspaceId: string }): Promise<Service[]> {
+  readable(actor, input.workspaceId);
+  return db
+    .select()
+    .from(services)
+    .where(and(inWorkspace(services, input.workspaceId), isNull(services.archivedAt)))
+    .orderBy(asc(services.name));
+}
+
+/**
+ * viewer+ of the service's workspace. By id alone (bot callbacks carry no workspace); archived included.
+ * Another workspace's service is NOT_FOUND, like a missing one.
+ */
+export async function getService(db: Db, actor: Actor, input: { serviceId: string }): Promise<Service> {
+  const { serviceId } = parseInput(z.object({ serviceId: Id }), input);
+  const [row] = await db.select().from(services).where(eq(services.id, serviceId)).limit(1);
+  if (!row || !can(actor, row.workspaceId, "viewer"))
+    throw new ServiceError("NOT_FOUND", "No such service.", { entity: "service", id: serviceId });
+  return row;
 }
 
 export type ScheduleDay = {

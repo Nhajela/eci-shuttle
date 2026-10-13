@@ -15,6 +15,8 @@ const {
   createService,
   duplicateAsSpecial,
   getSchedule,
+  getService,
+  listServices,
   removeException,
   unassignServiceVehicle,
   updateService,
@@ -370,5 +372,46 @@ describe("getSchedule", () => {
       .from(services)
       .where(and(eq(services.workspaceId, a.ws.id)));
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("listServices", () => {
+  it("lists the workspace's non-archived services by name, viewer+", async () => {
+    const { ws, actor, route } = await setup();
+    const b = await createService(db(), actor, { ...base(ws.id, route.id), name: "B run" });
+    const a = await createService(db(), actor, { ...base(ws.id, route.id), name: "A run" });
+    const gone = await createService(db(), actor, { ...base(ws.id, route.id), name: "Gone" });
+    await db().update(services).set({ archivedAt: new Date() }).where(eq(services.id, gone.id));
+    const other = await setup();
+    await createService(db(), other.actor, base(other.ws.id, other.route.id));
+    const { actor: viewer } = await makeAdmin(db(), ws.id, "viewer");
+    expect((await listServices(db(), viewer, { workspaceId: ws.id })).map((s) => s.id)).toEqual([a.id, b.id]);
+  });
+
+  it("refuses an actor outside the workspace (FORBIDDEN)", async () => {
+    const { ws } = await setup();
+    const other = await setup();
+    await expect(listServices(db(), other.actor, { workspaceId: ws.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("getService", () => {
+  it("returns the service by id, archived included, for a viewer of its workspace", async () => {
+    const { ws, actor, route } = await setup();
+    const s = await createService(db(), actor, base(ws.id, route.id));
+    await db().update(services).set({ archivedAt: new Date() }).where(eq(services.id, s.id));
+    const { actor: viewer } = await makeAdmin(db(), ws.id, "viewer");
+    expect(await getService(db(), viewer, { serviceId: s.id })).toMatchObject({ id: s.id, workspaceId: ws.id });
+  });
+
+  it("hides another workspace's service and unknown ids (NOT_FOUND), rejects a bad id (INVALID)", async () => {
+    const { ws, actor, route } = await setup();
+    const s = await createService(db(), actor, base(ws.id, route.id));
+    const other = await setup();
+    await expect(getService(db(), other.actor, { serviceId: s.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(getService(db(), actor, { serviceId: "00000000-0000-4000-8000-000000000000" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(getService(db(), actor, { serviceId: "nope" })).rejects.toMatchObject({ code: "INVALID" });
   });
 });
