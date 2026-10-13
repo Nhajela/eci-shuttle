@@ -93,7 +93,7 @@ export const workspaces = pgTable(
     apkUrl: text("apk_url"),
     /** defaults for the device config */
     activeIntervalS: integer("active_interval_s").notNull().default(10),
-    idleHeartbeatS: integer("idle_heartbeat_s").notNull().default(900),
+    idleHeartbeatS: integer("idle_heartbeat_s").notNull().default(180),
     /** Telegram group for notices (§6b channels) and ops alerts chat, per workspace so test never reaches real ops */
     groupChatId: bigint("group_chat_id", { mode: "number" }),
     version: version(),
