@@ -25,51 +25,48 @@ async function main() {
 
 /**
  * First-run bootstrap, idempotent and audited as `system`:
- * - a live workspace `main` when none exists (phones paired into it are what attendees see);
- * - admin in the live workspace for each Telegram username in BOOTSTRAP_ADMINS (comma-separated, no @),
+ * - workspaces `eci-main` (live: phones paired into it are what attendees see) and `test`, when missing;
+ * - admin in every workspace for each Telegram username in BOOTSTRAP_ADMINS (comma-separated, @ optional),
  *   once that person exists (they have messaged the bot or logged in). Restart web after their first login.
  */
+const SEED = [
+  { slug: "eci-main", name: "ECI Main", isLive: true },
+  { slug: "test", name: "Test", isLive: false },
+];
+
 async function bootstrap(sql: postgres.Sql) {
-  const audit = (
-    q: postgres.Sql,
-    ws: string | null,
-    action: string,
-    entity: string,
-    entityId: string,
-    after: unknown,
-  ) =>
-    q`insert into audit_log (workspace_id, actor_kind, actor_id, actor_label, channel, action, entity, entity_id, after, reason)
-        values (${ws}, 'system', 'bootstrap', 'bootstrap', 'worker', ${action}, ${entity}, ${entityId}, ${q.json(after as never)}, 'first-run bootstrap')`;
-  await sql.begin(async (tx) => {
-    const [live] = await tx`select id from workspaces where is_live`;
-    let wsId = live?.id as string | undefined;
-    if (!wsId) {
-      const [ws] = await tx`insert into workspaces (slug, name, is_live) values ('main', 'Main', true)
-                            on conflict (slug) do update set is_live = true returning id`;
-      wsId = ws.id as string;
-      await audit(tx as unknown as postgres.Sql, wsId, "workspace.create", "workspace", wsId, {
-        slug: "main",
-        name: "Main",
-        isLive: true,
-      });
-      console.log("bootstrap: live workspace main");
+  await sql.begin(async (q) => {
+    const tx = q as unknown as postgres.Sql;
+    const audit = (ws: string, action: string, entity: string, entityId: string, after: unknown) =>
+      tx`insert into audit_log (workspace_id, actor_kind, actor_id, actor_label, channel, action, entity, entity_id, after, reason)
+         values (${ws}, 'system', 'bootstrap', 'bootstrap', 'worker', ${action}, ${entity}, ${entityId}, ${JSON.stringify(after)}::jsonb, 'first-run bootstrap')`;
+    const [hasLive] = await tx`select 1 from workspaces where is_live`;
+    for (const w of SEED) {
+      const isLive = w.isLive && !hasLive;
+      const made = await tx`insert into workspaces (slug, name, is_live) values (${w.slug}, ${w.name}, ${isLive})
+                            on conflict (slug) do nothing returning id`;
+      if (made.length) {
+        await audit(made[0].id, "workspace.create", "workspace", made[0].id, { ...w, isLive });
+        console.log(`bootstrap: workspace ${w.slug}${isLive ? " (live)" : ""}`);
+      }
     }
     const names = (process.env.BOOTSTRAP_ADMINS ?? "")
       .split(",")
       .map((s) => s.trim().replace(/^@/, "").toLowerCase())
       .filter(Boolean);
+    if (!names.length) return;
+    const all = await tx`select id, slug from workspaces`;
     for (const name of names) {
       const people = await tx`select id from people where lower(username) = ${name}`;
       for (const p of people) {
-        const added =
-          await tx`insert into memberships (person_id, workspace_id, role) values (${p.id}, ${wsId}, 'admin')
-                               on conflict (person_id, workspace_id) do nothing returning id`;
-        if (added.length) {
-          await audit(tx as unknown as postgres.Sql, wsId, "membership.create", "membership", added[0].id, {
-            personId: p.id,
-            role: "admin",
-          });
-          console.log(`bootstrap: @${name} is admin of the live workspace`);
+        for (const ws of all) {
+          const added =
+            await tx`insert into memberships (person_id, workspace_id, role) values (${p.id}, ${ws.id}, 'admin')
+                                 on conflict (person_id, workspace_id) do nothing returning id`;
+          if (added.length) {
+            await audit(ws.id, "membership.create", "membership", added[0].id, { personId: p.id, role: "admin" });
+            console.log(`bootstrap: @${name} is admin of ${ws.slug}`);
+          }
         }
       }
     }
