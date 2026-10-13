@@ -144,6 +144,17 @@ describe("handleUpdate", () => {
       send: [],
       answerCallback: { callbackQueryId: old.callback_query?.id, text: "This button has expired" },
     });
+    // a refused press answers the button as an alert, never a chat message (a group would see it)
+    vi.mocked(onAdminCallback).mockRejectedValue(new ServiceError("FORBIDDEN", "This is for the ops team."));
+    const refused = press("killok:dev");
+    expect(await handleUpdate(db(), refused, NOW)).toEqual({
+      send: [],
+      answerCallback: {
+        callbackQueryId: refused.callback_query?.id,
+        text: "This is for the ops team.",
+        showAlert: true,
+      },
+    });
   });
 
   it("a person blocking the bot in private is remembered (audited); unblocking clears it", async () => {

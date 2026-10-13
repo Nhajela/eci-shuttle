@@ -36,7 +36,7 @@ async function isSpotName(db: Db, workspaceId: string, text: string): Promise<bo
 }
 
 /**
- * Route one update (never throws for a person's mistake: a ServiceError becomes a reply with userMessage(e)):
+ * Route one update (never throws for a person's mistake: a ServiceError becomes a reply with userMessage(e), or an alert on a button press):
  * - every update: upsert the sender (catalog/people.upsertPersonFromTelegram, startedBot in private chats).
  * - my_chat_member kicked in a private chat → catalog/people.markBlockedBot; empty reply.
  * - "/start <payload>" → start.onStart; "/login" → start.onLogin.
@@ -113,6 +113,9 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
     return isPrivate ? say(chatId, HELP) : NONE;
   } catch (e) {
     if (!isServiceError(e)) throw e;
+    // a refused press stops the spinner as an alert, not a chat message the whole group would see
+    if (query)
+      return { send: [], answerCallback: { callbackQueryId: query.id, text: userMessage(e), showAlert: true } };
     return say(chatId, userMessage(e));
   }
 }
