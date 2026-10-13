@@ -1,8 +1,8 @@
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { auditLog, routes, spots } from "@/db/schema";
+import { auditLog, legStats, routes, spots } from "@/db/schema";
 import { createRoute, listRoutes, updateRoute } from "./routes";
 
 const db = () => testDb();
@@ -228,5 +228,41 @@ describe("listRoutes", () => {
     expect(list.map((r) => r.name)).toEqual(["A", "B"]);
     expect(list[1].typicalLegS).toEqual([420]);
     await expect(listRoutes(db(), other.actor, { workspaceId: ws.id })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("reads NULL typical_leg_s elements as null, not NaN", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id, party.id] },
+      offline,
+    );
+    await db().execute(sql`update routes set typical_leg_s = '{NULL,300}' where id = ${r.id}`);
+    const [route] = await listRoutes(db(), actor, { workspaceId: ws.id });
+    expect(route.typicalLegS).toEqual([null, 300]);
+  });
+
+  it("legSamples[i] is the all-day regular-service sample count of leg i, 0 when unlearned", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    await createRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id, party.id, riva.id] },
+      offline,
+    );
+    const stat = { workspaceId: ws.id, medianS: 300, p20S: 250, p80S: 350, level: "leg_day" as const };
+    await db()
+      .insert(legStats)
+      .values([
+        { ...stat, kind: "leg", fromSpotId: riva.id, toSpotId: circle.id, hourBucket: null, n: 12 },
+        // hour rows, dwells and the reverse direction don't count
+        { ...stat, kind: "leg", fromSpotId: riva.id, toSpotId: circle.id, hourBucket: 9, n: 4 },
+        { ...stat, kind: "dwell", fromSpotId: riva.id, toSpotId: null, hourBucket: null, n: 30 },
+        { ...stat, kind: "leg", fromSpotId: circle.id, toSpotId: riva.id, hourBucket: null, n: 7 },
+        { ...stat, kind: "leg", fromSpotId: party.id, toSpotId: riva.id, hourBucket: null, n: 3 },
+      ]);
+    const [route] = await listRoutes(db(), actor, { workspaceId: ws.id });
+    expect(route.legSamples).toEqual([12, 0, 3]);
   });
 });
