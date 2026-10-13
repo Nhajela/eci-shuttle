@@ -145,8 +145,8 @@
   --color-danger: var(--danger);
   --color-danger-tint: var(--danger-tint);
 
-  --font-sans: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
-  --font-heading: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-bricolage, ui-sans-serif), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-bricolage, ui-sans-serif), ui-sans-serif, system-ui, sans-serif;
 
   --radius-card: var(--radius-card);
   --radius-field: var(--radius-field);
