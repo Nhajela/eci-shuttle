@@ -40,6 +40,7 @@ import {
   bigserial,
   boolean,
   check,
+  customType,
   date,
   doublePrecision,
   index,
@@ -57,7 +58,18 @@ import {
 const id = () => uuid("id").primaryKey().defaultRandom();
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 const createdAt = () => ts("created_at").notNull().defaultNow();
-const updatedAt = () => ts("updated_at").notNull().defaultNow();
+// $onUpdate covers raw `.update()`s that forget it; services still pass their own `now`
+const updatedAt = () =>
+  ts("updated_at")
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date());
+/** integer[] whose NULL elements read back as null: postgres-js parses them as +"NULL" = NaN */
+const nullableIntArray = customType<{ data: (number | null)[]; driverData: string | number[] }>({
+  dataType: () => "integer[]",
+  toDriver: (v) => `{${v.map((x) => x ?? "NULL").join(",")}}`,
+  fromDriver: (v) => (v as number[]).map((x) => (Number.isNaN(x) ? null : x)),
+});
 const version = () => integer("version").notNull().default(1);
 const workspaceId = () =>
   uuid("workspace_id")
@@ -121,6 +133,9 @@ export const devices = pgTable(
     clockSkewMs: integer("clock_skew_ms"),
     killedAt: ts("killed_at"),
     revokedAt: ts("revoked_at"),
+    /** alerts: since when location permission has been missing / the battery low (null = fine) */
+    permissionLostSince: ts("permission_lost_since"),
+    lowBatterySince: ts("low_battery_since"),
     /** `pnpm sim` device; only allowed in non-live workspaces */
     simulated: boolean("simulated").notNull().default(false),
     version: version(),
@@ -180,7 +195,9 @@ export const routes = pgTable(
     /** index into path of each spot in spotIds (where each leg starts/ends) */
     spotPathIdx: integer("spot_path_idx").array().notNull().default(sql`'{}'::integer[]`),
     /** learned median per leg (seconds), refreshed by the learning job; null entries = unknown */
-    typicalLegS: integer("typical_leg_s").array().notNull().default(sql`'{}'::integer[]`),
+    typicalLegS: nullableIntArray("typical_leg_s").notNull().default(sql`'{}'::integer[]`),
+    /** planned dwell (seconds) per spot id on this route; a spot without an entry has no planned dwell */
+    plannedDwellS: jsonb("planned_dwell_s").$type<Record<string, number>>().notNull().default({}),
     archivedAt: ts("archived_at"),
     version: version(),
     createdAt: createdAt(),
@@ -263,6 +280,9 @@ export const serviceVehicles = pgTable(
     index("service_vehicles_service").on(t.serviceId, t.startsAt),
     index("service_vehicles_vehicle").on(t.vehicleId, t.startsAt),
     check("service_vehicles_range", sql`${t.endsAt} > ${t.startsAt}`),
+    // ponytail: no EXCLUDE constraint (drizzle-kit can't emit one, and uuid in gist needs btree_gist). The
+    // overlap rule (same vehicle + same service + overlapping range = CONFLICT) is enforced in
+    // catalog/schedule.assignServiceVehicle under a row lock; move it here if a second writer appears.
   ],
 );
 
@@ -403,6 +423,8 @@ export const vehicleState = pgTable("vehicle_state", {
   /** metres along the current route path */
   alongM: real("along_m"),
   offRoute: boolean("off_route").notNull().default(false),
+  /** when the current off-route stretch began (null while on route) */
+  offRouteSince: ts("off_route_since"),
   geofence: jsonb("geofence").$type<GeofenceState>(),
   updatedAt: updatedAt(),
 });

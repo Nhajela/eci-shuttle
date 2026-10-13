@@ -20,7 +20,7 @@ const step = (pts: LatLng[], durS: number): Step => {
  * A route that doesn't end where it starts is driven back the same way, so the cycle never teleports.
  */
 export function buildPlan(
-  route: { path: LatLng[]; spotPathIdx: number[]; typicalLegS: number[] },
+  route: { path: LatLng[]; spotPathIdx: number[]; typicalLegS: (number | null)[] },
   opts: { dwellS: number; kmh: number },
 ): Plan {
   const { path } = route;
@@ -30,7 +30,8 @@ export function buildPlan(
   const legs: Step[] = [];
   for (let k = 0; k < idx.length - 1; k++) {
     const s = step(path.slice(idx[k], idx[k + 1] + 1), 0);
-    s.durS = route.typicalLegS[k] > 0 ? route.typicalLegS[k] : s.cum[s.cum.length - 1] / mps;
+    const typical = route.typicalLegS[k] ?? 0;
+    s.durS = typical > 0 ? typical : s.cum[s.cum.length - 1] / mps;
     legs.push(s);
   }
   if (distanceM(path[idx[0]], path[idx[idx.length - 1]]) >= CLOSED_M)
