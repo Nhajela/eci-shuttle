@@ -7,7 +7,7 @@ import { markBlockedBot, membershipsOf, upsertPersonFromTelegram } from "../cata
 import { isSpotName } from "../catalog/spots";
 import { listAllWorkspaces, workspaceBySlug } from "../catalog/workspaces";
 import { isServiceError, systemActor, userMessage } from "../kernel";
-import { onNotice, onSetGroup, onSilence, onStatus, onToday } from "./admin";
+import { onInvite, onNotice, onSetGroup, onSilence, onStatus, onToday } from "./admin";
 import { onShuttle, onStop, onSubscribe } from "./attendee";
 import { handleCallback } from "./callbacks";
 import { onLocation, onPair } from "./live";
@@ -137,6 +137,8 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
         return await onToday(ctx, args);
       case "silence":
         return await onSilence(ctx, args);
+      case "invite":
+        return await onInvite(ctx, args);
       case "setgroup":
         return await onSetGroup(ctx, args, chat?.type === "group" || chat?.type === "supergroup");
       case "notice":
