@@ -15,13 +15,15 @@ const db = () => testDb();
 const NOW = new Date("2026-10-15T04:30:00Z");
 const SHUTTLE = { chatId: 4242, html: "Where are you?", kind: "reply" as const };
 
-const ctxFor = (person: Person, workspace: Workspace, now = NOW): BotContext => ({
+// a private chat's id is the person's telegram id; a group's is negative
+const ctxFor = (person: Person, workspace: Workspace, now = NOW, chatId = person.telegramId): BotContext => ({
   db: db(),
   now,
   person,
-  chatId: 4242,
+  chatId,
   workspace,
 });
+const GROUP = -1001234;
 const htmls = (r: { send: { html: string }[] }) => r.send.map((s) => s.html);
 
 beforeAll(() => {
@@ -47,7 +49,7 @@ describe("/start <code>", () => {
 
     const r = await onStart(ctxFor(person, ws), code);
     expect(r.send).toHaveLength(1);
-    expect(r.send[0]).toMatchObject({ chatId: 4242, kind: "reply", personId: person.id });
+    expect(r.send[0]).toMatchObject({ chatId: person.telegramId, kind: "reply", personId: person.id });
     expect(r.send[0].html).toContain("Only tap if you just pressed Log in on the website (started 10:00)");
     expect(r.send[0].buttons).toEqual([[{ text: "Yes, log me in", callbackData: `login:${code}` }]]);
 
@@ -115,11 +117,24 @@ describe("plain /start", () => {
     const { person } = await makeAdmin(db(), ws.id, "viewer");
     const r = await onStart(ctxFor(person, ws), "  ");
     expect(r.send).toHaveLength(2);
-    expect(r.send[0]).toMatchObject({ chatId: 4242, kind: "reply", personId: person.id });
+    expect(r.send[0]).toMatchObject({ chatId: person.telegramId, kind: "reply", personId: person.id });
     expect(r.send[0].html.startsWith(`Log in to admin: <a href="${process.env.PUBLIC_ORIGIN}/login/magic?code=m`)).toBe(
       true,
     );
     expect(r.send[1]).toEqual(SHUTTLE);
+  });
+
+  it("in a group, an admin is told to message the bot privately: no link, no code", async () => {
+    const ws = await makeWorkspace(db());
+    const { person } = await makeAdmin(db(), ws.id);
+    const r = await onStart(ctxFor(person, ws, NOW, GROUP), null);
+    expect(r.send).toHaveLength(2);
+    expect(r.send[0]).toMatchObject({ chatId: GROUP, kind: "reply" });
+    expect(r.send[0].html).toContain("Message me privately to log in");
+    expect(r.send[0].html).toContain(`https://t.me/${process.env.TELEGRAM_BOT_USERNAME}`);
+    expect(r.send[0].html).not.toContain("/login/magic");
+    expect(r.send[1]).toEqual(SHUTTLE);
+    expect(await db().select().from(loginCodes).where(eq(loginCodes.telegramId, person.telegramId))).toEqual([]);
   });
 });
 
@@ -139,6 +154,17 @@ describe("/login", () => {
     const person = await makePerson(db());
     const r = await onLogin(ctxFor(person, ws));
     expect(htmls(r)).toEqual(["Login is only for the ops team. Send /shuttle for the next shuttle."]);
+    expect(await db().select().from(loginCodes).where(eq(loginCodes.telegramId, person.telegramId))).toEqual([]);
+  });
+
+  it("in a group, a member is told to message the bot privately: no link, no code", async () => {
+    const ws = await makeWorkspace(db());
+    const { person } = await makeAdmin(db(), ws.id);
+    const r = await onLogin(ctxFor(person, ws, NOW, GROUP));
+    expect(r.send).toHaveLength(1);
+    expect(r.send[0]).toMatchObject({ chatId: GROUP, kind: "reply" });
+    expect(r.send[0].html).toContain("Message me privately to log in");
+    expect(r.send[0].html).not.toContain("/login/magic");
     expect(await db().select().from(loginCodes).where(eq(loginCodes.telegramId, person.telegramId))).toEqual([]);
   });
 });
