@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 export const COMMANDS = [
   { command: "shuttle", description: "Where is the shuttle? Pick your spot" },
   { command: "subscribe", description: "Shuttle update every 15 min" },
+  { command: "unsubscribe", description: "Stop the 15-min updates" },
   { command: "stop", description: "Stop all my shuttle alerts and updates" },
   { command: "login", description: "Log in to admin (ops team)" },
 ];

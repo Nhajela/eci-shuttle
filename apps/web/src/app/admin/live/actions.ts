@@ -27,14 +27,16 @@ async function run(
   }
 }
 
-export async function silenceAction(w: string | null, deviceId: string, hours: number): Promise<ActionResult> {
-  return run(w, (actor, workspaceId) =>
-    silencePhone(db(), actor, {
-      workspaceId,
-      deviceId,
-      until: new Date(Date.now() + hours * 3_600_000).toISOString(),
-    }),
-  );
+/** One phone, or every source on a vehicle (so a backup doesn't keep it tracking). */
+export async function silenceAction(
+  w: string | null,
+  deviceIds: string | string[],
+  hours: number,
+): Promise<ActionResult> {
+  const until = new Date(Date.now() + hours * 3_600_000).toISOString();
+  return run(w, async (actor, workspaceId) => {
+    for (const deviceId of [deviceIds].flat()) await silencePhone(db(), actor, { workspaceId, deviceId, until });
+  });
 }
 
 export async function nudgeAction(w: string | null, deviceId: string): Promise<ActionResult> {

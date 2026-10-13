@@ -201,14 +201,17 @@ export async function onSilence(ctx: BotContext, args: string[]): Promise<BotRep
       ctx,
       matches.length ? `Which one? ${matches.map((x) => esc(x.name)).join(", ")}` : `No vehicle called "${esc(q)}".`,
     );
-  const phone = (await listPhones(ctx.db, actor, { workspaceId: ws.id }, ctx.now)).find(
+  // every source on the vehicle (app, Telegram, Traccar), or a backup would keep it tracking
+  const phones = (await listPhones(ctx.db, actor, { workspaceId: ws.id }, ctx.now)).filter(
     (p) => p.vehicle?.id === v.id && !p.device.revokedAt,
   );
-  if (!phone) return say(ctx, `${esc(v.name)} has no phone right now.`);
-  await silencePhone(ctx.db, actor, { workspaceId: ws.id, deviceId: phone.device.id, until: until.toISOString() });
+  if (!phones.length) return say(ctx, `${esc(v.name)} has no phone right now.`);
+  for (const p of phones)
+    await silencePhone(ctx.db, actor, { workspaceId: ws.id, deviceId: p.device.id, until: until.toISOString() });
+  const labels = phones.map((p) => esc(p.device.label)).join(", ");
   return say(
     ctx,
-    `${tag(ws)}Silenced ${esc(v.name)} (${esc(phone.device.label)}) until ${when(until, ctx.now)}. It won't share location until then.`,
+    `${tag(ws)}Silenced ${esc(v.name)} (${labels}) until ${when(until, ctx.now)}. It won't share location until then.`,
   );
 }
 

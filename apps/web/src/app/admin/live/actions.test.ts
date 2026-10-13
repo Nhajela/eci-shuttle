@@ -33,6 +33,12 @@ describe("live board actions", () => {
     vi.useFakeTimers({ now: Date.parse("2026-10-12T04:00:00Z") });
     try {
       expect(await silenceAction(null, "d1", 1)).toEqual({ ok: true });
+      expect(await silenceAction(null, ["d2", "d3"], 1)).toEqual({ ok: true });
+      expect(vi.mocked(silencePhone).mock.calls.map((c) => (c[2] as { deviceId: string }).deviceId)).toEqual([
+        "d1",
+        "d2",
+        "d3",
+      ]);
     } finally {
       vi.useRealTimers();
     }
