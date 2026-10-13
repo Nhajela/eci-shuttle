@@ -15,10 +15,12 @@ import { listSpots } from "@/services/catalog/spots";
 import { listVehicles } from "@/services/catalog/vehicles";
 import { workspaceBySlug } from "@/services/catalog/workspaces";
 import { listPhones } from "@/services/devices/phones";
-import { vehicleStates } from "@/services/ingest/ingest";
 import { type Actor, parseInput, ServiceError } from "@/services/kernel";
 import { getInsights, listSuggestions } from "@/services/learning/insights";
+import { liveBoard } from "@/services/mcp/changes";
 import { publicStatus } from "@/services/public/status";
+import { ok, withToolHandler } from "../result";
+import type { ToolGroup } from "../server";
 
 /** Every text a model sees from these tools. */
 export const READ_TEXT = {
@@ -107,19 +109,11 @@ function tool<N extends keyof typeof READ_TEXT, S extends z.ZodObject<typeof ws>
 const DAY_MS = 86_400_000;
 
 export const READ_TOOLS = [
-  tool("shuttle_status", z.object(ws), async ({ db, actor, workspace, now }) => {
-    // listVehicles checks the viewer role; vehicleStates has no actor, so it must come second
-    const vehicles = await listVehicles(db, actor, { workspaceId: workspace.id });
-    const states = await vehicleStates(db, workspace.id);
-    return {
-      workspace: { slug: workspace.slug, name: workspace.name, isLive: workspace.isLive },
-      now,
-      vehicles: vehicles.map((vehicle) => ({
-        vehicle,
-        state: states.find((s) => s.vehicleId === vehicle.id) ?? null,
-      })),
-    };
-  }),
+  tool("shuttle_status", z.object(ws), async ({ db, actor, workspace, now }) => ({
+    workspace: { slug: workspace.slug, name: workspace.name, isLive: workspace.isLive },
+    now,
+    vehicles: await liveBoard(db, actor, { workspaceId: workspace.id }),
+  })),
 
   tool(
     "shuttle_schedule",
@@ -207,6 +201,23 @@ export const READ_TOOLS = [
 ];
 
 export type ReadTool = (typeof READ_TOOLS)[number];
+
+export const READ_SECTION =
+  "- Reads (no confirm needed): `shuttle_status`, `shuttle_schedule`, `shuttle_spots`, `shuttle_routes`, `shuttle_vehicles`, `shuttle_phones`, `shuttle_activity`, `shuttle_public_answer`, `shuttle_insights`, `shuttle_suggestions`.";
+
+/** Every read tool on the MCP server; results go to the model as JSON (times already IST). */
+export const readGroup: ToolGroup = {
+  section: () => READ_SECTION,
+  register(server, ctx) {
+    const c: McpContext = { db: ctx.db, personId: ctx.person.id, client: ctx.client, now: ctx.now };
+    for (const t of READ_TOOLS)
+      server.registerTool(
+        t.name,
+        { description: t.description, inputSchema: t.input, annotations: { readOnlyHint: true } },
+        withToolHandler(t.name, ctx.person.id, async (p: unknown) => ok(JSON.stringify(await t.run(c, p)))),
+      );
+  },
+};
 
 export function readTool(name: string): ReadTool {
   const t = READ_TOOLS.find((x) => x.name === name);

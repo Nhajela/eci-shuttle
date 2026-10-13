@@ -6,7 +6,10 @@ import { ConfirmInput, istHHMM, ProposeInput } from "@eci-shuttle/shared";
 import type { Db } from "@/db";
 import { workspaceBySlug } from "@/services/catalog/workspaces";
 import { type Actor, isServiceError, parseInput, ServiceError } from "@/services/kernel";
+import { actorFor } from "@/services/mcp/changes";
 import { type ConfirmResult, confirm, type ProposalResult, proposalWorkspace, propose } from "@/services/mcp/proposals";
+import { withToolHandler } from "../result";
+import type { ToolGroup } from "../server";
 
 /** What the MCP route hands each tool call (built from the bearer token's person). */
 export type ToolContext = {
@@ -109,3 +112,24 @@ export const proposeTools = [
   { name: "shuttle_propose", description: PROPOSE_DESCRIPTION, inputSchema: ProposeInput, handler: shuttlePropose },
   { name: "shuttle_confirm", description: CONFIRM_DESCRIPTION, inputSchema: ConfirmInput, handler: shuttleConfirm },
 ] as const;
+
+export const PROPOSE_SECTION =
+  "- Changes: `shuttle_propose`, then `shuttle_confirm` after the person says yes (read `shuttle_guide` changes first).";
+
+export const proposeGroup: ToolGroup = {
+  section: () => PROPOSE_SECTION,
+  register(server, ctx) {
+    const c: ToolContext = {
+      db: ctx.db,
+      now: ctx.now,
+      personId: ctx.person.id,
+      actorFor: actorFor({ db: ctx.db, personId: ctx.person.id, client: ctx.client }),
+    };
+    for (const t of proposeTools)
+      server.registerTool(
+        t.name,
+        { description: t.description, inputSchema: t.inputSchema },
+        withToolHandler(t.name, ctx.person.id, (p: unknown) => t.handler(c, p)),
+      );
+  },
+};

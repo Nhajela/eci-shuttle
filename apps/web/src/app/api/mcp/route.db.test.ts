@@ -15,7 +15,11 @@ const fake = vi.hoisted(() => ({
   workspaces: [] as unknown[],
   problemsFail: false,
 }));
-vi.mock("@/services/catalog/workspaces", () => ({ listMyWorkspaces: async () => fake.workspaces }));
+vi.mock("@/services/catalog/workspaces", () => ({
+  listMyWorkspaces: async () => fake.workspaces,
+  workspaceBySlug: async (_db: unknown, slug: string) =>
+    (fake.workspaces as Workspace[]).find((w) => w.slug === slug) ?? null,
+}));
 vi.mock("@/services/auth/actor", () => ({
   adminActor: async (_db: unknown, i: { personId: string; workspaceId: string; channel: string; client?: string }) => {
     const ws = (fake.workspaces as (Workspace & { role: string })[]).find((w) => w.id === i.workspaceId);
@@ -134,11 +138,19 @@ describe("/api/mcp auth", () => {
 });
 
 describe("/api/mcp tools", () => {
-  it("lists shuttle_initialize and shuttle_guide, with the server instructions", async () => {
+  it("lists initialize, guide, the reads and propose/confirm, with the server instructions", async () => {
     const { token } = await person();
     const client = await connect(token);
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["shuttle_initialize", "shuttle_guide"]));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "shuttle_initialize",
+        "shuttle_guide",
+        "shuttle_status",
+        "shuttle_propose",
+        "shuttle_confirm",
+      ]),
+    );
     expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
     await client.close();
   });
@@ -160,6 +172,16 @@ describe("/api/mcp tools", () => {
     expect(t).toContain("- Shift the 09:40 from Riva to 09:50?");
     expect(t).toContain(RULES);
     expect(t).toContain("`shuttle_guide`");
+    expect(t).toContain("`shuttle_propose`");
+    await client.close();
+  });
+
+  it("shuttle_status reads the live board as JSON", async () => {
+    const { token, live } = await person();
+    const client = await connect(token);
+    const r = JSON.parse(text(await client.callTool({ name: "shuttle_status", arguments: { workspace: live.slug } })));
+    expect(r.workspace.slug).toBe(live.slug);
+    expect(r.vehicles.map((v: { vehicle: { name: string } }) => v.vehicle.name)).toContain("Bus 1");
     await client.close();
   });
 

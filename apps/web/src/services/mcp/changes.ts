@@ -242,7 +242,8 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
       const r = await get(db, ws, "route", c.routeId);
       return (
         `Add service '${c.name}' on route '${r.name}': ${days(c.daysOfWeek)} ${c.startTime}–${c.endTime} ` +
-        `${pattern(c.pattern)}, ${day(c.validFrom)} to ${day(c.validTo)}${c.public ? "" : " (not public)"}`
+        `${pattern(c.pattern)}, ${day(c.validFrom)} to ${day(c.validTo)}${c.public ? "" : " (not public)"}` +
+        (c.serviceKind === "special" ? " (special)" : "")
       );
     }
     case "service.update": {
@@ -259,6 +260,7 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
         startTime: "start",
         endTime: "end",
         pattern: (v: ServicePattern) => `departs ${pattern(v)}`,
+        serviceKind: (v: string) => `make it ${v}`,
       })}`;
     }
     case "service.exception": {
@@ -480,13 +482,14 @@ export async function applyChange(
       return createRoute(db, actor, input(c, ws));
     case "route.update":
       return updateRoute(db, actor, input(c, ws));
-    case "service.create":
-      // ponytail: the change's `kind` discriminator shadows ServiceCreateFields.kind, so MCP can only create
-      // regular services (contract request: rename one of them). Specials: duplicate in admin.
-      return createService(db, actor, { ...input(c, ws), kind: "regular" });
-    case "service.update":
-      // same shadowing: service.update can't change the service kind
-      return updateService(db, actor, input(c, ws));
+    case "service.create": {
+      const { serviceKind, ...fields } = input(c, ws);
+      return createService(db, actor, { ...fields, kind: serviceKind });
+    }
+    case "service.update": {
+      const { serviceKind, ...fields } = input(c, ws);
+      return updateService(db, actor, { ...fields, ...(serviceKind && { kind: serviceKind }) });
+    }
     case "service.exception":
       return addException(db, actor, input(c, ws));
     case "service_vehicle.assign":

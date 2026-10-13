@@ -372,9 +372,16 @@ describe("applyChange", () => {
       startTime: "18:00",
       endTime: "20:00",
       pattern: { kind: "every", everyMin: 30 },
+      serviceKind: "special",
     })) as { id: string; kind: string };
-    expect(svc.kind).toBe("regular");
-    await apply({ kind: "service.update", serviceId: svc.id, name: "Late evening" });
+    expect(svc.kind).toBe("special");
+    const upd = (await apply({
+      kind: "service.update",
+      serviceId: svc.id,
+      name: "Late evening",
+      serviceKind: "regular",
+    })) as { kind: string };
+    expect(upd.kind).toBe("regular");
     await apply(cancel1020(s.service.id));
     const van = (await apply({
       kind: "vehicle.create",

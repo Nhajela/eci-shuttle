@@ -8,6 +8,8 @@ import type { McpContext } from "./context";
 import { guideGroup } from "./guide";
 import { registerInitialize } from "./initialize";
 import { SERVER_INSTRUCTIONS, SERVER_NAME, SERVER_TITLE, SERVER_VERSION } from "./text";
+import { proposeGroup } from "./tools/propose";
+import { readGroup } from "./tools/read";
 
 export type ToolGroup = {
   register(server: McpServer, ctx: McpContext): void;
@@ -16,7 +18,7 @@ export type ToolGroup = {
 };
 
 /** Add a group here (one import + one entry) to put its tools on the server. */
-export const TOOL_GROUPS: ToolGroup[] = [guideGroup];
+export const TOOL_GROUPS: ToolGroup[] = [guideGroup, readGroup, proposeGroup];
 
 export function buildServer(ctx: McpContext, groups: ToolGroup[] = TOOL_GROUPS): McpServer {
   const server = new McpServer(

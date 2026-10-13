@@ -3,6 +3,7 @@
  * `shuttle_confirm { code }` runs them in one transaction, each through the same service function admin uses.
  */
 import { z } from "zod";
+import { ServiceKind } from "./enums";
 import {
   checkException,
   NoticeCreateFields,
@@ -40,8 +41,12 @@ export const McpChange = z.discriminatedUnion("kind", [
   change("spot.archive", SpotArchiveFields),
   change("route.create", RouteCreateFields),
   change("route.update", RouteUpdateFields),
-  change("service.create", ServiceCreateFields),
-  change("service.update", ServiceUpdateFields),
+  // `kind` is the change's discriminator here, so the service's own kind travels as `serviceKind`
+  change(
+    "service.create",
+    ServiceCreateFields.omit({ kind: true }).extend({ serviceKind: ServiceKind.default("regular") }),
+  ),
+  change("service.update", ServiceUpdateFields.omit({ kind: true }).extend({ serviceKind: ServiceKind.optional() })),
   change("service.exception", ServiceExceptionFields).superRefine(checkException),
   change("service_vehicle.assign", ServiceVehicleAssignFields),
   change("service_vehicle.unassign", ServiceVehicleUnassignFields),
