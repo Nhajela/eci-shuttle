@@ -58,7 +58,7 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
   const rest = m?.[2]?.trim() || null;
 
   // login needs no shuttle: let staff log in before a workspace is made live
-  const loginOnly = command === "start" || command === "login";
+  const loginOnly = command === "start" || command === "login" || !!query?.data?.startsWith("login:");
   const workspace =
     (await workspaceBySlug(db, null)) ?? (loginOnly ? ((await listAllWorkspaces(db))[0] ?? null) : null);
   if (!workspace) {

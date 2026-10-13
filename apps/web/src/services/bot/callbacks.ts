@@ -6,6 +6,7 @@
 import { z } from "zod";
 import { onAdminCallback } from "./admin";
 import { onAttendeeCallback } from "./attendee";
+import { onLoginButton } from "./start";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
 export const CallbackAction = z.enum([
@@ -14,6 +15,8 @@ export const CallbackAction = z.enum([
   "arrive", // arrive:<spotId>[:<leadMin>] tell me when it's close (5 / 10 min buttons pass leadMin)
   "nsub", // nsub:<spotId|all>           notices for a spot / all
   "nunsub", // nunsub:<subscriptionId|all>
+  // login (bot/start)
+  "login", // login:<code>               confirms a browser's deep-link login
   // admin (bot/admin)
   "nudge", // nudge:<deviceId>
   "sil1h", // sil1h:<deviceId>           silence 1 h
@@ -49,6 +52,7 @@ export function decodeCallback(data: string | undefined): Callback | null {
 export async function handleCallback(ctx: BotContext, query: TgCallbackQuery): Promise<BotReply> {
   const cb = decodeCallback(query.data);
   if (!cb) return { send: [], answerCallback: { callbackQueryId: query.id, text: "This button has expired" } };
+  if (cb.action === "login") return onLoginButton(ctx, cb.args[0] ?? "", query);
   return ATTENDEE_ACTIONS.has(cb.action) ? onAttendeeCallback(ctx, cb, query) : onAdminCallback(ctx, cb, query);
 }
 
