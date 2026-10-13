@@ -339,10 +339,12 @@ async function liveVehicles(db: Db, workspaceId: string, running: Running[], now
       ),
     );
   for (const r of rows) {
-    assigned.set(r.serviceId, (assigned.get(r.serviceId) ?? 0) + 1);
     const s = r.state;
+    // a vehicle answers only for the service ingest resolved it to (SPEC §3: a party run drops out of the line)
+    if (s?.serviceId && s.serviceId !== r.serviceId) continue;
+    assigned.set(r.serviceId, (assigned.get(r.serviceId) ?? 0) + 1);
     const fresh = s?.lastPingAt && nowMs - s.lastPingAt.getTime() <= STALE_MS;
-    if (!s || !fresh || (s.phase !== "at_spot" && s.phase !== "en_route")) continue;
+    if (!s || !fresh || s.serviceId !== r.serviceId || (s.phase !== "at_spot" && s.phase !== "en_route")) continue;
     const list = byService.get(r.serviceId) ?? [];
     list.push({
       vehicle: r.vehicle,

@@ -110,7 +110,7 @@ async function bus(
     .values({ workspaceId: ws, serviceId, vehicleId: v.id, startsAt: at("08:00"), endsAt: at("12:00") });
   await db()
     .insert(vehicleState)
-    .values({ vehicleId: v.id, workspaceId: ws, lastPingAt: new Date(NOW.getTime() - 30_000), ...state });
+    .values({ vehicleId: v.id, workspaceId: ws, serviceId, lastPingAt: new Date(NOW.getTime() - 30_000), ...state });
   return v;
 }
 
@@ -281,6 +281,33 @@ describe("publicStatus: live answers", () => {
       kind: "timetable",
       phaseText: "live tracking off",
     });
+  });
+
+  it("a vehicle moved to a party run drops out of the regular line's answers for those hours", async () => {
+    const { w, riva, route, svc } = await world();
+    const [party] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w.id,
+        name: "Party",
+        kind: "special",
+        public: false,
+        routeId: route.id,
+        validFrom: "2026-10-01",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "09:00",
+        endTime: "11:00",
+        pattern: { kind: "times", times: ["09:15"] },
+      })
+      .returning();
+    const v = await bus(w.id, svc.id, "Bus 1", { phase: "at_spot", spotId: riva.id, serviceId: party.id });
+    await db()
+      .insert(serviceVehicles)
+      .values({ workspaceId: w.id, serviceId: party.id, vehicleId: v.id, startsAt: at("08:00"), endsAt: at("12:00") });
+    const answer = (await answerAt(w.id, riva.id))?.answers[0];
+    expect(answer?.kind).not.toBe("live");
+    expect(answer?.vehicleName ?? null).toBeNull();
   });
 
   it("picks the soonest vehicle", async () => {
