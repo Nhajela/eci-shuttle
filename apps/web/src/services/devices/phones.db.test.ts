@@ -1,17 +1,20 @@
 import { randomUUID } from "node:crypto";
-import type { Role } from "@eci-shuttle/shared";
+import { type Role, resolveMode } from "@eci-shuttle/shared";
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
 import { auditLog, deviceAssignments, devices, directives, memberships, outbox, vehicles } from "@/db/schema";
+import { SILENT_AFTER_MS } from "../alerts/watchdog";
 import { enqueue } from "../kernel";
 import { bumpConfigs, desiredConfig } from "./config";
 import {
   assignPhone,
   cancelDirective,
   forceActive,
+  getPhone,
+  getVehiclePhone,
   killPhone,
   labelPhone,
   listPhones,
@@ -19,6 +22,7 @@ import {
   nudgePhone,
   revokePhone,
   silencePhone,
+  trackedDevices,
 } from "./phones";
 
 // config.ts belongs to another task: stand in for its contract (bump non-revoked devices + one push each).
@@ -415,5 +419,93 @@ describe("listPhones", () => {
     await expect(listPhones(db(), actor, { workspaceId: ws.id }, new Date())).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+
+  it("silent: assigned, should be active, last sync (or window start) over SILENT_AFTER_MS ago", async () => {
+    const ws = await makeWorkspace(db());
+    const { actor } = await makeAdmin(db(), ws.id, "viewer");
+    const now = new Date();
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const quiet = await makeDevice(ws.id, { label: "A", lastSyncAt: ago(SILENT_AFTER_MS + 1000) });
+    const fresh = await makeDevice(ws.id, { label: "B", lastSyncAt: ago(SILENT_AFTER_MS - 1000) });
+    const never = await makeDevice(ws.id, { label: "C" }); // its window opened a minute ago: not silent yet
+    await makeDevice(ws.id, { label: "D", lastSyncAt: ago(HOUR) }); // no vehicle
+    for (const d of [quiet, fresh, never])
+      await db()
+        .insert(deviceAssignments)
+        .values({ workspaceId: ws.id, deviceId: d.id, vehicleId: (await makeVehicle(ws.id, d.label)).id });
+    vi.mocked(desiredConfig).mockImplementation(
+      async (_db, id) => ({ start: now.getTime() - (id === never.id ? 60_000 : HOUR) }) as never,
+    );
+    vi.mocked(resolveMode).mockImplementation(
+      (c) => ({ mode: "active", window: { startsAt: (c as unknown as { start: number }).start } }) as never,
+    );
+    try {
+      const list = await listPhones(db(), actor, { workspaceId: ws.id }, now);
+      expect(Object.fromEntries(list.map((p) => [p.device.label, p.silent]))).toEqual({
+        A: true,
+        B: false,
+        C: false,
+        D: false,
+      });
+    } finally {
+      vi.mocked(resolveMode).mockImplementation(
+        (c) => ({ mode: (c as unknown as { killed: boolean }).killed ? "killed" : "idle" }) as never,
+      );
+    }
+  });
+});
+
+describe("getPhone / getVehiclePhone", () => {
+  it("getPhone reads one phone's health by id; another workspace's phone is NOT_FOUND", async () => {
+    const { ws, phone } = await setup();
+    const { actor } = await makeAdmin(db(), ws.id, "viewer");
+    const v = await makeVehicle(ws.id);
+    await db().insert(deviceAssignments).values({ workspaceId: ws.id, deviceId: phone.id, vehicleId: v.id });
+    const h = await getPhone(db(), actor, { deviceId: phone.id }, new Date());
+    expect(h).toMatchObject({ device: { id: phone.id }, vehicle: { id: v.id }, desiredMode: "idle", silent: false });
+    const other = await setup();
+    await expect(getPhone(db(), other.actor, { deviceId: phone.id }, new Date())).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(getPhone(db(), actor, { deviceId: randomUUID() }, new Date())).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("getVehiclePhone is the vehicle's current phone, or null", async () => {
+    const { ws, actor, phone } = await setup("viewer");
+    const v = await makeVehicle(ws.id);
+    const empty = await makeVehicle(ws.id, "Bus 2");
+    await db().insert(deviceAssignments).values({ workspaceId: ws.id, deviceId: phone.id, vehicleId: v.id });
+    const input = { workspaceId: ws.id };
+    expect((await getVehiclePhone(db(), actor, { ...input, vehicleId: v.id }, new Date()))?.device.id).toBe(phone.id);
+    expect(await getVehiclePhone(db(), actor, { ...input, vehicleId: empty.id }, new Date())).toBeNull();
+    const foreign = await makeVehicle((await makeWorkspace(db())).id);
+    await expect(getVehiclePhone(db(), actor, { ...input, vehicleId: foreign.id }, new Date())).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+});
+
+describe("trackedDevices", () => {
+  it("lists the workspace's assigned phones that are not revoked", async () => {
+    const ws = await makeWorkspace(db());
+    const v1 = await makeVehicle(ws.id);
+    const v2 = await makeVehicle(ws.id, "Bus 2");
+    const a = await makeDevice(ws.id);
+    await makeDevice(ws.id); // unassigned
+    const gone = await makeDevice(ws.id, { revokedAt: new Date() });
+    await db()
+      .insert(deviceAssignments)
+      .values([
+        { workspaceId: ws.id, deviceId: a.id, vehicleId: v1.id },
+        { workspaceId: ws.id, deviceId: gone.id, vehicleId: v2.id },
+      ]);
+    const other = await makeWorkspace(db());
+    const od = await makeDevice(other.id);
+    const ov = await makeVehicle(other.id);
+    await db().insert(deviceAssignments).values({ workspaceId: other.id, deviceId: od.id, vehicleId: ov.id });
+    expect(await trackedDevices(db(), ws.id)).toEqual([{ deviceId: a.id, vehicleId: v1.id }]);
   });
 });

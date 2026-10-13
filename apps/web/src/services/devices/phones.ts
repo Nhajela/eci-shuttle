@@ -5,6 +5,7 @@
  */
 import {
   type DirectiveKind,
+  Id,
   IST_TZ,
   type Permissions,
   PhoneAssignFields,
@@ -19,12 +20,14 @@ import {
   withWorkspace,
 } from "@eci-shuttle/shared";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, type SQL, sql } from "drizzle-orm";
-import type { z } from "zod";
+import { z } from "zod";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, directives, memberships, vehicles, workspaces } from "@/db/schema";
 import type { Device, DeviceAssignment, Directive, Vehicle } from "@/db/types";
+import { SILENT_AFTER_MS } from "../alerts/watchdog";
 import {
   type Actor,
+  can,
   enqueue,
   getInWorkspace,
   inWorkspace,
@@ -330,6 +333,8 @@ export type PhoneHealth = {
   /** desired mode right now (resolveMode on the desired config) vs device.reportedMode */
   desiredMode: string;
   modeMismatch: boolean;
+  /** assigned, should be active, and not heard from for alerts' SILENT_AFTER_MS (since the window opened) */
+  silent: boolean;
   configBehind: boolean;
   lastSyncAgoS: number | null;
   needsNewApk: boolean;
@@ -361,15 +366,68 @@ export async function listPhones(
 ): Promise<PhoneHealth[]> {
   const { workspaceId } = input;
   readable(actor, workspaceId);
+  const phones = await db.select().from(devices).where(inWorkspace(devices, workspaceId)).orderBy(asc(devices.label));
+  return healthOf(db, workspaceId, phones, now);
+}
+
+/** viewer+, any workspace the actor reads (bot callbacks only carry the id); others' phones are NOT_FOUND. */
+export async function getPhone(db: Db, actor: Actor, input: { deviceId: string }, now: Date): Promise<PhoneHealth> {
+  const { deviceId } = parseInput(z.object({ deviceId: Id }), input);
+  const [d] = await db.select().from(devices).where(eq(devices.id, deviceId));
+  // A phone the actor can't read is "missing", so ids from other workspaces don't leak (CONTRACTS: NOT_FOUND).
+  if (!d || !can(actor, d.workspaceId, "viewer"))
+    throw new ServiceError("NOT_FOUND", "No such phone.", { entity: "phone", id: deviceId });
+  return (await healthOf(db, d.workspaceId, [d], now))[0];
+}
+
+/** viewer+. The phone currently assigned to the vehicle (Live board, Vehicles page), or null. */
+export async function getVehiclePhone(
+  db: Db,
+  actor: Actor,
+  input: { workspaceId: string; vehicleId: string },
+  now: Date,
+): Promise<PhoneHealth | null> {
+  const { workspaceId, vehicleId } = input;
+  readable(actor, workspaceId);
+  await getInWorkspace(db, vehicles, workspaceId, vehicleId, "vehicle");
+  const [row] = await db
+    .select({ device: devices })
+    .from(deviceAssignments)
+    .innerJoin(devices, eq(devices.id, deviceAssignments.deviceId))
+    .where(and(eq(deviceAssignments.vehicleId, vehicleId), isNull(deviceAssignments.endsAt)));
+  return row ? (await healthOf(db, workspaceId, [row.device], now))[0] : null;
+}
+
+/** No actor (worker jobs): the workspace's phones assigned to a vehicle, revoked ones left out. */
+export async function trackedDevices(db: Db, workspaceId: string): Promise<{ deviceId: string; vehicleId: string }[]> {
+  return db
+    .select({ deviceId: deviceAssignments.deviceId, vehicleId: deviceAssignments.vehicleId })
+    .from(deviceAssignments)
+    .innerJoin(devices, eq(devices.id, deviceAssignments.deviceId))
+    .where(
+      and(inWorkspace(deviceAssignments, workspaceId), isNull(deviceAssignments.endsAt), isNull(devices.revokedAt)),
+    )
+    .orderBy(asc(devices.label));
+}
+
+async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date): Promise<PhoneHealth[]> {
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!ws) throw new ServiceError("NOT_FOUND", "No such workspace.", { entity: "workspace", id: workspaceId });
-  const phones = await db.select().from(devices).where(inWorkspace(devices, workspaceId)).orderBy(asc(devices.label));
   if (!phones.length) return [];
   const assigned = await db
     .select({ deviceId: deviceAssignments.deviceId, vehicle: vehicles })
     .from(deviceAssignments)
     .innerJoin(vehicles, eq(vehicles.id, deviceAssignments.vehicleId))
-    .where(and(inWorkspace(deviceAssignments, workspaceId), isNull(deviceAssignments.endsAt)));
+    .where(
+      and(
+        inWorkspace(deviceAssignments, workspaceId),
+        isNull(deviceAssignments.endsAt),
+        inArray(
+          deviceAssignments.deviceId,
+          phones.map((p) => p.id),
+        ),
+      ),
+    );
   const vehicleOf = new Map(assigned.map((a) => [a.deviceId, a.vehicle]));
   const vehicleIds = assigned.map((a) => a.vehicle.id);
   // not cancelled and not yet over (includes ones that start later)
@@ -397,11 +455,15 @@ export async function listPhones(
     const vehicle = vehicleOf.get(device.id) ?? null;
     const revoked = !!device.revokedAt;
     // ponytail: one desiredConfig per phone (N queries); fine for a handful of phones
-    const desiredMode = revoked ? "revoked" : resolveMode(await desiredConfig(db, device.id, now), now.getTime()).mode;
+    const desired = revoked ? null : resolveMode(await desiredConfig(db, device.id, now), now.getTime());
+    const desiredMode = desired?.mode ?? "revoked";
+    // same rule as the watchdog's silent alert, with the phone's last sync for the vehicle's last ping
+    const heardAt = Math.max(device.lastSyncAt?.getTime() ?? 0, desired?.window?.startsAt ?? 0);
     out.push({
       device,
       vehicle,
       desiredMode,
+      silent: !!vehicle && desiredMode === "active" && now.getTime() - heardAt > SILENT_AFTER_MS,
       modeMismatch: !revoked && device.reportedMode != null && device.reportedMode !== desiredMode,
       configBehind: !revoked && (device.reportedConfigVersion ?? 0) < device.configVersion,
       lastSyncAgoS: device.lastSyncAt ? Math.floor((now.getTime() - device.lastSyncAt.getTime()) / 1000) : null,
