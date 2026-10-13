@@ -36,7 +36,7 @@ Wave 2 integration (2026-10-13): `main` was fast-forwarded to `task/contracts`, 
 | svc-ota | merged | |
 | svc-ingest | merged | +fix. Live ETA now uses `learning.loadEstimates` |
 | svc-learning | merged | |
-| svc-insights | merged | read model only; list/dismiss/excludeDay added at integration; **acceptSuggestion still a stub** |
+| svc-insights | merged | list/dismiss/excludeDay added at integration; accept by accept-suggestion (wave 2b) |
 | svc-notices | merged | +fix (refuse editing a notice that is over) |
 | svc-public | merged | now on shared IST helpers |
 | driver-scaffold | merged | +fix (otaStep stops after an unreachable fetch; EAS project id) |
@@ -47,44 +47,86 @@ Wave 2 integration (2026-10-13): `main` was fast-forwarded to `task/contracts`, 
 | driver-ota | merged | +fix. Passes `lastAttemptedTargetId: null` (tracks the mismatch itself) |
 | driver-screens | merged | copies of store/kv/sync removed; screens use `store/native`'s one device store |
 | auth-login | merged | +fix. Its `seal.ts`/`oauth.ts` were replaced by mcp-core's (same API) |
-| bot-core | merged | built only the webhook adapter; see svc-bot below |
+| bot-core | merged | built only the webhook adapter; handle/start/deliver came in wave 2b |
 | bot-admin | merged | |
 | bot-attendee | merged | built `subscriptions/*` too |
 | alerts | merged | |
 | activity | merged | +fix (secrets hidden from every reader; IST diff times) |
 | mcp-core | merged | +fix. Owns `auth/seal`, `auth/oauth`, `mcp/tokens` |
-| mcp-read | merged | +fix (IST datetimes) |
-| mcp-propose | merged | depends on `mcp/changes` (stub) |
+| mcp-read | merged | +fix (IST datetimes). Registered on the server at wave 2b; `shuttle_status` uses `liveBoard` |
+| mcp-propose | merged | tools registered on the server at wave 2b (were built but not in `TOOL_GROUPS`) |
 | api-device | merged | rate limit is in-process (one container) |
 | public-ui | merged | +fix (stale minutes hidden; 390px toggle). `/` is force-dynamic |
 | admin-shell | merged | |
 | admin-live | merged | +fix |
 | admin-phones | merged | |
-| admin-vehicles | merged | +fix. `app/admin/vehicles/trips.ts` reads the DB directly (stopgap) |
+| admin-vehicles | merged | +fix. Trip stopgap replaced by `vehicles.listVehicleTrips` (wave 2b) |
 | admin-people | merged | +fix |
-| admin-workspaces | merged | +fix (doc). Sim pairing recognised by label until PairRequest gets `simulated` |
+| admin-workspaces | merged | +fix (doc). Sims recognised by `devices.simulated` (wave 2b) |
 | admin-spots | merged | |
 | admin-routes | merged | +fix |
 | admin-schedule | merged | +fix |
 | admin-notices | merged | +fix. Keeps a client copy of `compareNotices` (server module pulls in the DB) |
-| admin-insights | merged | +fix. Accept button fails until `acceptSuggestion` lands |
+| admin-insights | merged | +fix. Accept works since wave 2b |
 | admin-activity | merged | |
 | job-watchdog | merged | |
-| job-windows | merged | uses `listAllWorkspaces` |
+| job-windows | merged | uses `listAllWorkspaces`, `trackedDevices` (wave 2b) |
 | job-arrival | merged | |
 | job-notices | merged | |
-| job-queue | merged | delivers via `bot/deliver.deliverTelegram` (stub) |
-| job-nightly | merged | uses `listAllWorkspaces`; cleanup SQL still in the job |
+| job-queue | merged | honours `retryAfterMs` (wave 2b) |
+| job-nightly | merged | uses `listAllWorkspaces`; calls `cleanup.runCleanup` (wave 2b) |
 | sim | merged | |
 
-## Not built yet (blocking a working system)
+## Wave 2b (2026-10-13)
 
-| Key | Owns | What breaks without it |
+Merged `--no-ff` onto `main` in this order (schema-2 had already landed). "+fix" = a fix branch stacked on the task
+branch; its tip was merged. Conflict: `scripts/sim/plan.ts` (schema-2 and svc-routes-2 both widened
+`typicalLegS`), kept main's version. Gates after integration: `pnpm test` (117 files, 1031 tests), `pnpm test:e2e`,
+driver `vitest` (170) + `tsc`, `pnpm typecheck`, `pnpm lint` (6 warnings, non-null assertions in tests),
+web build, worker build: all green.
+
+| Key | Status | Notes |
 |---|---|---|
-| svc-bot | `S/bot/{handle,start,deliver}.ts`, `callbacks.handleCallback` | the webhook answers nothing (it logs the stub error and returns 200) (no `/start` login claim, so no Telegram login); the queue job can't deliver any Telegram message (alerts, notices, arrival alerts, digest) |
-| svc-mcp | `S/mcp/changes.ts` (`versionKeys`, `loadVersions`, `describeChange`, `changeWarnings`, `applyChange`) | `shuttle_propose` / confirm, and so insights' accept |
-| svc-insights (rest) | `learning/insights.acceptSuggestion` | needs svc-mcp; add `now: Date`, refuse informational suggestions (`proposedChanges = []`), decide what happens when its proposal expires |
-| driver-runtime | a composition root in `apps/driver` | nothing wires location wake → resolveMode → ping queue → `syncOnce` → OTA/push; screens' `syncNow` is a no-op |
+| schema-2 | merged | since-columns, `planned_dwell_s`, null-safe `typical_leg_s`, `PairRequest.simulated` |
+| bot-handle | merged | `handleUpdate`, `handleCallback`. Uses `spots.isSpotName` since integration |
+| bot-start | merged | `/start` login claim, `/login` magic link, `/shuttle` intro |
+| bot-deliver | merged | message log, 429 `retryAfterMs`, blocked users, `lib/telegram/html.escapeHtml` |
+| mcp-changes | merged | (incl. its review fix) `applyChange`, versions, describe, warnings, `actorFor`, `liveBoard` |
+| driver-runtime | merged | (incl. its review fix) Composition root; `apps/driver` `main` is now `index.ts` (outside deps-only exception, accepted) |
+| e2e-sim | merged | `pnpm test:e2e` (local Postgres) |
+| svc-schedule-2 | merged | `listServices`, `getService` |
+| svc-vehicles-2 | merged | `listVehicleTrips` |
+| svc-spots-2 | merged | `isSpotName` |
+| svc-routes-2 | merged | (incl. its review fix) `legSamples` on `listRoutes` (shown on admin Routes since integration) |
+| svc-cleanup | merged | +fix (work was on the stacked branch). `cleanup.runCleanup`; worker job only calls it |
+| auth-next | merged | `requireAdmin({ next })`, `x-pathname` proxy |
+| admin-shared | merged | +fix. Shared `AdminMap` (list fallback, Leaflet retry) and `ConfirmButton` |
+| alerts-2 | merged | since-columns for phone episodes; `update_pending` problem, gated by the `update_failed` pref |
+| ingest-2 | merged | (incl. its review fix) `off_route_since`; live ETA falls back to the route's planned dwell |
+| phones-2 | merged | (incl. its review fix) `getPhone`, `getVehiclePhone`, `trackedDevices`, `PhoneHealth.silent` (admin Phones uses it) |
+| pairing-2 | merged | simulated pairs stored, refused in the live workspace; sim pairs as simulated |
+| accept-suggestion | merged | (incl. its review fix) `acceptSuggestion`; an accept whose proposal expired unconfirmed lists as open again |
+
+Wired at integration: MCP read + propose/confirm tool groups registered (they were unreachable); `McpChange`
+service kind as `serviceKind`; `DeliveryResult.retryAfterMs` (kernel) + queue; local escapers → `escapeHtml`;
+admin Notices on `listServices`; admin Vehicles on `listVehicleTrips` (stopgap deleted); admin Routes shows
+leg sample counts; admin Phones uses `PhoneHealth.silent`; sims detected by `devices.simulated` only;
+listRoutes' NaN workaround removed (schema reads nulls now); driver `Fix` exported from `location/plan`.
+
+## Remaining gaps
+
+- `AlertKind` has no `update_pending`: it is gated by the `update_failed` pref (alerts-2). Adding it needs a
+  decision for existing `alert_prefs` rows (otherwise those admins silently stop getting it).
+- Webhook update dedupe is in-process (`app/api/telegram/route.ts`); a `telegram_updates(update_id pk)` table
+  would make it survive restarts (bot-handle).
+- `learning.ts` uses a fixed `PLANNED_DWELL_S = 180` for `dwell_mismatch` and `loadEstimates`' baseline; it could
+  read `routes.planned_dwell_s`, letting ingest drop its own fallback (ingest-2).
+- Bot phone/service buttons still read the row by id directly to learn its workspace before building the Actor
+  (an Actor is per workspace, so `getPhone`/`getService` can't be called first).
+- `mcp/proposals.confirm` could stamp the suggestion behind a proposal, so "accepted" means confirmed
+  (today it means proposed; expiry is handled by allowing re-accept).
+- e2e phone pairs like a real phone (no `simulated`), by design of that test.
+- No admin UI for `routes.planned_dwell_s` yet (defaults to `{}`; ingest falls back to learned/none).
 
 ## Contract change requests
 
@@ -94,24 +136,7 @@ job-nightly); `.vitest/` ignored (api-device); `arrive` leadMin documented (bot-
 schedule overlap rule, `loadEstimates` hour param documented in CONTRACTS.md; local haversines / IST helpers /
 test stand-ins swapped for the merged real functions.
 
-Open:
-- Schema: `devices.permission_lost_since`, `devices.low_battery_since` (alerts); `vehicle_state.off_route_since`
-  (alerts, svc-ingest); `routes.typical_leg_s` typed `(number | null)[]` (NULL elements read back as NaN:
-  svc-learning, admin-routes); `$onUpdate` on `updatedAt()` (svc-people); exclusion constraint on
-  `service_vehicles` (svc-schedule); per-route/spot planned dwell (svc-learning).
-- Pairing: `PairRequest.simulated` and a server-side refusal of sim pairing in the live workspace
-  (admin-workspaces, sim); `pnpm sim <slug> <vehicle> <code>` (admin-workspaces).
-- Alerts: `update_pending` kind vs `mode_mismatch` (alerts); shared `silent` threshold on `PhoneHealth`
-  (admin-phones).
-- Services: `schedule.listServices(db, actor, {workspaceId})` (admin-schedule, admin-notices);
-  `vehicles.listVehicleTrips` (admin-vehicles); per-vehicle phone health read (admin-live, admin-vehicles);
-  leg sample counts on `listRoutes` (admin-routes); `getPhone`/`getService` by id for bot callbacks (bot-admin);
-  `isSpotName` for bot routing (bot-attendee); `proposalWorkspace(db, personId, code)` and an MCP `actorFor`
-  context (mcp-propose, mcp-read); `liveBoard` with its own role check (mcp-read); cleanup service
-  (job-nightly); `trackedDevices` (job-windows); `retryAfterMs` on `DeliveryResult` (job-queue);
-  shared `escapeHtml` (bot-attendee).
-- Adapters: `requireAdmin({ next })` / an `x-pathname` header so logged-out redirects return to the exact page
-  (auth-login, admin-shell); shared admin map and `ConfirmButton` in `components/admin/shell` (admin-live,
-  admin-phones); confirm `cancelDirective` accepts vehicle-level directives (admin-phones).
+Open (after wave 2b): see "Remaining gaps" above, plus `$onUpdate` on `updatedAt()` (svc-people) and
+`cancelDirective` accepting vehicle-level directives (admin-phones), both unconfirmed, and:
 - In-process state, fine for one container: device API rate limit (api-device), webhook update dedupe
   (bot-core; a `telegram_updates` table would make it durable), pairing throttle is global (svc-pairing).
