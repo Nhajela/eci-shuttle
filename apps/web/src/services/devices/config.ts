@@ -16,6 +16,7 @@ import { origin } from "@/lib/env";
 import { enqueue, ServiceError } from "../kernel";
 
 const HORIZON_MS = 48 * 3_600_000;
+const LOOKBACK_MS = 24 * 3_600_000;
 
 /**
  * The full desired config for one device at `now`: killed/revoked flags; schedule = next 48 h of windows for its
@@ -65,7 +66,7 @@ export async function desiredConfig(db: Db, deviceId: string, now: Date): Promis
   };
 }
 
-/** Service windows of the vehicle plus directives on the device or vehicle, over [now, now + 48 h), by start. */
+/** Service windows of the vehicle plus directives on the device or vehicle still open at `now` and starting before now + 48 h, by start. */
 async function windowsFor(db: Db, deviceId: string, vehicleId: string, now: Date): Promise<Window[]> {
   const to = new Date(now.getTime() + HORIZON_MS);
 
@@ -117,16 +118,19 @@ async function windowsFor(db: Db, deviceId: string, vehicleId: string, now: Date
           departure: e.departure,
           minutes: e.minutes,
         })),
-        now.getTime(),
+        // look back so a running window keeps its real start (watchdog/phone health measure silence from it)
+        now.getTime() - LOOKBACK_MS,
         to.getTime(),
-      ).map((w) => ({
-        startsAt: w.startsAt,
-        endsAt: w.endsAt,
-        mode: "active",
-        intervalS: null,
-        source: "service",
-        label: w.serviceIds.map((id) => defs.get(id)?.name ?? "").join(" + ") || null,
-      }))
+      )
+        .filter((w) => w.endsAt > now.getTime())
+        .map((w) => ({
+          startsAt: w.startsAt,
+          endsAt: w.endsAt,
+          mode: "active",
+          intervalS: null,
+          source: "service",
+          label: w.serviceIds.map((id) => defs.get(id)?.name ?? "").join(" + ") || null,
+        }))
     : [];
 
   const dirRows = await db
