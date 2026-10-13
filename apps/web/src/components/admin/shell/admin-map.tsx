@@ -8,6 +8,7 @@ import "leaflet/dist/leaflet.css";
 import type { LatLng } from "@eci-shuttle/shared";
 import type * as L from "leaflet";
 import { useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
 import { fitPoints, MapList, type MapMarker, type MapSpot } from "./admin-map-list";
 
 export type { MapMarker, MapSpot };
@@ -39,8 +40,10 @@ export function AdminMap({
 
   // The base map is built once (spots and paths don't move while the page is open), and only when the box has a
   // size: on phones it often starts hidden behind a List/Map switch, and Leaflet can't fit bounds in a 0×0 box.
+  // Re-runs on `failed` so falling back tears the map down (the section unmounts) and "Try again" rebuilds it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: spots/paths are drawn once per mount
   useEffect(() => {
+    if (failed) return;
     const box = el.current;
     if (!box) return;
     let cancelled = false;
@@ -91,7 +94,7 @@ export function AdminMap({
       map.current?.map.remove();
       map.current = null;
     };
-  }, []);
+  }, [failed]);
 
   useEffect(() => {
     if (map.current) drawMarkers(map.current, markers);
@@ -100,7 +103,12 @@ export function AdminMap({
   if (failed)
     return (
       <section className="w-full overflow-hidden rounded-xl border" aria-label={label}>
-        <p className="border-b bg-muted px-3 py-2 text-sm text-muted-foreground">The map didn't load. As a list:</p>
+        <div className="flex items-center justify-between gap-2 border-b bg-muted px-3 py-2">
+          <p className="text-sm text-muted-foreground">The map didn't load. As a list:</p>
+          <Button variant="outline" className="h-11" onClick={() => setFailed(false)}>
+            Try the map again
+          </Button>
+        </div>
         <MapList spots={spots} markers={markers} />
       </section>
     );
