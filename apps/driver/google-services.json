@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "738764446235",
+    "project_id": "eci-shuttles",
+    "storage_bucket": "eci-shuttles.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:738764446235:android:1274fcdaf0e8c34183f6be",
+        "android_client_info": {
+          "package_name": "com.positivesumcompany.ecishuttle.driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCJlSey9hioHD6pjF5Js_Of35_9OkN9HQM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

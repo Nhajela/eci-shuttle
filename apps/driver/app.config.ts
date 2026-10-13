@@ -1,8 +1,8 @@
 import type { ExpoConfig } from "expo/config";
 
-// Paste the id from `eas init` here (needs Naman's Expo account, SPEC §10); not a secret.
+// Expo project positive-sum-company/edge-city-india-shuttles; not a secret.
 // A constant, never env: the fingerprint hashes this config, so build and `eas update` must see the same value.
-export const EAS_PROJECT_ID = "";
+export const EAS_PROJECT_ID = "77b687ca-c0d9-4ea7-92b4-7d5344c96069";
 const easProjectId = EAS_PROJECT_ID;
 
 if (!easProjectId && process.env.EAS_BUILD) {
@@ -13,7 +13,8 @@ if (!easProjectId && process.env.EAS_BUILD) {
 
 const config: ExpoConfig = {
   name: "ECI Shuttle Driver",
-  slug: "eci-shuttle-driver",
+  slug: "edge-city-india-shuttles",
+  owner: "positive-sum-company",
   scheme: "ecishuttle",
   version: "0.1.0",
   orientation: "portrait",
@@ -28,6 +29,8 @@ const config: ExpoConfig = {
   },
   android: {
     package: "com.positivesumcompany.ecishuttle.driver",
+    // Firebase project eci-shuttles; FCM V1 key is stored in Expo credentials, not here.
+    googleServicesFile: "./google-services.json",
     permissions: [
       "ACCESS_COARSE_LOCATION",
       "ACCESS_FINE_LOCATION",
