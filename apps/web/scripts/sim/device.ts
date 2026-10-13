@@ -40,7 +40,14 @@ const errorText = async (r: Response) => {
 
 /** POST /api/device/pair: the admin-made code becomes this sim's device token. */
 export async function pairSim(origin: string, code: string, deps: SimDeps): Promise<PairResponse> {
-  const req: PairRequest = { code, model: "sim", appVersion: APP_VERSION, updateId: null, pushToken: null };
+  const req: PairRequest = {
+    code,
+    model: "sim",
+    appVersion: APP_VERSION,
+    updateId: null,
+    pushToken: null,
+    simulated: true,
+  };
   const r = await post(deps, `${origin}/api/device/pair`, req);
   if (!r.ok) throw new Error(`Pairing failed: ${await errorText(r)}`);
   return PairResponse.parse(await r.json());

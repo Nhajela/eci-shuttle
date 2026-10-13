@@ -3,7 +3,7 @@ import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { auditLog, devices, pairingCodes } from "@/db/schema";
+import { auditLog, devices, pairingCodes, workspaces } from "@/db/schema";
 import { systemActor } from "../kernel";
 import { createPairingCode, MAX_FAILED_PAIRS, PAIRING_CODE_TTL_MS, pairDevice } from "./pairing";
 
@@ -116,6 +116,36 @@ describe("pairDevice", () => {
     const misses = await db().select().from(auditLog).where(eq(auditLog.action, "device.pair_failed"));
     expect(misses.map((m) => m.entityId)).toEqual(expect.arrayContaining([used.code, old.code, "nope42"]));
     expect(misses[0]).toMatchObject({ workspaceId: null, actorKind: "device", channel: "device" });
+  });
+
+  it("marks a simulated pair as simulated; a real phone isn't", async () => {
+    const ws = await makeWorkspace(db());
+    const sim = await createPairingCode(db(), systemActor("test"), { workspaceId: ws.id }, NOW);
+    const real = await createPairingCode(db(), systemActor("test"), { workspaceId: ws.id }, NOW);
+    const s = await pairDevice(db(), pairReq(sim.code, { simulated: true }), NOW);
+    const r = await pairDevice(db(), pairReq(real.code), NOW);
+    const [sd] = await db().select().from(devices).where(eq(devices.id, s.deviceId));
+    const [rd] = await db().select().from(devices).where(eq(devices.id, r.deviceId));
+    expect(sd.simulated).toBe(true);
+    expect(rd.simulated).toBe(false);
+  });
+
+  it("refuses a simulated pair in the live workspace and leaves the code unused", async () => {
+    // one live workspace at a time (unique index): reuse it if another test made it
+    const [existing] = await db().select().from(workspaces).where(eq(workspaces.isLive, true));
+    const live = existing ?? (await makeWorkspace(db(), { isLive: true }));
+    const c = await createPairingCode(db(), systemActor("test"), { workspaceId: live.id }, NOW);
+    const liveDevices = () => db().select().from(devices).where(eq(devices.workspaceId, live.id));
+    const before = (await liveDevices()).length;
+    await expect(pairDevice(db(), pairReq(c.code, { simulated: true }), NOW)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/live/),
+    });
+    expect(await liveDevices()).toHaveLength(before);
+    const [code] = await db().select().from(pairingCodes).where(eq(pairingCodes.code, c.code));
+    expect(code.usedAt).toBeNull();
+    // a real phone still pairs with the same code
+    await expect(pairDevice(db(), pairReq(c.code), NOW)).resolves.toMatchObject({ token: expect.any(String) });
   });
 
   it("two phones racing for one code: exactly one pairs", async () => {
