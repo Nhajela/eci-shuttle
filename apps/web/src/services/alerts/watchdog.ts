@@ -10,6 +10,7 @@ import { escapeHtml } from "@/lib/telegram/html";
 import { encodeCallback } from "@/services/bot/callbacks";
 import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { desiredConfig } from "@/services/devices/config";
+import { isOutsideApp } from "@/services/devices/phones";
 import { refreshPhases } from "@/services/ingest/ingest";
 import { adminButton, alertAdminChanges, raiseAlert } from "./alerts";
 import { LOW_BATTERY_PCT, SILENT_AFTER_MS } from "./thresholds";
@@ -101,6 +102,8 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
       d.permissions && !d.permissions.notifications && "notifications are off",
     ].filter(Boolean);
     if (lost.length) add("permission_lost", d.permissionLostSince ?? now, `: ${lost.join(", ")}`);
+    // the rest judges modes and app updates, which Traccar and Telegram live location can't take
+    if (isOutsideApp(d)) continue;
 
     // When the desired mode began: its window's start, or (idle) the end of the last window; or its config's push, if later.
     // ponytail: the schedule only holds windows still ending in the next 48h, so long idle with no push record isn't judged.

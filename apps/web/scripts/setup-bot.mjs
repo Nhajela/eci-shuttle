@@ -1,5 +1,5 @@
 // web-bot: `pnpm bot:setup` (SPEC §2a): setWebhook to <PUBLIC_ORIGIN>/api/telegram with TELEGRAM_WEBHOOK_SECRET,
-// allowed_updates [message, callback_query, my_chat_member], and setMyCommands. Run after every host move.
+// allowed_updates [message, edited_message, callback_query, my_chat_member], and setMyCommands. Run after every host move.
 import { pathToFileURL } from "node:url";
 
 /** The menu in private chats (never the group). Admin commands (/status /today /notice /silence) stay unlisted: ops know them. */
@@ -29,7 +29,8 @@ export async function setupBot({ token, origin, secret, fetchImpl = fetch }) {
   await call("setWebhook", {
     url,
     secret_token: secret,
-    allowed_updates: ["message", "callback_query", "my_chat_member"],
+    // edited_message: Telegram live location sends every position update as an edit (services/bot/live)
+    allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member"],
   });
   // private chats only: /login in the main group would post a login link everyone can see
   await call("deleteMyCommands", {}); // clears a menu an older setup left on the default (group) scope

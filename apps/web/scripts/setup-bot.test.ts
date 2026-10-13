@@ -16,7 +16,7 @@ const fakeTelegram = (fail?: string) => {
 const opts = { token: "123:abc", origin: "https://eci-shuttle.example.com", secret: "s".repeat(32) };
 
 describe("setupBot", () => {
-  it("points the webhook at <origin>/api/telegram with the secret and the three update kinds, then sets commands for private chats only", async () => {
+  it("points the webhook at <origin>/api/telegram with the secret and the four update kinds (edited_message carries live location), then sets commands for private chats only", async () => {
     const t = fakeTelegram();
     const url = await setupBot({ ...opts, fetchImpl: t.fetchImpl });
     expect(url).toBe("https://eci-shuttle.example.com/api/telegram");
@@ -28,7 +28,7 @@ describe("setupBot", () => {
     expect(t.calls[0]?.body).toEqual({
       url,
       secret_token: opts.secret,
-      allowed_updates: ["message", "callback_query", "my_chat_member"],
+      allowed_updates: ["message", "edited_message", "callback_query", "my_chat_member"],
     });
     expect(t.calls[1]?.body).toEqual({}); // default scope: drops any old group menu
     expect(t.calls[2]?.body).toEqual({ commands: COMMANDS, scope: { type: "all_private_chats" } });
