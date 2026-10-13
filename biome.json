@@ -13,7 +13,9 @@
       "!**/dist",
       "!**/next-env.d.ts",
       "!apps/driver/android",
-      "!apps/driver/ios"
+      "!apps/driver/ios",
+      "!apps/driver/google-services.json",
+      "!apps/web/drizzle/meta"
     ]
   },
   "css": {

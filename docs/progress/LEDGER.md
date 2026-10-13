@@ -118,6 +118,9 @@ listRoutes' NaN workaround removed (schema reads nulls now); driver `Fix` export
 Merged `--no-ff` onto `main`: w2/lens1-0 … lens1-4 (no stacked fix branches, no conflicts). Gates after
 integration: `pnpm test` (118 files, 1046 tests), driver `vitest` (170) + `tsc`, `pnpm typecheck`, `pnpm lint`
 (same 6 test warnings), web build, worker build: all green. Nothing needed wiring (no stubs replaced).
+Then merged `origin/main` (deploy bootstrap: drizzle migrations, Expo/Firebase link, `appVersion` runtime policy);
+the driver app.config test now expects `appVersion`, Biome ignores the generated `google-services.json` and
+`drizzle/meta`. Its EAS-project-id guard test is skipped now that the project id is set.
 
 | Key | Status | Notes |
 |---|---|---|

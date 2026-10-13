@@ -35,9 +35,9 @@ describe("app.config", () => {
     expect(config.android?.package).toBe("com.positivesumcompany.ecishuttle.driver");
   });
 
-  it("leaves OTA to the server: no automatic check, fingerprint runtime version", () => {
+  it("leaves OTA to the server: no automatic check, appVersion runtime version (fingerprint differs local vs EAS under pnpm)", () => {
     expect(config.updates?.checkAutomatically).toBe("NEVER");
-    expect(config.runtimeVersion).toEqual({ policy: "fingerprint" });
+    expect(config.runtimeVersion).toEqual({ policy: "appVersion" });
   });
 
   it("asks for background location and a location foreground service", () => {
