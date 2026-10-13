@@ -9,6 +9,7 @@ import {
   deviceAssignments,
   devices,
   dwells,
+  legStats,
   pings,
   routes,
   services,
@@ -237,6 +238,30 @@ describe("ingestPings", () => {
     );
     const r = await w.send([...riva, ...blip, ...atCircle]);
     expect(r.closedTrips[0].quality).toBe("clean");
+  });
+
+  it("ETA at a spot uses the route's planned dwell where nothing is learned, the learned dwell where it is", async () => {
+    const w = await world();
+    await db()
+      .update(routes)
+      .set({ plannedDwellS: { [w.riva.id]: 900 } })
+      .where(eq(routes.id, w.route.id));
+    // at Riva since 08:58:00, now 09:01:02: 15 min planned dwell leaves ~12 min + the ~2.7 min drive
+    await w.send(riva);
+    expect((await w.state()).etaS).toBeGreaterThan(800);
+
+    await db().insert(legStats).values({
+      workspaceId: w.ws.id,
+      kind: "dwell",
+      fromSpotId: w.riva.id,
+      n: 10,
+      medianS: 200,
+      p20S: 150,
+      p80S: 250,
+      level: "leg_day",
+    });
+    await w.send([ping(ist("09:01:05"), RIVA)]);
+    expect((await w.state()).etaS).toBeLessThan(300);
   });
 
   it("planned departures that passed with no actual departure are marked missed", async () => {
