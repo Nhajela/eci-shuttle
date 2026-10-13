@@ -6,6 +6,7 @@ import {
   BarChart3Icon,
   BusIcon,
   CalendarClockIcon,
+  LogOutIcon,
   type LucideIcon,
   MapPinIcon,
   MegaphoneIcon,
@@ -61,6 +62,7 @@ export function AdminShell({
         {[...TABS, ...MORE].map((item) => (
           <NavLink key={item.href} item={item} href={link(item)} active={isActive(pathname, item.href)} row />
         ))}
+        <LogOut className="mt-auto" />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col pb-[var(--admin-tabbar)]">
@@ -111,9 +113,24 @@ export function AdminShell({
               />
             ))}
           </div>
+          <LogOut />
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function LogOut({ className }: { className?: string }) {
+  return (
+    <form method="post" action="/api/auth/logout" className={className}>
+      <button
+        type="submit"
+        className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground hover:bg-muted/60"
+      >
+        <LogOutIcon className="size-5 shrink-0" aria-hidden />
+        Log out
+      </button>
+    </form>
   );
 }
 
