@@ -32,6 +32,7 @@ function health(over: Partial<PhoneView> = {}, dev: Partial<Device> = {}): Phone
     vehicle: null,
     desiredMode: "active",
     modeMismatch: false,
+    silent: false,
     configBehind: false,
     lastSyncAgoS: 20,
     needsNewApk: false,
