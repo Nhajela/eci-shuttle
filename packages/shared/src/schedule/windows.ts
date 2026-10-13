@@ -31,8 +31,10 @@ function serviceDayWindow(s: ServiceDef, date: IsoDate, exceptions: ServiceExcep
   const startMin = toMin(s.startTime);
   let endMin = toMin(s.endTime);
   if (endMin <= startMin) endMin += 1440; // cross-midnight (end == start: a full 24h day)
-  // minutes from the service day's midnight; times before startTime belong after midnight on cross-midnight days
-  const offset = (t: HHMM) => (endMin > 1440 && toMin(t) < startMin ? toMin(t) + 1440 : toMin(t));
+  // minutes from the service day's midnight; on cross-midnight days only times up to endTime roll past midnight,
+  // gap times (after end, before start) stay on the service date: same rule as departures.ts onServiceDay
+  const offset = (t: HHMM) =>
+    endMin > 1440 && toMin(t) <= endMin - 1440 && toMin(t) < startMin ? toMin(t) + 1440 : toMin(t);
   const planned = (m: number) =>
     m >= startMin &&
     m < endMin &&

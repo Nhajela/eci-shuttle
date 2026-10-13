@@ -100,6 +100,14 @@ describe("trackingWindows", () => {
     expect([w?.startsAt, w?.endsAt]).toEqual([ist("2026-10-12", "07:45"), ist("2026-10-12", "21:15")]);
   });
 
+  it("cross-midnight add_departure in the gap (after end, before start) stays on the service date, like departures.ts", () => {
+    const s = svc({ startTime: "22:00", endTime: "02:00", daysOfWeek: [1] });
+    const exs = [ex({ type: "add_departure", departure: "21:00" })];
+    expect(trackingWindows([sv()], [s], exs, DAY_FROM, ist("2026-10-14", "00:00"))).toEqual([
+      { vehicleId: VA, startsAt: ist("2026-10-12", "20:45"), endsAt: ist("2026-10-13", "02:15"), serviceIds: [SVC] },
+    ]);
+  });
+
   it("shift_minutes of a planned departure past the window widens it; unplanned time is ignored", () => {
     const shifted = [ex({ type: "shift_minutes", departure: "08:00", minutes: -30 })];
     const [w] = trackingWindows([sv()], [svc()], shifted, DAY_FROM, DAY_TO);
