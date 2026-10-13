@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { rolloutAction } from "@/app/admin/phones/actions";
+import { ConfirmButton } from "@/components/admin/shell/confirm-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ConfirmButton } from "./confirm-button";
 import { useAction } from "./use-action";
 
 /** admin: OTA target for every phone in this workspace (SPEC §5). Phones apply it only while idle. */
@@ -56,7 +56,7 @@ export function RolloutPanel({
         </div>
         <ConfirmButton
           label={`Roll out to all ${phoneCount} phones`}
-          title={`Roll out to ${workspaceName}?`}
+          question={`Roll out to ${workspaceName}?`}
           description={`Every phone in ${workspaceName} downloads ${next || "nothing"} and applies it the next time it is idle. To roll back, roll out the previous id.`}
           confirmLabel="Roll out"
           variant="default"
