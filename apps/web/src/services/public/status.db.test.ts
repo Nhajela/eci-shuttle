@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   departureMatches,
   devices,
+  legStats,
   pings,
   routes,
   services,
@@ -491,6 +492,57 @@ describe("publicStatus: notices and schedule", () => {
       nextAt: null,
       phaseText: "about every 36 min · live tracking off",
     });
+  });
+
+  it("the route's planned wait at each stop goes into the loop lap, departure offsets and live ETAs", async () => {
+    const { w, riva, circle, route, svc } = await world();
+    // 5 min at every stop by default; Circle's learned dwell (enough samples) wins, Riva's thin one doesn't
+    await db()
+      .update(routes)
+      .set({ plannedDwellS: { "*": 300 } })
+      .where(eq(routes.id, route.id));
+    const dwell = (spotId: string, n: number, medianS: number) => ({
+      workspaceId: w.id,
+      kind: "dwell" as const,
+      fromSpotId: spotId,
+      n,
+      medianS,
+      p20S: medianS,
+      p80S: medianS,
+      level: "leg_day" as const,
+    });
+    await db()
+      .insert(legStats)
+      .values([dwell(riva.id, 2, 30), dwell(circle.id, 8, 120)]);
+    const [loopSvc] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w.id,
+        name: "Loop",
+        kind: "regular",
+        routeId: route.id,
+        colour: "#112233",
+        validFrom: "2026-10-01",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "09:00",
+        endTime: "18:00",
+        pattern: { kind: "loop" },
+      })
+      .returning();
+    // lap = two 15-min legs + learned 2 min at Circle + planned 5 min at Riva
+    expect((await answerAt(w.id, riva.id))?.schedule.loops).toEqual([
+      { serviceId: loopSvc.id, serviceName: "Loop", everyMin: 37 },
+    ]);
+    // Circle departures = Riva + 15 min leg + learned 2 min at Circle
+    expect((await answerAt(w.id, circle.id))?.answers[0].nextAtLabel).toBe("10:17");
+
+    await bus(w.id, svc.id, "Bus 1", { phase: "en_route", spotId: riva.id, nextSpotId: circle.id, alongM: 1000 });
+    etaToSpot.mockReturnValue({ seconds: 380, minutes: 6, lo: 5, hi: 9, basis: "estimate", legsChained: 2 });
+    await answerAt(w.id, riva.id);
+    const input = etaToSpot.mock.calls[0][0] as EtaInput;
+    expect(input.dwells[riva.id]?.medianS).toBe(300);
+    expect(input.dwells[circle.id]?.medianS).toBe(120);
   });
 });
 

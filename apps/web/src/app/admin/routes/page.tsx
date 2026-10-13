@@ -61,6 +61,12 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
                     ))}
                   </ul>
                   <p className="mt-1 text-xs text-muted-foreground">Learned each night from real trips.</p>
+                  <p className="mt-2 text-sm">
+                    Wait at each stop:{" "}
+                    {r.plannedDwellS["*"] != null
+                      ? `${r.plannedDwellS["*"] / 60} min`
+                      : "not set (3 min until learned)"}
+                  </p>
                 </section>
 
                 <PathEditor
@@ -79,7 +85,7 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
                 {canEdit && (
                   <details className="group">
                     <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-                      Edit name and spots
+                      Edit name, spots and wait
                     </summary>
                     <div className="pt-2">
                       <RouteForm
@@ -92,6 +98,7 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
                           name: r.name,
                           spotIds: r.spotIds,
                           pathSource: r.pathSource,
+                          plannedDwellS: r.plannedDwellS,
                         }}
                       />
                     </div>

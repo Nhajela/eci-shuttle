@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLeg, insertVertex, legRows, moveItem, parsePath, removeVertex, spotChain } from "./routes";
+import { formatLeg, insertVertex, legRows, moveItem, parsePath, parseWaits, removeVertex, spotChain } from "./routes";
 
 const names = { a: "Riva", b: "Circle" };
 
@@ -93,5 +93,29 @@ describe("parsePath", () => {
     expect(parsePath("not json")).toBeNull();
     expect(parsePath('{"lat":1}')).toBeNull();
     expect(parsePath('[{"lat":"x","lng":1}]')).toBeNull();
+  });
+});
+
+describe("parseWaits", () => {
+  const fd = (entries: [string, string][]) => {
+    const f = new FormData();
+    for (const [k, v] of entries) f.append(k, v);
+    return f;
+  };
+  it("turns the minutes fields into planned_dwell_s seconds: '*' for every stop, a spot id for one", () => {
+    expect(
+      parseWaits(
+        fd([
+          ["waitMin", "5"],
+          ["waitMin:b", "1.5"],
+          ["waitMin:a", "0"],
+          ["waitMin:c", " "],
+        ]),
+      ),
+    ).toEqual({ "*": 300, b: 90, a: 0 });
+  });
+  it("blank everywhere clears the plan; a form without the fields leaves it alone", () => {
+    expect(parseWaits(fd([["waitMin", ""]]))).toEqual({});
+    expect(parseWaits(fd([["name", "x"]]))).toBeUndefined();
   });
 });

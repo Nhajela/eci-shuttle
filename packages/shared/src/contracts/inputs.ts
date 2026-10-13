@@ -62,6 +62,17 @@ export const RouteUpdateFields = z.object({
   path: z.array(LatLng).min(2).max(5000).optional(),
   /** regenerate from the routing API (OSRM, falling back to straight segments) */
   regeneratePath: z.boolean().optional(),
+  /**
+   * Planned wait at stops, in seconds, replacing the whole plan: "*" = every stop, a spot id = that stop
+   * (overrides "*"). E.g. {"*": 300} = wait 5 min at each stop; {} = no plan. Learned dwells win once they
+   * have enough samples.
+   */
+  plannedDwellS: z
+    .record(
+      z.string().refine((k) => k === "*" || Id.safeParse(k).success, "a spot id or *"),
+      z.number().int().min(0).max(3600),
+    )
+    .optional(),
 });
 
 // ---------- services ----------

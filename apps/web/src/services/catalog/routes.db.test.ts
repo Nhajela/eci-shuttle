@@ -107,6 +107,50 @@ describe("updateRoute", () => {
     expect(audit.at(-1)?.after).toMatchObject({ name: "Renamed", version: 2 });
   });
 
+  it("sets the planned wait at each stop ('*') and per-stop overrides, audited, without touching the path", async () => {
+    const { ws, actor, riva, circle } = await setup();
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
+    const deps = osrm([[0, 0]]);
+    const plan = { "*": 300, [circle.id]: 120 };
+    const u = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, plannedDwellS: plan }, deps);
+    expect(u).toMatchObject({ plannedDwellS: plan, version: 2, path: r.path });
+    expect(deps.fetch).not.toHaveBeenCalled();
+    const audit = await auditFor(r.id);
+    expect(audit.at(-1)).toMatchObject({ action: "route.update", before: { plannedDwellS: {} } });
+    expect(audit.at(-1)?.after).toMatchObject({ plannedDwellS: plan });
+    // {} clears the plan
+    const cleared = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, plannedDwellS: {} });
+    expect(cleared.plannedDwellS).toEqual({});
+  });
+
+  it("refuses a planned wait for a spot that isn't on the route, or a silly number", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
+    const up = (plannedDwellS: Record<string, number>) =>
+      updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, plannedDwellS });
+    await expect(up({ [party.id]: 60 })).rejects.toMatchObject({ code: "INVALID" });
+    await expect(up({ nope: 60 })).rejects.toMatchObject({ code: "INVALID" });
+    await expect(up({ "*": -1 })).rejects.toMatchObject({ code: "INVALID" });
+    await expect(up({ "*": 4 * 3600 })).rejects.toMatchObject({ code: "INVALID" });
+  });
+
+  it("new stops drop the planned wait of stops no longer on the route, and keep the default", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
+    await updateRoute(db(), actor, {
+      workspaceId: ws.id,
+      routeId: r.id,
+      plannedDwellS: { "*": 300, [circle.id]: 120, [riva.id]: 60 },
+    });
+    const u = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [riva.id, party.id] },
+      offline,
+    );
+    expect(u.plannedDwellS).toEqual({ "*": 300, [riva.id]: 60 });
+  });
+
   it("changing spotIds regenerates the path", async () => {
     const { ws, actor, riva, circle, party } = await setup();
     const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);

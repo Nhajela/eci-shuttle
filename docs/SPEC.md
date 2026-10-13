@@ -100,7 +100,7 @@ service layer takes `workspaceId` on every call.
 | `devices` | id, label, token_hash, push_token, model, app_version, update_id, last_sync_at, battery, reported_mode, reported_config_version, killed_at, revoked_at | A phone. Created by QR pairing. |
 | `vehicles` | id, name, plate, colour, capacity, active | What attendees see. |
 | `spots` | id, name, short_name, lat, lng, radius_m, notes, photo, archived | Any pick-up or drop point: Riva, Circle, a party venue, the beach. Picked on a map in admin. |
-| `routes` | id, name, spot_ids[] (ordered), path (polyline), typical_leg_s[] | Riva → Circle → Riva, or Riva → Party → Riva. The path is generated once from a routing API when saved, then editable. Leg times learned from trips. |
+| `routes` | id, name, spot_ids[] (ordered), path (polyline), typical_leg_s[], planned_dwell_s (seconds: `"*"` = every stop, a spot id = that stop) | Riva → Circle → Riva, or Riva → Party → Riva. The path is generated once from a routing API when saved, then editable. Leg times learned from trips. The planned wait at stops (e.g. 5 min for boarding) stands in for the dwell until a learned dwell has ≥ 5 samples. |
 | `services` | id, name, kind (`regular`, `special`), route_id, public, colour, valid_from, valid_to, days_of_week, start_time, end_time, pattern (`every N min` or explicit departure times) | The schedule. Regular = the daily Riva↔Circle loop. Special = "Party shuttle, Sat 22:00–02:00". |
 | `service_exceptions` | service_id, date, kind (`cancel_day`, `cancel_departure`, `add_departure`, `shift_minutes`), note | Edits to one day without touching the pattern. |
 | `service_vehicles` | service_id, vehicle_id, starts_at, ends_at | Which vehicle runs which service, and when. A vehicle used for a party is moved here, and drops out of the Riva↔Circle ETA for those hours. |
@@ -284,6 +284,8 @@ pings → dwells (arrived/left a spot) → trips (spot → spot) → departure m
 - Rolling window of the last 7 service days, newer days weighted more. Each stat falls back down a ladder when
   data is thin: leg + hour bucket → leg all day → path distance ÷ 25 km/h (day-1 baseline). The fallback level
   is stored, so the UI can say "estimate" until there are at least 5 samples.
+  Dwells: learned (≥ 5 samples) → the route's planned wait at that stop (`planned_dwell_s`, set on the Routes page
+  or MCP `route.update`) → 3 min baseline. The planned wait feeds the loop's "about every N min", ETAs and chains.
 - Trips that went off route, had GPS gaps, or ran more than 3× the median are dropped from the stats. Admin can
   mark a day as "don't learn from this" (e.g. a road closure). Special services learn on their own
   legs, so a party night doesn't distort the Riva↔Circle numbers.

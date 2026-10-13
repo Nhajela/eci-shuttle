@@ -2,7 +2,7 @@
 /** admin-routes server actions: parse the form, build the Actor (ops+), call services/catalog/routes, map errors. */
 import { revalidatePath } from "next/cache";
 import { unstable_rethrow } from "next/navigation";
-import { parsePath } from "@/components/admin/routes/routes";
+import { parsePath, parseWaits } from "@/components/admin/routes/routes";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { createRoute, updateRoute } from "@/services/catalog/routes";
@@ -37,6 +37,7 @@ export async function createRouteAction(_: ActionState, fd: FormData): Promise<A
 }
 
 export async function updateRouteAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const waits = parseWaits(fd);
   return run(fd, "Route saved.", (actor, workspaceId) =>
     updateRoute(db(), actor, {
       workspaceId,
@@ -45,6 +46,7 @@ export async function updateRouteAction(_: ActionState, fd: FormData): Promise<A
       name: str(fd, "name"),
       // the form sends spots only when they changed: a rename must not regenerate the path or trip on archived spots
       ...(fd.has("spotId") && { spotIds: fd.getAll("spotId").map(String) }),
+      ...(waits && { plannedDwellS: waits }),
     }),
   );
 }

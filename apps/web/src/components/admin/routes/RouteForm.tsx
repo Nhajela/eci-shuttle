@@ -11,6 +11,8 @@ import { useActionToast } from "./useActionToast";
 
 type SpotOption = { id: string; name: string };
 
+const minutes = (s: number | undefined) => (s == null ? "" : s / 60);
+
 /** Create a route, or edit one's name and ordered spots. A loop repeats the first spot at the end. */
 export function RouteForm({
   w,
@@ -24,7 +26,15 @@ export function RouteForm({
   spots: SpotOption[];
   /** every spot's name, archived ones included, for spots already on the route */
   names: Record<string, string>;
-  route?: { id: string; version: number; name: string; spotIds: string[]; pathSource?: PathSource };
+  route?: {
+    id: string;
+    version: number;
+    name: string;
+    spotIds: string[];
+    pathSource?: PathSource;
+    /** planned wait in seconds: "*" = every stop, a spot id = that stop */
+    plannedDwellS?: Record<string, number>;
+  };
   onDone?: () => void;
 }) {
   const [order, setOrder] = useState<string[]>(route?.spotIds ?? []);
@@ -36,6 +46,8 @@ export function RouteForm({
 
   // edits send the spots only when they changed, so a rename keeps the path (and works with archived spots on it)
   const spotsChanged = !route || order.join() !== route.spotIds.join();
+  const plan = route?.plannedDwellS ?? {};
+  const stops = [...new Set(order)];
 
   return (
     <form
@@ -145,6 +157,54 @@ export function RouteForm({
           </Button>
         )}
       </fieldset>
+
+      {route && (
+        <fieldset className="flex flex-col gap-2">
+          <Label htmlFor={`wait-${route.id}`}>Wait at each stop (min)</Label>
+          <Input
+            id={`wait-${route.id}`}
+            name="waitMin"
+            type="number"
+            inputMode="decimal"
+            min={0}
+            max={60}
+            step="any"
+            defaultValue={minutes(plan["*"])}
+            placeholder="Not set"
+            className="h-11"
+          />
+          <p className="text-xs text-muted-foreground">
+            Boarding time. Used for &ldquo;about every N min&rdquo; and arrival times until real waits are learned.
+          </p>
+          <details>
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
+              Different wait at a stop
+            </summary>
+            <div className="flex flex-col gap-1.5">
+              {stops.map((id) => (
+                <div key={id} className="flex items-center gap-2">
+                  <Label htmlFor={`wait-${route.id}-${id}`} className="min-w-0 flex-1 truncate font-normal">
+                    {names[id] ?? "Unknown spot"}
+                  </Label>
+                  <Input
+                    id={`wait-${route.id}-${id}`}
+                    name={`waitMin:${id}`}
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    max={60}
+                    step="any"
+                    defaultValue={minutes(plan[id])}
+                    placeholder="Same"
+                    aria-label={`Wait at ${names[id] ?? "this stop"} (min)`}
+                    className="h-11 w-24"
+                  />
+                </div>
+              ))}
+            </div>
+          </details>
+        </fieldset>
+      )}
 
       <div className="sticky bottom-0 -mx-1 bg-card px-1 py-2">
         <Button type="submit" size="lg" className="w-full" disabled={pending || order.length < 2}>

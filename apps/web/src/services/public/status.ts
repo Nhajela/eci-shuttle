@@ -17,9 +17,11 @@ import {
   type PublicSpot,
   type PublicStatus,
   pathLengthM,
+  plannedDwellS,
   type ScheduleRow,
   type ServiceDef,
   type ServiceExceptionDef,
+  withPlannedDwell,
 } from "@eci-shuttle/shared";
 import { and, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
 import type { Db } from "@/db";
@@ -195,9 +197,10 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
     const dwells: Record<string, LegEstimate> = {};
     for (const id of ids)
       dwells[id] ??=
-        learned(pick("dwell", id, null, hour), "leg_hour") ??
-        learned(pick("dwell", id, null, null), "leg_day") ??
-        flat(BASELINE_DWELL_S);
+        withPlannedDwell(
+          learned(pick("dwell", id, null, hour), "leg_hour") ?? learned(pick("dwell", id, null, null), "leg_day"),
+          plannedDwellS(route.plannedDwellS, id),
+        ) ?? flat(BASELINE_DWELL_S);
     // departing spot k = legs before it + the dwells at every spot after the first, up to and including k
     const offsetMs = [0];
     for (let k = 1; k < ids.length; k++)

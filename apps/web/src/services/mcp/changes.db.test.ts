@@ -179,6 +179,18 @@ describe("describeChange", () => {
     expect(await d({ kind: "route.update", routeId: route.id, name: "Beach loop", regeneratePath: true })).toBe(
       "Change route 'Riva ↔ Circle': name 'Beach loop', regenerate the path",
     );
+    expect(await d({ kind: "route.update", routeId: route.id, plannedDwellS: { "*": 300 } })).toBe(
+      "Change route 'Riva ↔ Circle': wait 5 min at each stop",
+    );
+    expect(
+      await d({ kind: "route.update", routeId: route.id, plannedDwellS: { "*": 300, [circle.id]: 90, [riva.id]: 0 } }),
+    ).toBe("Change route 'Riva ↔ Circle': wait 5 min at each stop, 1.5 min at Circle, no wait at Riva");
+    expect(await d({ kind: "route.update", routeId: route.id, plannedDwellS: { [circle.id]: 120 } })).toBe(
+      "Change route 'Riva ↔ Circle': wait 2 min at Circle",
+    );
+    expect(await d({ kind: "route.update", routeId: route.id, plannedDwellS: {} })).toBe(
+      "Change route 'Riva ↔ Circle': no planned wait at stops",
+    );
     expect(await d({ kind: "spot.update", spotId: riva.id, name: "Riva Beach", radiusM: 80, notes: null })).toBe(
       "Change spot 'Riva': name 'Riva Beach', radius 80 m, clear notes",
     );

@@ -386,8 +386,8 @@ async function offRouteStart(tx: Db, vehicleId: string, path: LatLng[], lastAt: 
 
 /**
  * Next spot, metres along the path and ETA to the next spot, from the learned leg and dwell times
- * (learning.loadEstimates falls back to the day-1 baseline per leg until it has samples; a spot with no learned
- * dwell uses the route's planned dwell when it has one).
+ * (learning.loadEstimates falls back to the day-1 baseline per leg until it has samples, and to the route's planned
+ * wait at a spot until its learned dwell has enough).
  */
 async function routeProgress(
   db: Db,
@@ -405,19 +405,10 @@ async function routeProgress(
   if (!nextSpotId || path.length < 2 || idx.length !== spotIds.length) return { nextSpotId, etaS: null, alongM: null };
   const nowMs = now.getTime();
   const legPath = (i: number) => path.slice(idx[i], idx[i + 1] + 1);
-  const { legs, dwells: learned } = await loadEstimates(
+  const { legs, dwells } = await loadEstimates(
     db,
     { workspaceId: route.workspaceId, routeId: route.id, serviceId },
     now,
-  );
-  const dwells = Object.fromEntries(
-    Object.entries(learned).map(([id, d]) => {
-      const planned = route.plannedDwellS[id];
-      return [
-        id,
-        d.level === "baseline" && planned != null ? { ...d, medianS: planned, p20S: planned, p80S: planned } : d,
-      ];
-    }),
   );
   const alongLegM = !atSpot && fix ? projectOntoPath(legPath(k), fix).alongM : 0;
   const vehicle: EtaVehicle = atSpot

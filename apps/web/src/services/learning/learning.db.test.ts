@@ -291,6 +291,25 @@ describe("loadEstimates", () => {
     expect(r.cycleS).toBeCloseTo(legs + 360, 0);
   });
 
+  it("uses the route's planned wait at stops until the learned dwell has enough samples", async () => {
+    const w = await world();
+    await db()
+      .update(routes)
+      .set({ plannedDwellS: { "*": 300, [w.circle.id]: 120 } })
+      .where(eq(routes.id, w.route.id));
+    const input = { workspaceId: w.ws.id, routeId: w.route.id, serviceId: w.regular.id };
+    const r = await loadEstimates(db(), input, NOW);
+    expect(r.dwells[w.riva.id]?.medianS).toBe(300);
+    expect(r.dwells[w.circle.id]?.medianS).toBe(120);
+    expect(r.cycleS).toBeCloseTo(r.legs.reduce((s, l) => s + l.estimate.medianS, 0) + 420, 0);
+
+    for (const day of DAYS) await dwell(w, w.circle.id, ist(day, "09:50"), 60);
+    await recomputeAll(db(), w.ws.id, NOW);
+    const learned = await loadEstimates(db(), input, NOW);
+    expect(learned.dwells[w.circle.id]).toMatchObject({ medianS: 60, thin: false });
+    expect(learned.dwells[w.riva.id]?.medianS).toBe(300);
+  });
+
   it("special services read their own stats", async () => {
     const w = await world();
     await sixMorningTrips(w);
