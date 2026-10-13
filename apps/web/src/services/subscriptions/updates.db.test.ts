@@ -67,9 +67,10 @@ describe("runUpdates", () => {
     const sub = await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
     status.mockResolvedValue(world([{ spotId: riva.id, name: "Riva", lines: [line({ serviceName: "Shuttle" })] }]));
 
-    expect(await runUpdates(db(), later(10), { workspaceId: ws.id })).toEqual({ sent: 0 });
+    expect(await runUpdates(db(), later(10), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     expect(await runUpdates(db(), new Date(NOW.getTime() + UPDATE_EVERY_MS), { workspaceId: ws.id })).toEqual({
       sent: 1,
+      ended: 0,
     });
     const [job] = await sent(ws.id);
     expect(job.payload).toMatchObject({
@@ -80,9 +81,9 @@ describe("runUpdates", () => {
     });
     expect((job.payload as { html: string }).html).toContain("<b>Riva</b>\nShuttle: here in <b>6 min</b>");
     // a second run in the same minute sends nothing more
-    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0 });
-    expect(await runUpdates(db(), later(29), { workspaceId: ws.id })).toEqual({ sent: 0 });
-    expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1 });
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(29), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
   });
 
   it("all stops in one message; quiet outside shuttle hours, after /stop, or when the bot is blocked", async () => {
@@ -102,7 +103,7 @@ describe("runUpdates", () => {
         { spotId: circle.id, name: "Circle", lines: [first] },
       ]),
     );
-    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0 });
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
 
     status.mockResolvedValue(
       world([
@@ -110,15 +111,54 @@ describe("runUpdates", () => {
         { spotId: circle.id, name: "Circle", lines: [line({ minutes: 12 })] },
       ]),
     );
-    expect(await runUpdates(db(), later(16), { workspaceId: ws.id })).toEqual({ sent: 1 });
+    expect(await runUpdates(db(), later(16), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
     const html = ((await sent(ws.id))[0].payload as { html: string }).html;
     expect(html).toContain("<b>Riva</b>");
     expect(html).toContain("<b>Circle</b>");
 
     await db().update(people).set({ blockedBotAt: NOW }).where(eq(people.id, person.id));
-    expect(await runUpdates(db(), later(40), { workspaceId: ws.id })).toEqual({ sent: 0 });
+    expect(await runUpdates(db(), later(40), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     await db().update(people).set({ blockedBotAt: null }).where(eq(people.id, person.id));
     await unsubscribe(db(), actor, { workspaceId: ws.id, subscriptionId: sub.id }, later(41));
-    expect(await runUpdates(db(), later(60), { workspaceId: ws.id })).toEqual({ sent: 0 });
+    expect(await runUpdates(db(), later(60), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+  });
+});
+
+describe("runUpdates: end of service", () => {
+  const done = () =>
+    line({ kind: "none", minutes: null, rangeLo: null, rangeHi: null, phaseText: "no more shuttles today" });
+  const live = (riva: string) => world([{ spotId: riva, name: "Riva", lines: [line()] }]);
+
+  it("after the day's last shuttle: one 'finished for today', then quiet; it starts again the next day", async () => {
+    const { ws, riva, person, actor } = await setup();
+    const sub = await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
+    status.mockResolvedValue(world([{ spotId: riva.id, name: "Riva", lines: [done()] }]));
+    // even before the 15 min are up
+    expect(await runUpdates(db(), later(3), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 1 });
+    const [job] = await sent(ws.id);
+    expect(job.payload).toMatchObject({ chatId: person.telegramId, kind: "update" });
+    expect((job.payload as { html: string }).html).toContain("finished for today");
+    const [row] = await db().select().from(subscriptions).where(eq(subscriptions.id, sub.id));
+    expect(row).toMatchObject({ cancelledAt: null, dayEndedOn: "2026-10-13" });
+    expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    // next morning, before and once the shuttle runs
+    expect(await runUpdates(db(), later(22 * 60), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    status.mockResolvedValue(live(riva.id));
+    expect(await runUpdates(db(), later(23 * 60), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+  });
+
+  it("a day it got no update on (no shuttles, or subscribed after hours) stays quiet", async () => {
+    const { ws, riva, actor } = await setup();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
+    status.mockResolvedValue(world([{ spotId: riva.id, name: "Riva", lines: [done()] }]));
+    expect(await runUpdates(db(), later(24 * 60), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+  });
+
+  it("before the first shuttle it just waits", async () => {
+    const { ws, riva, actor } = await setup();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
+    const first = line({ kind: "timetable", minutes: null, phaseText: "first shuttle today", nextAtLabel: "08:30" });
+    status.mockResolvedValue(world([{ spotId: riva.id, name: "Riva", lines: [first] }]));
+    expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
   });
 });

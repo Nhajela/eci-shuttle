@@ -3,8 +3,8 @@
  * only while a shuttle is running there. One open `updates` subscription per person; /stop or the button ends it.
  * Subscribing is audited (subscription.create); sending is worker bookkeeping (last_sent_at), not audited.
  */
-import type { AnswerLine, PublicSpot } from "@eci-shuttle/shared";
-import { and, eq, isNull, lte, or, type SQL } from "drizzle-orm";
+import { type AnswerLine, istDate, type PublicSpot } from "@eci-shuttle/shared";
+import { and, eq, isNull, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import { people, spots, subscriptions } from "@/db/schema";
@@ -70,9 +70,45 @@ export async function subscribeUpdates(
   );
 }
 
+/** Attendee: end their 15-min updates. Returns how many were open. Audited subscription.cancel. */
+export async function unsubscribeUpdates(
+  db: Db,
+  actor: Actor,
+  input: { workspaceId: string },
+  now: Date,
+): Promise<number> {
+  if (actor.kind !== "attendee" || (actor.workspaceId && actor.workspaceId !== input.workspaceId))
+    throw new ServiceError("FORBIDDEN", "Not allowed.");
+  const mine = and(
+    eq(subscriptions.personId, actor.id),
+    eq(subscriptions.workspaceId, input.workspaceId),
+    eq(subscriptions.kind, "updates"),
+    open,
+  );
+  const [any] = await db.select({ id: subscriptions.id }).from(subscriptions).where(mine).limit(1);
+  if (!any) return 0;
+  return mutate(
+    db,
+    actor,
+    { action: "subscription.cancel", entity: "subscription", entityId: any.id, workspaceId: input.workspaceId },
+    async (tx) => {
+      const rows = await tx.update(subscriptions).set({ cancelledAt: now }).where(mine).returning();
+      return { before: { open: rows.length }, after: { open: 0 }, result: rows.length };
+    },
+  );
+}
+
 /** A line worth an update: a shuttle is out (live, on a break, between departures), not before or after hours. */
 const running = (l: AnswerLine) =>
   l.kind === "live" || (l.kind === "timetable" && l.phaseText !== "first shuttle today");
+
+/** Pure. Nothing more today at any of these stops (every line "no more shuttles today", or none run today). */
+export function dayOver(list: PublicSpot[]): boolean {
+  return list.every((s) => s.answers.every((l) => l.kind === "none"));
+}
+
+export const DAY_OVER_TEXT =
+  "The shuttle has finished for today, so no more updates today. They start again when it runs tomorrow. /unsubscribe stops them.";
 
 /** Pure. The update text for these stops, or null when no shuttle is running at any of them. */
 export function updateText(list: PublicSpot[]): string | null {
@@ -82,13 +118,18 @@ export function updateText(list: PublicSpot[]): string | null {
 }
 
 /**
- * The updates job (every minute): each open `updates` subscription whose last update is ≥ 15 min old gets the
- * current answer for its stop (or every stop), as a Telegram DM with a "Stop updates" button, when a shuttle is
- * running there. Blocked-bot people are skipped. last_sent_at moves only when something is sent, and only the run
- * that moves it sends (safe to run twice).
+ * The updates job (every minute), over every open `updates` subscription (blocked-bot people skipped):
+ * - the day's shuttles are over at its stop(s) and it got an update today → one "finished for today" message
+ *   (day_ended_on = today); it stays on, so updates start again when the shuttle runs the next day;
+ * - else, its last update ≥ 15 min old and a shuttle running there → the current answer, with a "Stop updates"
+ *   button. last_sent_at moves only when something is sent, and only the run that moves it sends.
  */
-export async function runUpdates(db: Db, now: Date, input: { workspaceId?: string } = {}): Promise<{ sent: number }> {
-  const due = await db
+export async function runUpdates(
+  db: Db,
+  now: Date,
+  input: { workspaceId?: string } = {},
+): Promise<{ sent: number; ended: number }> {
+  const open_ = await db
     .select({ sub: subscriptions, person: people })
     .from(subscriptions)
     .innerJoin(people, eq(people.id, subscriptions.personId))
@@ -98,23 +139,26 @@ export async function runUpdates(db: Db, now: Date, input: { workspaceId?: strin
         open,
         isNull(people.blockedBotAt),
         input.workspaceId ? eq(subscriptions.workspaceId, input.workspaceId) : undefined,
-        or(
-          isNull(subscriptions.lastSentAt),
-          lte(subscriptions.lastSentAt, new Date(now.getTime() - UPDATE_EVERY_MS + SLACK_MS)),
-        ),
       ),
     );
+  const dueBy = now.getTime() - UPDATE_EVERY_MS + SLACK_MS;
   const statuses = new Map<string, ReturnType<typeof publicStatus>>();
   let sent = 0;
-  for (const { sub, person } of due) {
+  let ended = 0;
+  for (const { sub, person } of open_) {
     if (!statuses.has(sub.workspaceId)) statuses.set(sub.workspaceId, publicStatus(db, sub.workspaceId, now));
     const st = await (statuses.get(sub.workspaceId) as ReturnType<typeof publicStatus>);
-    const html = updateText(sub.spotId ? st.spots.filter((s) => s.spotId === sub.spotId) : st.spots);
+    const list = sub.spotId ? st.spots.filter((s) => s.spotId === sub.spotId) : st.spots;
+    const today = istDate(now);
+    // only after a day it got updates on, once: a day without shuttles, or after the goodbye, stays quiet
+    const over = dayOver(list) && sub.dayEndedOn !== today && !!sub.lastSentAt && istDate(sub.lastSentAt) === today;
+    if (dayOver(list) && !over) continue;
+    const html = over ? DAY_OVER_TEXT : (sub.lastSentAt?.getTime() ?? 0) <= dueBy ? updateText(list) : null;
     if (!html) continue;
     const ok = await db.transaction(async (tx) => {
       const rows = await tx
         .update(subscriptions)
-        .set({ lastSentAt: now })
+        .set(over ? { dayEndedOn: today } : { lastSentAt: now })
         .where(
           and(
             eq(subscriptions.id, sub.id),
@@ -131,14 +175,20 @@ export async function runUpdates(db: Db, now: Date, input: { workspaceId?: strin
           html,
           kind: "update",
           personId: person.id,
-          buttons: [[{ text: "Stop updates", callbackData: encodeCallback({ action: "nunsub", args: [sub.id] }) }]],
+          ...(over
+            ? {}
+            : {
+                buttons: [
+                  [{ text: "Stop updates", callbackData: encodeCallback({ action: "nunsub", args: [sub.id] }) }],
+                ],
+              }),
         },
         workspaceId: sub.workspaceId,
-        dedupeKey: `update:${sub.id}:${now.getTime()}`,
+        dedupeKey: `update:${sub.id}:${over ? `end:${today}` : now.getTime()}`,
       });
       return true;
     });
-    if (ok) sent++;
+    if (ok) over ? ended++ : sent++;
   }
-  return { sent };
+  return { sent, ended };
 }

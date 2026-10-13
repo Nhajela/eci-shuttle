@@ -661,6 +661,8 @@ export const subscriptions = pgTable(
     cancelledAt: ts("cancelled_at"),
     /** updates: when the last 15-min update went out (worker bookkeeping, not audited) */
     lastSentAt: ts("last_sent_at"),
+    /** updates: the IST day its "finished for today" went out; updates start again the next day */
+    dayEndedOn: date("day_ended_on", { mode: "string" }),
     createdAt: createdAt(),
   },
   (t) => [

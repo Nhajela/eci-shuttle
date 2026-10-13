@@ -7,7 +7,7 @@ import type { Spot } from "@/db/types";
 import { attendeeActor } from "../auth/actor";
 import { publicStatus, spotAnswer } from "../public/status";
 import { mySubscriptions } from "../subscriptions/subscriptions";
-import { onAttendeeCallback, onShuttle, onSpot, onStop, onSubscribe, renderAnswer } from "./attendee";
+import { onAttendeeCallback, onShuttle, onSpot, onStop, onSubscribe, onUnsubscribe, renderAnswer } from "./attendee";
 import type { BotContext } from "./types";
 
 vi.mock("../public/status", () => ({ publicStatus: vi.fn(), spotAnswer: vi.fn() }));
@@ -229,5 +229,28 @@ describe("/subscribe", () => {
     );
     expect(subs.map((x) => x.spotId)).toEqual([null]);
     expect(riva).toBeTruthy();
+  });
+});
+
+describe("/unsubscribe and after hours", () => {
+  it("/unsubscribe ends the 15-min updates only", async () => {
+    const { ctx, riva } = await setup();
+    const me = attendee(ctx.person, ctx.workspace.id);
+    const mine = () => mySubscriptions(db(), me, { workspaceId: ctx.workspace.id }, NOW);
+    expect((await onUnsubscribe(ctx)).send[0].html).toContain("weren't getting");
+    await onSubscribe(ctx, "riva");
+    await onAttendeeCallback(ctx, { action: "nsub", args: [riva.id] }, { id: "q", from: { id: 1 }, data: "" } as never);
+    expect((await onUnsubscribe(ctx)).send[0].html).toContain("No more shuttle updates");
+    expect((await mine()).map((s) => s.kind)).toEqual(["notices"]);
+  });
+
+  it("subscribing after the day's last shuttle says updates start when it runs tomorrow", async () => {
+    const { ctx } = await setup((r, c) =>
+      [r, c].map((s) =>
+        pubSpot(s, { answers: [line({ kind: "none", minutes: null, phaseText: "no more shuttles today" })] }),
+      ),
+    );
+    const r = await onSubscribe(ctx, "riva");
+    expect(r.send[0].html).toContain("finished for today");
   });
 });

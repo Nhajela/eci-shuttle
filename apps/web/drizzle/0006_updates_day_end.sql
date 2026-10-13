@@ -1,0 +1,1 @@
+ALTER TABLE "subscriptions" ADD COLUMN "day_ended_on" date;

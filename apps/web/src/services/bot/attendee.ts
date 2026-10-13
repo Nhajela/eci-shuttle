@@ -9,7 +9,7 @@ import { attendeeActor } from "../auth/actor";
 import { findInWorkspace, isServiceError, type TelegramButton, userMessage } from "../kernel";
 import { publicStatus } from "../public/status";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
-import { subscribeUpdates, updateText } from "../subscriptions/updates";
+import { DAY_OVER_TEXT, dayOver, subscribeUpdates, unsubscribeUpdates, updateText } from "../subscriptions/updates";
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
@@ -119,11 +119,17 @@ async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotRe
   const list = spotId ? st.spots.filter((s) => s.spotId === spotId) : st.spots;
   const where = spotId ? `<b>${esc(list[0]?.name ?? "that stop")}</b>` : "every stop";
   const now = updateText(list);
-  return say(
-    ctx,
-    `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} every 15 min while the shuttle runs. /stop ends it.`,
-    [[btn("Stop updates", "nunsub", sub.id)]],
-  );
+  const intro = dayOver(list)
+    ? `${DAY_OVER_TEXT.split(" /unsubscribe")[0]} You'll get an update for ${where} every 15 min then.`
+    : `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} every 15 min while the shuttle runs.`;
+  return say(ctx, `${intro} /unsubscribe stops them.`, [[btn("Stop updates", "nunsub", sub.id)]]);
+}
+
+/** `/unsubscribe`: end the 15-min updates (alerts and notices stay; /stop ends everything). */
+export async function onUnsubscribe(ctx: BotContext): Promise<BotReply> {
+  const actor = attendeeActor(ctx.person, ctx.workspace.id);
+  const n = await unsubscribeUpdates(ctx.db, actor, { workspaceId: ctx.workspace.id }, ctx.now);
+  return say(ctx, n ? "Done. No more shuttle updates. /subscribe starts them again." : "You weren't getting updates.");
 }
 
 /** `/stop`: cancel all of the person's subscriptions (subscriptions.unsubscribe "all"). */
