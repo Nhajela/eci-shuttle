@@ -140,10 +140,13 @@ export function StatusView({
 function Answer({ spot, ageS }: { spot: PublicSpot; ageS: number }) {
   if (spot.answers.length === 0)
     return <p className="text-lg text-ink-soft">No public shuttles stop at {spot.name} today.</p>;
-  const single = spot.answers.length === 1;
+  // a finished service ("no more today") only shows when nothing else is coming today
+  const lines = spot.answers.filter((l) => l.kind !== "none");
+  if (lines.length === 0) return <p className="text-lg text-ink-soft">No more shuttles today.</p>;
+  const single = lines.length === 1;
   return (
     <section aria-live="polite" className="flex flex-col gap-4 rounded-card bg-teal-tint px-4 py-5">
-      {spot.answers.map((line) => (
+      {lines.map((line) => (
         <AnswerRow key={line.serviceId} line={line} single={single} ageS={ageS} />
       ))}
     </section>
