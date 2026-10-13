@@ -7,6 +7,7 @@ import {
   buildSyncRequest,
   clockOffsetMs,
   initialSyncState,
+  KILL_ACK_DELAY_MS,
   MAX_BACKOFF_MS,
   MAX_PINGS_PER_SYNC,
   nextSyncDelayMs,
@@ -172,6 +173,15 @@ describe("applyResponse", () => {
   it("keeps the fallback when the origin is unchanged", () => {
     const s = applyResponse(paired({ fallbackOrigin: "https://old.example.com" }), response(), timing);
     expect(s.fallbackOrigin).toBe("https://old.example.com");
+  });
+
+  it("a kill not yet reported back asks for one acknowledging sync; reporting killed clears it", () => {
+    const killed = applyResponse(paired(), response({ killed: true }), timing);
+    expect(killed.killAckPending).toBe(true);
+    expect(nextSyncDelayMs(res({ mode: "killed", intervalS: null }), T, killed)).toBe(KILL_ACK_DELAY_MS);
+    const acked = applyResponse(killed, response({ killed: true }), { ...timing, reportedKilled: true });
+    expect(acked.killAckPending).toBe(false);
+    expect(nextSyncDelayMs(res({ mode: "killed", intervalS: null }), T, acked)).toBeNull();
   });
 
   it("latches a kill: a later response without killed does not clear it", () => {

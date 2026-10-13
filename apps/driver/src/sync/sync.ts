@@ -10,6 +10,8 @@ export const BASE_BACKOFF_MS = 5_000;
 export const MAX_BACKOFF_MS = 5 * 60_000;
 /** SyncRequest.pings max. */
 export const MAX_PINGS_PER_SYNC = 5_000;
+/** how soon a newly killed phone sends its one acknowledging sync */
+export const KILL_ACK_DELAY_MS = 1_000;
 
 /** What the sync loop persists between runs. The caller stores it (on disk) after every sync. */
 export type SyncState = {
@@ -24,6 +26,8 @@ export type SyncState = {
   clockOffsetMs: number;
   /** the driver pressed Resume; sent as resume: true until a sync succeeds */
   resumePending: boolean;
+  /** killed, but the server has not yet heard this phone report "killed": one more sync acknowledges it */
+  killAckPending?: boolean;
   /** phone clock of the last successful sync, for "last successful sync" on the home screen */
   lastSyncAt: number | null;
   /** consecutive failed syncs, drives backoff */
@@ -74,6 +78,7 @@ export function nextSyncDelayMs(
   if (!state.token) return null;
   let regular: number | null = null;
   if (resolution.mode === "active" || (resolution.mode === "killed" && state.resumePending)) regular = ACTIVE_SYNC_MS;
+  else if (resolution.mode === "killed" && state.killAckPending) regular = KILL_ACK_DELAY_MS;
   else if (resolution.mode === "idle" && resolution.intervalS) {
     regular = resolution.intervalS * 1000;
     if (resolution.until !== null) regular = Math.max(1_000, Math.min(regular, resolution.until - now));
@@ -119,7 +124,7 @@ export function buildSyncRequest(state: SyncState, telemetry: Telemetry, pings: 
 export function applyResponse(
   state: SyncState,
   res: SyncResponse,
-  t: { sentAt: number; receivedAt: number; resumeSent: boolean },
+  t: { sentAt: number; receivedAt: number; resumeSent: boolean; reportedKilled?: boolean },
 ): SyncState {
   const killed = res.killed || (!!state.config?.killed && !t.resumeSent);
   const moved = res.apiOrigin !== state.apiOrigin;
@@ -131,6 +136,8 @@ export function applyResponse(
     clockOffsetMs: clockOffsetMs(t.sentAt, t.receivedAt, res.serverTime),
     // a resume that went out is done either way; if still killed the driver can press again
     resumePending: state.resumePending && !t.resumeSent,
+    // a newly killed phone reports "killed" once, so admin sees the kill confirmed (not "still active")
+    killAckPending: killed && !t.reportedKilled,
     lastSyncAt: t.receivedAt,
     failures: 0,
   };

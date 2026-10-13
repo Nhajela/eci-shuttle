@@ -119,6 +119,7 @@ export async function syncOnce(
     sentAt,
     receivedAt: deps.now(),
     resumeSent: req.resume === true,
+    reportedKilled: req.reportedMode === "killed",
   });
   return { ok: true, state: next, response, sentPings: Math.min(pings.length, MAX_PINGS_PER_SYNC) };
 }
