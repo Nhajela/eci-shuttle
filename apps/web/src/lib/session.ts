@@ -5,7 +5,7 @@
  */
 import { ROLE_RANK, type Role } from "@eci-shuttle/shared";
 import { eq } from "drizzle-orm";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { people } from "@/db/schema";
@@ -47,17 +47,24 @@ export async function currentPerson(): Promise<Person | null> {
 }
 
 /**
- * For every admin page and server action: redirects to /login?next=<path> when logged out; resolves the workspace
+ * For every admin page and server action: redirects to /login?next=<path> when logged out, where path is `next`,
+ * else the exact page from the proxy's `x-pathname` header, else /admin (keeping ?w=); resolves the workspace
  * (auth/actor.resolveWorkspace with `w` or the cookie); builds the Actor (channel "web"). Below minRole (default
  * viewer) → a "you don't have access" page. No memberships → "ask an admin to add you".
  */
 export async function requireAdmin(opts: {
   w?: string | null;
   minRole?: Role;
+  next?: string;
 }): Promise<{ person: Person; workspace: Workspace; role: Role; actor: Actor }> {
   const person = await currentPerson();
-  // ponytail: Next gives server components no request path, so we come back to /admin (keeping ?w=), not the exact page
-  if (!person) redirect(`/login?next=${encodeURIComponent(opts.w ? `/admin?w=${opts.w}` : "/admin")}`);
+  if (!person) {
+    const back = safeNext(
+      opts.next ?? (await headers()).get("x-pathname"),
+      opts.w ? `/admin?w=${encodeURIComponent(opts.w)}` : "/admin",
+    );
+    redirect(`/login?next=${encodeURIComponent(back)}`);
+  }
   const slug = opts.w ?? (await cookies()).get(WORKSPACE_COOKIE)?.value;
   const resolved = await resolveWorkspace(db(), person.id, slug);
   if (!resolved) redirect("/login/denied?why=none");
