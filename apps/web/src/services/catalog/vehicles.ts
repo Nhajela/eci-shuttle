@@ -1,9 +1,10 @@
 /** svc-catalog: vehicles (SPEC §3, §7 Vehicles). ops+ writes, viewer+ reads. */
-import { VehicleCreateFields, VehicleUpdateFields, withWorkspace } from "@eci-shuttle/shared";
-import { asc, desc, eq, sql } from "drizzle-orm";
-import type { z } from "zod";
+import { Id, VehicleCreateFields, VehicleUpdateFields, withWorkspace } from "@eci-shuttle/shared";
+import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { z } from "zod";
 import type { Db } from "@/db";
-import { vehicles } from "@/db/schema";
+import { spots, trips, vehicles } from "@/db/schema";
 import type { Vehicle } from "@/db/types";
 import { bumpConfigs } from "@/services/devices/config";
 import {
@@ -62,4 +63,50 @@ export async function listVehicles(db: Db, actor: Actor, input: { workspaceId: s
     .from(vehicles)
     .where(inWorkspace(vehicles, input.workspaceId))
     .orderBy(desc(vehicles.active), asc(vehicles.name));
+}
+
+export const ListVehicleTripsInput = z.object({
+  workspaceId: Id,
+  vehicleId: Id.optional(),
+  since: z.date(),
+  perVehicle: z.number().int().min(1).max(500),
+});
+
+const toSpot = alias(spots, "to_spot");
+
+/**
+ * viewer+. Each vehicle's newest `perVehicle` trips departed since `since` (optionally one vehicle), newest first,
+ * with spot names. `total` is that vehicle's full trip count since `since`, so a card can say how many it hides.
+ */
+export async function listVehicleTrips(db: Db, actor: Actor, input: z.input<typeof ListVehicleTripsInput>) {
+  const { workspaceId, vehicleId, since, perVehicle } = parseInput(ListVehicleTripsInput, input);
+  readable(actor, workspaceId);
+  const ranked = db
+    .select({
+      id: trips.id,
+      vehicleId: trips.vehicleId,
+      departedAt: trips.departedAt,
+      arrivedAt: trips.arrivedAt,
+      durationS: trips.durationS,
+      quality: trips.quality,
+      fromName: sql<string>`${spots.name}`.as("from_name"),
+      toName: sql<string | null>`${toSpot.name}`.as("to_name"),
+      rank: sql<number>`row_number() over (partition by ${trips.vehicleId} order by ${trips.departedAt} desc)`.as(
+        "rank",
+      ),
+      total: sql<number>`(count(*) over (partition by ${trips.vehicleId}))::int`.as("total"),
+    })
+    .from(trips)
+    .innerJoin(spots, eq(spots.id, trips.fromSpotId))
+    .leftJoin(toSpot, eq(toSpot.id, trips.toSpotId))
+    .where(
+      and(
+        inWorkspace(trips, workspaceId),
+        gte(trips.departedAt, since),
+        vehicleId ? eq(trips.vehicleId, vehicleId) : undefined,
+      ),
+    )
+    .as("ranked");
+  const { rank, ...cols } = ranked._.selectedFields;
+  return db.select(cols).from(ranked).where(lte(rank, perVehicle)).orderBy(desc(ranked.departedAt), asc(ranked.id));
 }
