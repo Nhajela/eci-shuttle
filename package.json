@@ -9,6 +9,7 @@
     "test:unit": "vitest run --project unit",
     "test:db": "vitest run --project db",
     "test:e2e": "vitest run --project db apps/web/tests/e2e",
+    "test:ui": "vitest run --config apps/web/tests/e2e-ui/vitest.config.ts",
     "test:watch": "vitest",
     "test-db": "bash scripts/test-db.sh",
     "typecheck": "pnpm -r --parallel typecheck",
