@@ -6,6 +6,7 @@ import { z } from "zod";
 import { ServiceKind } from "./enums";
 import {
   checkException,
+  checkOpsHours,
   NoticeCreateFields,
   NoticeEndFields,
   OtaPhoneFields,
@@ -33,6 +34,7 @@ import {
   VehicleCreateFields,
   VehicleUpdateFields,
   WorkspaceCreateFields,
+  WorkspaceUpdateFields,
 } from "./inputs";
 
 const change = <K extends string, T extends z.ZodRawShape>(kind: K, fields: z.ZodObject<T>) =>
@@ -67,6 +69,7 @@ export const McpChange = z.discriminatedUnion("kind", [
   change("notice.create", NoticeCreateFields),
   change("notice.end", NoticeEndFields),
   change("workspace.create", WorkspaceCreateFields),
+  change("workspace.update", WorkspaceUpdateFields).superRefine(checkOpsHours),
   change("ota.rollout", OtaRolloutFields),
   change("ota.rollback", OtaRollbackFields),
   change("ota.phone", OtaPhoneFields),

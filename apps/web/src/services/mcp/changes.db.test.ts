@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { McpChange } from "@eci-shuttle/shared";
+import { McpChange } from "@eci-shuttle/shared";
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq, sql } from "drizzle-orm";
@@ -19,7 +19,16 @@ import {
   workspaces,
 } from "@/db/schema";
 import type { ServiceError, ServiceErrorCode } from "../kernel";
-import { actorFor, applyChange, changeWarnings, describeChange, liveBoard, loadVersions, versionKeys } from "./changes";
+import {
+  actorFor,
+  applyChange,
+  CHANGE_ROLE,
+  changeWarnings,
+  describeChange,
+  liveBoard,
+  loadVersions,
+  versionKeys,
+} from "./changes";
 
 const db = () => testDb();
 const NOW = new Date("2026-10-12T04:50:00Z"); // Mon 12 Oct, 10:20 IST
@@ -519,9 +528,9 @@ describe("liveBoard", () => {
     expect(board).toEqual([{ vehicle: expect.objectContaining({ id: s.bus.id }), state: null }]);
   });
 
-  it("never shows an off-duty vehicle's position (SPEC §4)", async () => {
+  it("shows an off-duty vehicle's last position kept in ops hours (ingest drops it outside them)", async () => {
     const s = await setup("viewer");
-    const gf = { insideSpotId: null, candidateSpotId: null, enteredAt: null, outsideSince: null };
+    const gf = { insideSpotId: s.riva.id, candidateSpotId: null, enteredAt: null, outsideSince: null };
     await db()
       .insert(vehicleState)
       .values({
@@ -534,7 +543,7 @@ describe("liveBoard", () => {
         geofence: gf as never,
       });
     const [{ state }] = await liveBoard(db(), s.actor, { workspaceId: s.ws.id });
-    expect(state).toMatchObject({ phase: "off_duty", lat: null, lng: null, alongM: null, geofence: null });
+    expect(state).toMatchObject({ phase: "off_duty", lat: 15.6, lng: 73.7, geofence: gf });
   });
 
   it("FORBIDDEN outside the actor's workspace", async () => {
@@ -637,5 +646,46 @@ describe("OTA app updates", () => {
   it("is admin only", async () => {
     const s = await setup("ops");
     await expectCode(applyChange(db(), s.actor, s.ws.id, { kind: "ota.rollout", updateId: U1 }, NOW), "FORBIDDEN");
+  });
+});
+
+describe("workspace.update (ops tracking hours)", () => {
+  const set = { kind: "workspace.update", opsHoursStart: "09:00", opsHoursEnd: "21:00" } as const;
+  const off = { kind: "workspace.update", opsHoursStart: null, opsHoursEnd: null } as const;
+
+  it("validates both-or-neither; admin only; no version keys", () => {
+    expect(McpChange.safeParse(set).success).toBe(true);
+    expect(McpChange.safeParse(off).success).toBe(true);
+    expect(McpChange.safeParse({ ...set, opsHoursEnd: null }).success).toBe(false);
+    expect(McpChange.safeParse({ ...set, opsHoursEnd: "09:00" }).success).toBe(false);
+    expect(CHANGE_ROLE["workspace.update"]).toBe("admin");
+    expect(versionKeys(set)).toEqual([]);
+  });
+
+  it("describes and warns in plain English", async () => {
+    const { ws } = await setup();
+    await db().update(workspaces).set({ name: "Test" }).where(eq(workspaces.id, ws.id));
+    expect(await describeChange(db(), ws.id, set)).toBe(
+      "Track the phones in vehicles in Test every day 09:00–21:00 IST (ops hours), not only during services",
+    );
+    expect(await describeChange(db(), ws.id, off)).toBe(
+      "Turn off ops hours in Test: phones track only during services",
+    );
+    const [w] = await changeWarnings(db(), ws.id, [set], NOW);
+    expect(w).toContain("off duty");
+    expect(w).toContain("never to attendees");
+    expect(await changeWarnings(db(), ws.id, [off], NOW)).toEqual([]);
+  });
+
+  it("applies through catalog/workspaces, audited as workspace.update; refused for ops", async () => {
+    const s = await setup("admin");
+    const actor = { ...s.actor, proposalId: "P-OPSHOURS", reason: "test" };
+    await applyChange(db(), actor, s.ws.id, set, NOW);
+    const [w] = await db().select().from(workspaces).where(eq(workspaces.id, s.ws.id));
+    expect(w).toMatchObject({ opsHoursStart: "09:00", opsHoursEnd: "21:00" });
+    const rows = await db().select().from(auditLog).where(eq(auditLog.proposalId, "P-OPSHOURS"));
+    expect(rows.map((r) => r.action)).toEqual(["workspace.update"]);
+    const ops = await setup("ops");
+    await expectCode(applyChange(db(), ops.actor, ops.ws.id, set, NOW), "FORBIDDEN");
   });
 });

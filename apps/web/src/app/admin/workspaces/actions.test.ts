@@ -4,6 +4,7 @@ import { ServiceError } from "@/services/kernel";
 const m = vi.hoisted(() => ({
   requireAdmin: vi.fn(),
   createWorkspace: vi.fn(),
+  updateWorkspace: vi.fn(),
   createPairingCode: vi.fn(),
   revokePhone: vi.fn(),
   revalidatePath: vi.fn(),
@@ -11,11 +12,14 @@ const m = vi.hoisted(() => ({
 vi.mock("next/cache", () => ({ revalidatePath: m.revalidatePath }));
 vi.mock("@/db", () => ({ db: () => "DB" }));
 vi.mock("@/lib/session", () => ({ requireAdmin: m.requireAdmin }));
-vi.mock("@/services/catalog/workspaces", () => ({ createWorkspace: m.createWorkspace }));
+vi.mock("@/services/catalog/workspaces", () => ({
+  createWorkspace: m.createWorkspace,
+  updateWorkspace: m.updateWorkspace,
+}));
 vi.mock("@/services/devices/pairing", () => ({ createPairingCode: m.createPairingCode }));
 vi.mock("@/services/devices/phones", () => ({ revokePhone: m.revokePhone }));
 
-const { createWorkspaceAction, startSimAction, stopSimAction } = await import("./actions");
+const { createWorkspaceAction, opsHoursAction, startSimAction, stopSimAction } = await import("./actions");
 
 const actor = { kind: "admin", id: "p1" };
 const ws = (isLive: boolean) => ({ id: "ws1", slug: isLive ? "live" : "test", name: "Test", isLive });
@@ -90,5 +94,43 @@ describe("stopSimAction", () => {
     m.revokePhone.mockRejectedValue(new Error("boom"));
     const r = await stopSimAction(null, form({ deviceId: "d1" }));
     expect(r).toEqual({ ok: false, message: "Something went wrong. Try again." });
+  });
+});
+
+describe("opsHoursAction", () => {
+  it("sets the hours (admin), or turns them off when both are empty", async () => {
+    m.updateWorkspace.mockResolvedValue({});
+    const r = await opsHoursAction(null, form({ w: "test", start: "09:00", end: "21:00" }));
+    expect(m.requireAdmin).toHaveBeenCalledWith({ w: "test", minRole: "admin" });
+    expect(m.updateWorkspace).toHaveBeenCalledWith("DB", actor, {
+      workspaceId: "ws1",
+      opsHoursStart: "09:00",
+      opsHoursEnd: "21:00",
+    });
+    expect(r).toEqual({ ok: true, message: "Phones in vehicles track 09:00–21:00 every day." });
+    expect(m.revalidatePath).toHaveBeenCalledWith("/admin/workspaces");
+
+    const off = await opsHoursAction(null, form({ start: "", end: "" }));
+    expect(m.updateWorkspace).toHaveBeenLastCalledWith("DB", actor, {
+      workspaceId: "ws1",
+      opsHoursStart: null,
+      opsHoursEnd: null,
+    });
+    expect(off).toEqual({ ok: true, message: "Ops hours off: phones track only during services." });
+    // the "Turn off" button wins over the times still in the inputs
+    await opsHoursAction(null, form({ start: "09:00", end: "21:00", off: "1" }));
+    expect(m.updateWorkspace).toHaveBeenLastCalledWith("DB", actor, {
+      workspaceId: "ws1",
+      opsHoursStart: null,
+      opsHoursEnd: null,
+    });
+  });
+
+  it("shows the service error in plain words", async () => {
+    m.updateWorkspace.mockRejectedValue(new ServiceError("INVALID", "Set both times, or neither."));
+    expect(await opsHoursAction(null, form({ start: "09:00", end: "" }))).toEqual({
+      ok: false,
+      message: "Set both times, or neither.",
+    });
   });
 });

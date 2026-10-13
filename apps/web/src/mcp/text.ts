@@ -55,6 +55,8 @@ export const WORKSPACE_ARG =
 export const TOOLS_HEADER = "## Tools";
 export const GUIDE_SECTION = `- \`shuttle_guide\`: depth on one area (changes, schedule, phones, notices, roles, learning). Read \`changes\` before your first proposal.`;
 
+const OPS_HOURS_GUIDE = `Ops tracking hours (admin): \`workspace.update { opsHoursStart: "09:00", opsHoursEnd: "21:00" }\` (IST, every day; both null turns them off) makes every phone assigned to a vehicle track all through those hours, not only in service windows. Outside services the vehicle is off duty ("between shifts"): \`shuttle_status\` and the Live board show its last position and "off duty", attendees never see it, no trips or departures are learned from it, and it raises no silent or off-route alert. A silence still pauses a phone; kill and revoke still win.`;
+
 export const GUIDES = {
   changes: `# Changes (propose, then confirm)
 1. Read the current state first (status, schedule, phones…), so ids and versions are current.
@@ -63,7 +65,8 @@ export const GUIDES = {
 4. Confirm runs all changes in one transaction. If anything changed since the proposal, nothing is applied (STALE_VERSION): read again and propose again. An expired or used code is GONE: propose again.
 5. Put related changes in one proposal (e.g. cancel a departure and post a notice about it), so they land together under one proposal id.
 Updates carry an optional \`version\` (from the read tools): pass it, so a change made meanwhile by someone else isn't overwritten.
-App updates go out the same way: \`ota.rollout\`, \`ota.rollback\` (whole workspace) and \`ota.phone\` (one phone); see the phones topic.`,
+App updates go out the same way: \`ota.rollout\`, \`ota.rollback\` (whole workspace) and \`ota.phone\` (one phone); see the phones topic.
+${OPS_HOURS_GUIDE}`,
   schedule: `# Schedule
 - A service is a route run on some days between start and end time (IST), with a pattern: every N minutes, explicit departure times, or a continuous loop (no fixed times; shown as "about every N min").
 - Regular services are the daily Riva ↔ Circle loop; special ones are one-offs (a party shuttle). Only public services show to attendees.
@@ -74,6 +77,7 @@ App updates go out the same way: \`ota.rollout\`, \`ota.rollback\` (whole worksp
 - The planned wait at stops (boarding time) is on the route: \`route.update { routeId, plannedDwellS: { "*": 300 } }\` = wait 5 min at each stop; add a spot id key to override one stop (seconds, 0 = no wait; the map replaces the whole plan, \`{}\` clears it). It feeds "about every N min" and ETAs until enough real dwells are learned.`,
   phones: `# Phones (the drivers' own Android phones)
 - A phone is paired to a workspace with a pairing code (admin), labelled, and assigned to a vehicle. It tracks only inside its tracking windows and is idle otherwise.
+- ${OPS_HOURS_GUIDE}
 - silence (until a time): stop tracking until then. force_active (for some hours): track now even outside a window. nudge: ask the phone to sync now. These are ops.
 - kill: stop the phone's tracking until the driver presses Resume in the app. revoke: wipe its token (lost phone, driver left); it needs pairing again. move_workspace: moves it and clears its assignments. These are admin only, and a phone in a live vehicle right now gets a warning.
 - Health: last sync, battery, permissions, the mode it reports versus the mode it was told.
@@ -88,7 +92,8 @@ App updates go out the same way: \`ota.rollout\`, \`ota.rollback\` (whole worksp
   roles: `# Workspaces and roles
 - \`live\` is what attendees see at the public page. Test workspaces have their own phones, vehicles and schedule, at /w/<slug>; use them to try things.
 - ${ROLES_TEXT}
-- Your role is per workspace; shuttle_initialize lists yours.`,
+- Your role is per workspace; shuttle_initialize lists yours.
+- ${OPS_HOURS_GUIDE}`,
   learning: `# Learning, insights and suggestions
 - Everything is learned from the phones' pings: dwells at spots, trips between them, matches of actual to planned departures, then rolling 7-day stats.
 - ETAs come with a range (p20–p80) and say "about" when data is thin.

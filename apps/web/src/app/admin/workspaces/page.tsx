@@ -2,6 +2,7 @@ import { formatIst } from "@eci-shuttle/shared";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CreateWorkspaceForm } from "@/components/admin/workspaces/create-workspace-form";
+import { OpsHoursForm } from "@/components/admin/workspaces/ops-hours-form";
 import { SimPanel } from "@/components/admin/workspaces/sim-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,6 +61,24 @@ export default async function WorkspacesPage({ searchParams }: { searchParams: P
               </li>
             ))}
           </ul>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ops tracking hours in {workspace.name}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {role === "admin" ? (
+            <OpsHoursForm w={workspace.slug} start={workspace.opsHoursStart} end={workspace.opsHoursEnd} />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              {workspace.opsHoursStart
+                ? `Phones in vehicles track ${workspace.opsHoursStart}–${workspace.opsHoursEnd} every day.`
+                : "Off: phones track only during services."}{" "}
+              Only admins can change this.
+            </p>
+          )}
         </CardContent>
       </Card>
 
