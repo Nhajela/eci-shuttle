@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { decodeCallback, encodeCallback } from "./callbacks";
+import { describe, expect, it, vi } from "vitest";
+import { onAdminCallback } from "./admin";
+import { onAttendeeCallback } from "./attendee";
+import { decodeCallback, encodeCallback, handleCallback } from "./callbacks";
+import type { BotContext, BotReply } from "./types";
+
+vi.mock("./admin", () => ({ onAdminCallback: vi.fn() }));
+vi.mock("./attendee", () => ({ onAttendeeCallback: vi.fn() }));
 
 const UUID = "0b9f6a52-7c1e-4f3a-9d2b-1e5c8a7f6d40";
 
@@ -20,5 +26,36 @@ describe("callback data", () => {
     expect(decodeCallback("bogus:1")).toBeNull();
     expect(decodeCallback("")).toBeNull();
     expect(decodeCallback(undefined)).toBeNull();
+  });
+});
+
+describe("handleCallback", () => {
+  const ctx = { chatId: 1 } as BotContext;
+  const q = (data?: string) => ({ id: "q1", from: { id: 1 }, data });
+  const A: BotReply = { send: [] };
+  const B: BotReply = { send: [], answerCallback: { callbackQueryId: "q1" } };
+
+  it("sends attendee buttons to the attendee side and the rest to admin", async () => {
+    vi.mocked(onAttendeeCallback).mockResolvedValue(A);
+    vi.mocked(onAdminCallback).mockResolvedValue(B);
+    for (const a of ["spot", "arrive", "nsub", "nunsub"]) {
+      expect(await handleCallback(ctx, q(`${a}:x`))).toBe(A);
+      expect(onAttendeeCallback).toHaveBeenLastCalledWith(ctx, { action: a, args: ["x"] }, q(`${a}:x`));
+    }
+    for (const a of ["nudge", "sil1h", "kill", "killok", "cday", "cdayok", "nw", "noop"])
+      expect(await handleCallback(ctx, q(a))).toBe(B);
+    expect(onAdminCallback).toHaveBeenCalledTimes(8);
+  });
+
+  it("answers an unknown or missing button as expired", async () => {
+    vi.mocked(onAttendeeCallback).mockClear();
+    vi.mocked(onAdminCallback).mockClear();
+    for (const data of ["bogus:1", undefined])
+      expect(await handleCallback(ctx, q(data))).toEqual({
+        send: [],
+        answerCallback: { callbackQueryId: "q1", text: "This button has expired" },
+      });
+    expect(onAttendeeCallback).not.toHaveBeenCalled();
+    expect(onAdminCallback).not.toHaveBeenCalled();
   });
 });
