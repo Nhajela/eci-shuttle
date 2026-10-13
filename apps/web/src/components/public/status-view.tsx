@@ -69,11 +69,22 @@ export function StatusView({
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-5 px-4 pt-5 pb-10">
-      <header className="flex items-baseline justify-between gap-3">
-        <h1 className="font-heading text-lg font-semibold text-ink">{status.workspace.name} shuttle</h1>
-        {!status.workspace.isLive && (
-          <span className="rounded-full bg-marigold px-2 py-0.5 text-xs font-bold tracking-wide text-paper">TEST</span>
-        )}
+      <header className="flex items-center justify-between gap-3">
+        <h1 className="flex min-w-0 items-center gap-2 font-heading text-lg font-semibold text-ink">
+          <span className="truncate">{status.workspace.name} shuttle</span>
+          {!status.workspace.isLive && (
+            <span className="rounded-full bg-marigold px-2 py-0.5 text-xs font-bold tracking-wide text-paper">
+              TEST
+            </span>
+          )}
+        </h1>
+        {/* ops only; /admin sends anyone not logged in to the Telegram login */}
+        <a
+          href={slug ? `/admin?w=${encodeURIComponent(slug)}` : "/admin"}
+          className="inline-flex h-11 shrink-0 items-center rounded-field border border-ink/15 bg-sand px-3 text-sm font-medium text-ink-soft hover:text-ink"
+        >
+          Admin login
+        </a>
       </header>
 
       <aside
