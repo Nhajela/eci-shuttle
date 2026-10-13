@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 /** The menu in private chats (never the group). Admin commands (/status /today /notice /silence) stay unlisted: ops know them. */
 export const COMMANDS = [
   { command: "shuttle", description: "Where is the shuttle? Pick your spot" },
-  { command: "stop", description: "Stop all my shuttle alerts" },
+  { command: "subscribe", description: "Shuttle update every 15 min" },
+  { command: "stop", description: "Stop all my shuttle alerts and updates" },
   { command: "login", description: "Log in to admin (ops team)" },
 ];
 
