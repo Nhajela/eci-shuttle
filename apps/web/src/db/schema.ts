@@ -361,7 +361,7 @@ export const deviceAssignments = pgTable(
   },
   (t) => [
     uniqueIndex("device_assignments_open_device").on(t.deviceId).where(sql`${t.endsAt} is null`),
-    uniqueIndex("device_assignments_open_vehicle").on(t.vehicleId).where(sql`${t.endsAt} is null`),
+    // a vehicle may hold several open phones (backup sources); a phone is in one vehicle at a time
     index("device_assignments_vehicle").on(t.vehicleId, t.startsAt),
   ],
 );

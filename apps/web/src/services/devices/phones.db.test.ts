@@ -13,6 +13,7 @@ import {
   directives,
   memberships,
   outbox,
+  pings,
   vehicles,
 } from "@/db/schema";
 import { SILENT_AFTER_MS } from "../alerts/watchdog";
@@ -148,17 +149,18 @@ describe("assignPhone", () => {
     expect(log[1].after).toEqual({ vehicleId: v2.id });
   });
 
-  it("takes the vehicle from the phone that held it and bumps both phones", async () => {
+  it("a vehicle keeps its other phones: several sources back each other up", async () => {
     const { ws, actor, phone } = await setup();
     const other = await makeDevice(ws.id);
     const v = await makeVehicle(ws.id);
     await assignPhone(db(), actor, { workspaceId: ws.id, deviceId: other.id, vehicleId: v.id });
     vi.mocked(bumpConfigs).mockClear();
     await assignPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, vehicleId: v.id });
-    expect(await openAssignments(other.id)).toHaveLength(0);
+    expect(await openAssignments(other.id)).toHaveLength(1);
     expect(await openAssignments(phone.id)).toHaveLength(1);
-    expect(vi.mocked(bumpConfigs).mock.calls[0][1].deviceIds?.sort()).toEqual([phone.id, other.id].sort());
-    expect(await pushes(other.id)).toHaveLength(2);
+    expect(vi.mocked(bumpConfigs).mock.calls[0][1].deviceIds).toEqual([phone.id]);
+    const log = await audits(phone.id);
+    expect(log.at(-1)?.after).toEqual({ vehicleId: v.id });
   });
 
   it("null unassigns; assigning the same vehicle again writes nothing", async () => {
@@ -458,10 +460,15 @@ describe("listPhones", () => {
     await makeDevice(ws.id, { label: "D", lastSyncAt: ago(HOUR) }); // no vehicle
     // E is only inside ops hours (off duty): never silent
     const opsOnly = await makeDevice(ws.id, { label: "E", lastSyncAt: ago(HOUR) });
-    for (const d of [quiet, fresh, never, opsOnly])
+    // F is Telegram live location: it never syncs, its last fix is what counts
+    const tg = await makeDevice(ws.id, { label: "F", appVersion: "telegram" });
+    for (const d of [quiet, fresh, never, opsOnly, tg])
       await db()
         .insert(deviceAssignments)
         .values({ workspaceId: ws.id, deviceId: d.id, vehicleId: (await makeVehicle(ws.id, d.label)).id });
+    await db()
+      .insert(pings)
+      .values({ workspaceId: ws.id, deviceId: tg.id, recordedAt: ago(60_000), lat: 15.6, lng: 73.7, accuracy: 10 });
     vi.mocked(desiredConfig).mockImplementation(
       async (_db, id) =>
         ({
@@ -481,7 +488,9 @@ describe("listPhones", () => {
         C: false,
         D: false,
         E: false,
+        F: false,
       });
+      expect(list.find((p) => p.device.label === "F")?.lastFixAt).toEqual(ago(60_000));
       expect(list.find((p) => p.device.label === "E")?.desiredMode).toBe("active");
     } finally {
       vi.mocked(resolveMode).mockImplementation(

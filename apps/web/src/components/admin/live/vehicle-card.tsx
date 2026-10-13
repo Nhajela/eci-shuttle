@@ -59,6 +59,15 @@ export function VehicleCard({ card, w, canAct }: { card: Card_; w: string | null
           <Fact icon={<Route className="size-4" />} label="Service" value={card.serviceName ?? "None now"} />
           <Fact icon={<Smartphone className="size-4" />} label="Phone" value={card.phoneLabel ?? "No phone"} />
         </dl>
+        {card.sources.length > 1 && (
+          <ul className="flex flex-col gap-1 text-sm" aria-label="Location sources">
+            {card.sources.map((s) => (
+              <li key={s.deviceId} className={s.silent ? "text-orange-800" : "text-muted-foreground"}>
+                {s.label} · {s.silent ? `silent, ${s.text}` : s.text}
+              </li>
+            ))}
+          </ul>
+        )}
         {card.silencedUntilText && (
           <p className="text-sm text-muted-foreground">Silenced till {card.silencedUntilText}</p>
         )}

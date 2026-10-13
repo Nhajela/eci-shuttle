@@ -86,7 +86,9 @@ export function PhoneCard({
           <Badge className={TONE[status.tone]}>{status.label}</Badge>
         </div>
         <p className="text-muted-foreground text-sm">
-          {h.vehicle ? h.vehicle.name : "No vehicle"} · seen {agoText(h.lastSyncAgoS)}
+          {h.vehicle ? h.vehicle.name : "No vehicle"}
+          {d.lastSyncAt && ` · seen ${agoText(h.lastSyncAgoS)}`}
+          {` · location ${agoText(h.lastFixAt ? Math.max(0, Math.floor((now - new Date(h.lastFixAt).getTime()) / 1000)) : null)}`}
           {d.battery !== null && ` · ${Math.round(d.battery)}%${d.charging ? " charging" : ""}`}
         </p>
       </CardHeader>
