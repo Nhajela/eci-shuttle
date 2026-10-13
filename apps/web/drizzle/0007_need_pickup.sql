@@ -1,0 +1,2 @@
+ALTER TABLE "subscriptions" ADD COLUMN "to_spot_id" uuid;--> statement-breakpoint
+ALTER TABLE "subscriptions" ADD CONSTRAINT "subscriptions_to_spot_id_spots_id_fk" FOREIGN KEY ("to_spot_id") REFERENCES "public"."spots"("id") ON DELETE cascade ON UPDATE no action;

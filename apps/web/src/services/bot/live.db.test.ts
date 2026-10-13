@@ -2,7 +2,7 @@ import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { devices } from "@/db/schema";
+import { auditLog, devices } from "@/db/schema";
 import type { Person } from "@/db/types";
 import { createPairingCode } from "../devices/pairing";
 import { syncDevice } from "../devices/sync";
@@ -41,7 +41,11 @@ const locMsg = (telegramId: number, over: Partial<TgMessage> = {}, loc: Partial<
     ...over,
   }) as TgMessage;
 
-beforeEach(() => vi.mocked(syncDevice).mockClear());
+beforeEach(async () => {
+  vi.mocked(syncDevice).mockClear();
+  // pairing's wrong-code cap counts every miss in the DB for 10 min; other files on this worker make misses on purpose
+  await db().delete(auditLog).where(eq(auditLog.action, "device.pair_failed"));
+});
 
 describe("onPair (/pair 123456)", () => {
   it("pairs a Telegram live-location device in the code's workspace, linked to the sender, with instructions", async () => {

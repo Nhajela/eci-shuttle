@@ -16,6 +16,9 @@ export const CallbackAction = z.enum([
   "nsub", // nsub:<spotId|all>           notices for a spot / all
   "nunsub", // nunsub:<subscriptionId|all>
   "usub", // usub:<spotId|all>           /subscribe: updates every 15 min for a spot / all
+  "need", // need:<fromSpotId>            /need: I'm here → asks where to
+  "needto", // needto:<fromSpotId>:<first 8 of toSpotId>  /need: the request
+  "needx", // needx:<requestId>           cancel a /need request
   // login (bot/start)
   "login", // login:<code>               confirms a browser's deep-link login
   // admin (bot/admin)
@@ -57,4 +60,13 @@ export async function handleCallback(ctx: BotContext, query: TgCallbackQuery): P
   return ATTENDEE_ACTIONS.has(cb.action) ? onAttendeeCallback(ctx, cb, query) : onAdminCallback(ctx, cb, query);
 }
 
-const ATTENDEE_ACTIONS = new Set<CallbackAction>(["spot", "arrive", "nsub", "nunsub", "usub"]);
+const ATTENDEE_ACTIONS = new Set<CallbackAction>([
+  "spot",
+  "arrive",
+  "nsub",
+  "nunsub",
+  "usub",
+  "need",
+  "needto",
+  "needx",
+]);

@@ -58,7 +58,8 @@ export type TripQuality = z.infer<typeof TripQuality>;
 export const SuggestionStatus = z.enum(["open", "accepted", "dismissed"]);
 export type SuggestionStatus = z.infer<typeof SuggestionStatus>;
 
-export const SubscriptionKind = z.enum(["arrival_alert", "notices", "updates"]);
+/** pickup = `/need`: "I'm waiting at <spot> for a shuttle to <to_spot>", shown to ops, fired when it's here. */
+export const SubscriptionKind = z.enum(["arrival_alert", "notices", "updates", "pickup"]);
 export type SubscriptionKind = z.infer<typeof SubscriptionKind>;
 
 /** How a public answer line was produced (SPEC §6). */
@@ -80,6 +81,8 @@ export const AlertKind = z.enum([
   "update_failed",
   "admin_changes",
   "digest",
+  /** an attendee asked for a shuttle with /need */
+  "pickup_request",
 ]);
 export type AlertKind = z.infer<typeof AlertKind>;
 

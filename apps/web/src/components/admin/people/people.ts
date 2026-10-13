@@ -25,6 +25,7 @@ export const ALERT_KIND_LABEL: Record<AlertKind, string> = {
   update_failed: "App update failed",
   admin_changes: "Changes by other admins",
   digest: "Nightly digest",
+  pickup_request: "Someone needs a shuttle (/need)",
 };
 
 export type ActionResult = { ok: true; message?: string; token?: string } | { ok: false; error: string };

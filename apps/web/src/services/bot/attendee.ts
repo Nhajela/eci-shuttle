@@ -8,9 +8,11 @@ import { escapeHtml } from "@/lib/telegram/html";
 import { attendeeActor } from "../auth/actor";
 import { findInWorkspace, isServiceError, type TelegramButton, userMessage } from "../kernel";
 import { publicStatus } from "../public/status";
+import { myPickup } from "../subscriptions/need";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
 import { DAY_OVER_TEXT, dayOver, subscribeUpdates, unsubscribeUpdates, updateText } from "../subscriptions/updates";
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
+import { onNeedButton } from "./need";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
 const esc = escapeHtml;
@@ -132,14 +134,16 @@ export async function onUnsubscribe(ctx: BotContext): Promise<BotReply> {
   return say(ctx, n ? "Done. No more shuttle updates. /subscribe starts them again." : "You weren't getting updates.");
 }
 
-/** `/stop`: cancel all of the person's subscriptions (subscriptions.unsubscribe "all"). */
+/** `/stop`: cancel all of the person's subscriptions (subscriptions.unsubscribe "all"), a /need request included. */
 export async function onStop(ctx: BotContext): Promise<BotReply> {
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
+  const pickup = await myPickup(ctx.db, actor, { workspaceId: ctx.workspace.id }, ctx.now);
   const n = await unsubscribe(ctx.db, actor, { workspaceId: ctx.workspace.id, subscriptionId: "all" }, ctx.now);
-  return say(
-    ctx,
-    n ? "Done. I've turned off your alerts, updates and notices." : "You had nothing turned on. Nothing to stop.",
-  );
+  if (!n) return say(ctx, "You had nothing turned on. Nothing to stop.");
+  const others = n - (pickup ? 1 : 0);
+  const request = pickup ? `cancelled your shuttle request (${esc(pickup.from)} → ${esc(pickup.to)})` : "";
+  const rest = others > 0 ? "turned off your alerts, updates and notices" : "";
+  return say(ctx, `Done. I've ${[request, rest].filter(Boolean).join(" and ")}.`);
 }
 
 /** Buttons spot / arrive / nsub / nunsub. */
@@ -187,6 +191,14 @@ export async function onAttendeeCallback(ctx: BotContext, cb: Callback, query: T
       case "nunsub": {
         const n = await unsubscribe(ctx.db, actor, { workspaceId, subscriptionId: arg }, ctx.now);
         return { send: [], answerCallback: ack(n ? "Turned off." : "That was already off.") };
+      }
+      case "need":
+      case "needto":
+      case "needx": {
+        const r = await onNeedButton(ctx, cb);
+        return r === "expired"
+          ? { send: [], answerCallback: ack("This button has expired") }
+          : { ...r, answerCallback: ack() };
       }
       default:
         return { send: [], answerCallback: ack("This button has expired") };

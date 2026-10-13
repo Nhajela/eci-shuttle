@@ -17,6 +17,16 @@ vi.mock("@/services/catalog/breaks", () => ({
   breakEnd: (b: { endsAt: Date | null; endedAt: Date | null }) => b.endedAt ?? b.endsAt,
 }));
 vi.mock("@/services/public/status", () => ({ publicStatus: vi.fn() }));
+vi.mock("@/services/subscriptions/need", () => ({
+  waitingAtSpots: vi.fn(async () => [
+    {
+      spotId: "s1",
+      spotName: "Riva",
+      count: 1,
+      people: [{ requestId: "r1", name: "Asha", toSpotName: "Circle", since: new Date("2026-10-12T19:42:00Z") }],
+    },
+  ]),
+}));
 vi.mock("@/services/learning/insights", () => ({ getInsights: vi.fn(), listSuggestions: vi.fn() }));
 vi.mock("@/services/activity/activity", async (orig) => ({
   ...(await orig<typeof import("@/services/activity/activity")>()),
@@ -161,6 +171,14 @@ describe("tools", () => {
           onBreakUntil: null,
         },
         { vehicle: { id: "v2", name: "Bus 2" }, state: null, onBreakUntil: "01:50" },
+      ],
+      waiting: [
+        {
+          spotId: "s1",
+          spotName: "Riva",
+          count: 1,
+          people: [{ requestId: "r1", name: "Asha", toSpotName: "Circle", since: "Tue 13 Oct, 01:12 IST" }],
+        },
       ],
     });
   });

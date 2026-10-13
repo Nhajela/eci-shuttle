@@ -3,7 +3,7 @@
  * only while a shuttle is running there. One open `updates` subscription per person; /stop or the button ends it.
  * Subscribing is audited (subscription.create); sending is worker bookkeeping (last_sent_at), not audited.
  */
-import { type AnswerLine, istDate, type PublicSpot } from "@eci-shuttle/shared";
+import { istDate, type PublicSpot } from "@eci-shuttle/shared";
 import { and, eq, isNull, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
@@ -13,6 +13,7 @@ import { renderAnswer } from "../bot/attendee";
 import { encodeCallback } from "../bot/callbacks";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError } from "../kernel";
 import { publicStatus } from "../public/status";
+import { running } from "./need-text";
 
 export const UPDATE_EVERY_MS = 15 * 60_000;
 /** the worker runs every minute: a few seconds early still counts as due */
@@ -97,10 +98,6 @@ export async function unsubscribeUpdates(
     },
   );
 }
-
-/** A line worth an update: a shuttle is out (live, on a break, between departures), not before or after hours. */
-const running = (l: AnswerLine) =>
-  l.kind === "live" || (l.kind === "timetable" && l.phaseText !== "first shuttle today");
 
 /** Pure. Nothing more today at any of these stops (every line "no more shuttles today", or none run today). */
 export function dayOver(list: PublicSpot[]): boolean {

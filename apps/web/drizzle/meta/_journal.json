@@ -50,6 +50,13 @@
       "when": 1791871919466,
       "tag": "0006_updates_day_end",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791872163362,
+      "tag": "0007_need_pickup",
+      "breakpoints": true
     }
   ]
 }

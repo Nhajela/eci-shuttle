@@ -19,13 +19,14 @@ import { type Actor, parseInput, ServiceError } from "@/services/kernel";
 import { getInsights, listSuggestions } from "@/services/learning/insights";
 import { liveBoard } from "@/services/mcp/changes";
 import { publicStatus } from "@/services/public/status";
+import { waitingAtSpots } from "@/services/subscriptions/need";
 import { ok, withToolHandler } from "../result";
 import type { ToolGroup } from "../server";
 
 /** Every text a model sees from these tools. */
 export const READ_TEXT = {
   shuttle_status:
-    "Live board right now: every vehicle in the workspace with its live state (phase, current / next spot, ETA, last ping). state is null for a vehicle that has never reported.",
+    "Live board right now: every vehicle in the workspace with its live state (phase, current / next spot, ETA, last ping), and `waiting`: people who asked for a shuttle with /need, per pickup stop (count, name, where to, since when). state is null for a vehicle that has never reported.",
   shuttle_schedule:
     "The timetable for one day (default today, IST) or up to 14 days: each service with its one-day exceptions, assigned vehicles and planned departures (IST HH:MM, after exceptions).",
   shuttle_spots: "Pickup spots of the workspace (archived ones only when includeArchived is true).",
@@ -113,6 +114,7 @@ export const READ_TOOLS = [
     workspace: { slug: workspace.slug, name: workspace.name, isLive: workspace.isLive },
     now,
     vehicles: await liveBoard(db, actor, { workspaceId: workspace.id }, now),
+    waiting: await waitingAtSpots(db, actor, { workspaceId: workspace.id }, now),
   })),
 
   tool(
