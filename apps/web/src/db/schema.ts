@@ -650,16 +650,21 @@ export const subscriptions = pgTable(
       .notNull()
       .references(() => people.id, { onDelete: "cascade" }),
     kind: text("kind").$type<SubscriptionKind>().notNull(),
-    /** null on a `notices` subscription = all spots */
+    /** null on a `notices` subscription = all spots; `pickup`: where the person waits */
     spotId: uuid("spot_id").references(() => spots.id, { onDelete: "cascade" }),
+    /** pickup: where the person wants to go */
+    toSpotId: uuid("to_spot_id").references(() => spots.id, { onDelete: "cascade" }),
     serviceId: uuid("service_id").references(() => services.id, { onDelete: "cascade" }),
     /** arrival_alert: fire when the ETA is ≤ this many minutes */
     leadMin: integer("lead_min"),
-    /** arrival_alert: at most 2h after creation */
+    /** arrival_alert: at most 2h after creation; pickup: 60 min */
     expiresAt: ts("expires_at"),
     firedAt: ts("fired_at"),
     cancelledAt: ts("cancelled_at"),
-    /** updates: when the last 15-min update went out (worker bookkeeping, not audited) */
+    /**
+     * updates: when the last 15-min update went out; pickup: when "on its way" went out (once per request).
+     * Worker bookkeeping, not audited.
+     */
     lastSentAt: ts("last_sent_at"),
     /** updates: the IST day its "finished for today" went out; updates start again the next day */
     dayEndedOn: date("day_ended_on", { mode: "string" }),

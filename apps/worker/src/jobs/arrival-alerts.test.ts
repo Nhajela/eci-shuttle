@@ -2,19 +2,25 @@ import { IST_TZ } from "@eci-shuttle/shared";
 import { Cron } from "croner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
+import { runPickups } from "@/services/subscriptions/need";
 import { runArrivalAlerts } from "@/services/subscriptions/subscriptions";
 import type { JobContext } from "../job";
 import { arrivalAlerts } from "./arrival-alerts";
 
 vi.mock("@/services/subscriptions/subscriptions", () => ({ runArrivalAlerts: vi.fn() }));
+vi.mock("@/services/subscriptions/need", () => ({ runPickups: vi.fn() }));
 const run = vi.mocked(runArrivalAlerts);
+const pickups = vi.mocked(runPickups);
 
 const NOW = new Date("2026-10-12T04:10:07Z");
 const db = {} as Db;
 const ctx: JobContext = { db, now: NOW, workerId: "w1", startedAt: NOW, log: () => {} };
 
 describe("arrival-alerts job", () => {
-  beforeEach(() => run.mockReset());
+  beforeEach(() => {
+    run.mockReset();
+    pickups.mockReset();
+  });
 
   it("ticks every 15 s, IST", () => {
     const next = new Cron(arrivalAlerts.schedule, { timezone: IST_TZ, paused: true }).nextRuns(4, NOW);
@@ -31,9 +37,14 @@ describe("arrival-alerts job", () => {
     expect(arrivalAlerts.lock).not.toBe(false);
   });
 
-  it("fires and expires across all workspaces at the tick's now", async () => {
+  it("fires and expires arrival alerts and /need requests across all workspaces at the tick's now", async () => {
     run.mockResolvedValue({ fired: 2, expired: 1 });
-    await expect(arrivalAlerts.run(ctx)).resolves.toEqual({ fired: 2, expired: 1 });
+    pickups.mockResolvedValue({ fired: 1, onTheWay: 3, expired: 0 });
+    await expect(arrivalAlerts.run(ctx)).resolves.toEqual({
+      arrivals: { fired: 2, expired: 1 },
+      pickups: { fired: 1, onTheWay: 3, expired: 0 },
+    });
     expect(run).toHaveBeenCalledExactlyOnceWith(db, {}, NOW);
+    expect(pickups).toHaveBeenCalledExactlyOnceWith(db, {}, NOW);
   });
 });
