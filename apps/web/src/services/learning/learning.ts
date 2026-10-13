@@ -10,7 +10,9 @@ import {
   legEstimate,
   type McpChange,
   pathLengthM,
+  plannedDwellS,
   projectOntoPath,
+  withPlannedDwell,
 } from "@eci-shuttle/shared";
 import { and, between, eq, gte, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import type { Db } from "@/db";
@@ -309,7 +311,8 @@ function pick(rows: LegStat[], hour: number | null, baselineS: number): LegEstim
 
 /**
  * What etaToSpot needs for a route at `now`: one EtaLeg per leg (legEstimate on that leg's samples for the IST
- * hour bucket, with segment speeds) and the dwell estimate per spot. Special services use their own stats.
+ * hour bucket, with segment speeds) and the dwell estimate per spot (the route's planned wait until the learned
+ * dwell has enough samples). Special services use their own stats.
  */
 export async function loadEstimates(
   db: Db,
@@ -368,11 +371,14 @@ export async function loadEstimates(
   const dwellsBySpot = Object.fromEntries(
     stopSpots.map((id) => [
       id,
-      pick(
-        stats.filter((s) => s.kind === "dwell" && s.fromSpotId === id),
-        hour,
-        PLANNED_DWELL_S,
-      ),
+      withPlannedDwell(
+        pick(
+          stats.filter((s) => s.kind === "dwell" && s.fromSpotId === id),
+          hour,
+          PLANNED_DWELL_S,
+        ),
+        plannedDwellS(route.plannedDwellS, id),
+      ) as LegEstimate,
     ]),
   );
   const cycleS = loop

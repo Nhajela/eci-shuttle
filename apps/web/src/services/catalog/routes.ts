@@ -1,5 +1,12 @@
 /** svc-catalog: routes and path generation (SPEC §3, §7 Routes). ops+ writes, viewer+ reads. */
-import { type LatLng, type PathSource, RouteCreateFields, RouteUpdateFields, withWorkspace } from "@eci-shuttle/shared";
+import {
+  type LatLng,
+  type PathSource,
+  PLANNED_DWELL_DEFAULT,
+  RouteCreateFields,
+  RouteUpdateFields,
+  withWorkspace,
+} from "@eci-shuttle/shared";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
@@ -125,7 +132,8 @@ export async function createRoute(
 
 /**
  * ops+. spotIds change → path regenerated unless `path` given; `path` → pathSource "manual";
- * regeneratePath → regenerate. Bumps version; STALE_VERSION on a stale version. Bumps device configs of vehicles
+ * regeneratePath → regenerate. plannedDwellS replaces the planned waits ("*" or stops on the route, else INVALID);
+ * new stops drop the waits of stops that left. Bumps version; STALE_VERSION on a stale version. Bumps device configs of vehicles
  * on services using this route only if their windows change (they don't, for path edits).
  */
 export async function updateRoute(
@@ -134,12 +142,24 @@ export async function updateRoute(
   input: z.input<typeof UpdateRouteInput>,
   deps?: { fetch?: typeof fetch },
 ): Promise<Route> {
-  const { workspaceId, routeId, version, name, spotIds, path, regeneratePath } = parseInput(UpdateRouteInput, input);
+  const { workspaceId, routeId, version, name, spotIds, path, regeneratePath, plannedDwellS } = parseInput(
+    UpdateRouteInput,
+    input,
+  );
   requireRole(actor, workspaceId, "ops");
   return mutate(db, actor, { action: "route.update", entity: "route", entityId: routeId, workspaceId }, async (tx) => {
     const before = await getInWorkspace(tx, routes, workspaceId, routeId, "route", { forUpdate: true });
     checkVersion(before, version, "route");
     const ids = spotIds ?? before.spotIds;
+    const off = Object.keys(plannedDwellS ?? {}).filter((k) => k !== PLANNED_DWELL_DEFAULT && !ids.includes(k));
+    if (off.length)
+      throw new ServiceError("INVALID", "A planned wait can only be set for a stop on this route.", { spotIds: off });
+    // stops that left the route take their planned wait with them
+    const plan = Object.fromEntries(
+      Object.entries(plannedDwellS ?? before.plannedDwellS).filter(
+        ([k]) => k === PLANNED_DWELL_DEFAULT || ids.includes(k),
+      ),
+    );
     // new stops must be active; existing ones may since have been archived and still anchor a manual path
     const points = spotIds || path || regeneratePath ? await spotPoints(tx, workspaceId, ids, !!spotIds) : null;
     // ponytail: OSRM is called inside the row lock (up to 5 s); fine for admin edits, move it out if it ever contends
@@ -154,6 +174,7 @@ export async function updateRoute(
         // typical_leg_s is one learned median per leg; new stops make the old legs meaningless
         ...(spotIds && spotIds.join() !== before.spotIds.join() && { typicalLegS: [] }),
         ...(g && { path: g.path, pathSource: g.source, spotPathIdx: g.spotPathIdx }),
+        plannedDwellS: plan,
         version: before.version + 1,
         updatedAt: new Date(),
       })

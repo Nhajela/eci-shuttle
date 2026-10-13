@@ -190,6 +190,18 @@ async function spotNames(db: Db, ws: string, ids: string[]): Promise<string> {
   return ids.map((id) => byId.get(id)).join(" → ");
 }
 
+/** "wait 5 min at each stop, 2 min at Circle, no wait at Riva" for a route's planned waits ("*" = every stop). */
+async function waitText(db: Db, ws: string, plan: Record<string, number>): Promise<string> {
+  const min = (s: number) => (s === 0 ? "no wait" : `${Math.round(s / 6) / 10} min`);
+  // the default first, so "wait" reads once at the start
+  const entries = Object.entries(plan).sort(([a], [b]) => Number(b === "*") - Number(a === "*"));
+  if (!entries.length) return "no planned wait at stops";
+  const parts = await Promise.all(
+    entries.map(async ([k, s]) => `${min(s)} at ${k === "*" ? "each stop" : await spotNames(db, ws, [k])}`),
+  );
+  return parts[0]?.startsWith("no wait") ? parts.join(", ") : `wait ${parts.join(", ")}`;
+}
+
 /** The vehicle a phone is in right now (its open assignment), or null. */
 async function phoneVehicle(db: Db, deviceId: string): Promise<Vehicle | null> {
   const [row] = await db
@@ -244,11 +256,13 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
     case "route.update": {
       const r = await get(db, ws, "route", c.routeId);
       const stops = c.spotIds && (await spotNames(db, ws, c.spotIds));
+      const waits = c.plannedDwellS && (await waitText(db, ws, c.plannedDwellS));
       return `Change route '${r.name}': ${edits(c, {
         name: "name",
         spotIds: () => `stops ${stops}`,
         path: (v: unknown[]) => `a hand-drawn path (${v.length} points)`,
         regeneratePath: (v: boolean) => (v ? "regenerate the path" : "keep the path"),
+        plannedDwellS: () => waits as string,
       })}`;
     }
     case "service.create": {

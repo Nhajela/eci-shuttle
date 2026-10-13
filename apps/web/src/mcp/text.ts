@@ -70,7 +70,8 @@ App updates go out the same way: \`ota.rollout\`, \`ota.rollback\` (whole worksp
 - Edit one day without touching the pattern with \`service.exception\` and its \`type\`: cancel_day; cancel_departure or add_departure (\`departure\` HH:MM); shift_minutes (\`departure\` and \`minutes\`, ±180). \`date\` is the IST service day (a 01:00 departure of a 22:00–02:00 service belongs to the day before).
 - Times of day are HH:MM IST. Date-times are ISO with an offset, e.g. 2026-10-12T10:45:00+05:30.
 - Vehicles run services for time ranges (\`service_vehicle.assign\` / \`unassign\`). A vehicle moved to a party run drops out of the Riva ↔ Circle ETA for those hours.
-- Phones track inside each assigned service window ±15 minutes, so schedule edits change when phones track.`,
+- Phones track inside each assigned service window ±15 minutes, so schedule edits change when phones track.
+- The planned wait at stops (boarding time) is on the route: \`route.update { routeId, plannedDwellS: { "*": 300 } }\` = wait 5 min at each stop; add a spot id key to override one stop (seconds, 0 = no wait; the map replaces the whole plan, \`{}\` clears it). It feeds "about every N min" and ETAs until enough real dwells are learned.`,
   phones: `# Phones (the drivers' own Android phones)
 - A phone is paired to a workspace with a pairing code (admin), labelled, and assigned to a vehicle. It tracks only inside its tracking windows and is idle otherwise.
 - silence (until a time): stop tracking until then. force_active (for some hours): track now even outside a window. nudge: ask the phone to sync now. These are ops.
