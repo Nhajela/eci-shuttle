@@ -14,6 +14,7 @@ import {
   services,
   serviceVehicles,
   spots,
+  vehicleState,
   vehicles,
 } from "@/db/schema";
 import type { ServiceError, ServiceErrorCode } from "../kernel";
@@ -481,6 +482,24 @@ describe("liveBoard", () => {
     const s = await setup("viewer");
     const board = await liveBoard(db(), s.actor, { workspaceId: s.ws.id });
     expect(board).toEqual([{ vehicle: expect.objectContaining({ id: s.bus.id }), state: null }]);
+  });
+
+  it("never shows an off-duty vehicle's position (SPEC §4)", async () => {
+    const s = await setup("viewer");
+    const gf = { insideSpotId: null, candidateSpotId: null, enteredAt: null, outsideSince: null };
+    await db()
+      .insert(vehicleState)
+      .values({
+        vehicleId: s.bus.id,
+        workspaceId: s.ws.id,
+        phase: "off_duty",
+        lat: 15.6,
+        lng: 73.7,
+        alongM: 5,
+        geofence: gf as never,
+      });
+    const [{ state }] = await liveBoard(db(), s.actor, { workspaceId: s.ws.id });
+    expect(state).toMatchObject({ phase: "off_duty", lat: null, lng: null, alongM: null, geofence: null });
   });
 
   it("FORBIDDEN outside the actor's workspace", async () => {

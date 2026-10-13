@@ -544,5 +544,11 @@ export async function liveBoard(
   // listVehicles checks the viewer role before vehicleStates (which takes no actor) is read
   const list = await listVehicles(db, actor, input);
   const states = await vehicleStates(db, input.workspaceId);
-  return list.map((vehicle) => ({ vehicle, state: states.find((s) => s.vehicleId === vehicle.id) ?? null }));
+  // SPEC §4: an off-duty vehicle's last position is never shown (ingest clears it too; this covers old rows)
+  const shown = (s: VehicleState): VehicleState =>
+    s.phase === "off_duty" ? { ...s, lat: null, lng: null, alongM: null, geofence: null } : s;
+  return list.map((vehicle) => {
+    const s = states.find((x) => x.vehicleId === vehicle.id);
+    return { vehicle, state: s ? shown(s) : null };
+  });
 }
