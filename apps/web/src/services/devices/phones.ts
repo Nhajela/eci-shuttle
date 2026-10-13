@@ -5,6 +5,7 @@
  */
 import {
   type DirectiveKind,
+  dutyWindows,
   Id,
   IST_TZ,
   istHHMM,
@@ -532,13 +533,15 @@ async function healthOf(db: Db, workspaceId: string, phones: Device[], now: Date
     const config = revoked ? null : await desiredConfig(db, device.id, now);
     const desired = config ? resolveMode(config, now.getTime()) : null;
     const desiredMode = desired?.mode ?? "revoked";
-    // same rule as the watchdog's silent alert, with the phone's last sync for the vehicle's last ping
-    const heardAt = Math.max(device.lastSyncAt?.getTime() ?? 0, desired?.window?.startsAt ?? 0);
+    // same rule as the watchdog's silent alert (on duty only, not ops hours), with the phone's last sync for the
+    // vehicle's last ping
+    const duty = config && resolveMode({ ...config, schedule: dutyWindows(config.schedule) }, now.getTime());
+    const heardAt = Math.max(device.lastSyncAt?.getTime() ?? 0, duty?.window?.startsAt ?? 0);
     out.push({
       device,
       vehicle,
       desiredMode,
-      silent: !!vehicle && desiredMode === "active" && now.getTime() - heardAt > SILENT_AFTER_MS,
+      silent: !!vehicle && duty?.mode === "active" && now.getTime() - heardAt > SILENT_AFTER_MS,
       modeMismatch: !!config && isModeMismatch(device, config, await pushedAt(db, device), now),
       configBehind: !revoked && (device.reportedConfigVersion ?? 0) < device.configVersion,
       lastSyncAgoS: device.lastSyncAt ? Math.floor((now.getTime() - device.lastSyncAt.getTime()) / 1000) : null,

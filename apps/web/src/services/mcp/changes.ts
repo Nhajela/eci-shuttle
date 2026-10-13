@@ -41,7 +41,7 @@ import {
 } from "../catalog/schedule";
 import { archiveSpot, createSpot, updateSpot } from "../catalog/spots";
 import { createVehicle, listVehicles, updateVehicle } from "../catalog/vehicles";
-import { createWorkspace } from "../catalog/workspaces";
+import { createWorkspace, updateWorkspace } from "../catalog/workspaces";
 import { rollbackUpdate, rolloutUpdate, setPhoneUpdate } from "../devices/ota";
 import { createPairingCode } from "../devices/pairing";
 import {
@@ -84,6 +84,7 @@ export const CHANGE_ROLE: Record<McpChangeKind, Role> = {
   "notice.create": "ops",
   "notice.end": "ops",
   "workspace.create": "admin",
+  "workspace.update": "admin",
   "ota.rollout": "admin",
   "ota.rollback": "admin",
   "ota.phone": "admin",
@@ -103,7 +104,7 @@ const VERSIONED = {
 /**
  * Pure. The "<entity>:<id>" keys whose versions a change depends on, e.g. spot.update → ["spot:<spotId>"],
  * service.exception / service_vehicle.assign → ["service:<serviceId>"], phone.* / ota.phone → ["device:<deviceId>"].
- * Creates (and pairing_code.create, workspace.create, ota.rollout, ota.rollback) → [].
+ * Creates (and pairing_code.create, workspace.create/update, ota.rollout, ota.rollback) → [].
  */
 export function versionKeys(change: McpChange): string[] {
   const c = change;
@@ -357,6 +358,12 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
       return `End notice "${(await get(db, ws, "notice", c.noticeId)).text}"`;
     case "workspace.create":
       return `Create workspace '${c.name}' (${c.slug})`;
+    case "workspace.update": {
+      const name = await workspaceName(db, ws);
+      return c.opsHoursStart && c.opsHoursEnd
+        ? `Track the phones in vehicles in ${name} every day ${c.opsHoursStart}–${c.opsHoursEnd} IST (ops hours), not only during services`
+        : `Turn off ops hours in ${name}: phones track only during services`;
+    }
     case "ota.rollout": {
       const name = await workspaceName(db, ws);
       return c.updateId
@@ -450,6 +457,9 @@ const OTA_IDLE =
 const OTA_NATIVE =
   'An update built for a newer native runtime is ignored by phones on an older APK; they show "needs new APK" until the driver installs it.';
 
+const OPS_HOURS_WARNING =
+  "Drivers' phones in vehicles will share their location all through these hours, every day, also between services. Outside services the vehicle is off duty: its position shows only to ops (Live board, shuttle_status), never to attendees. A silence on a phone still pauses it.";
+
 /** How many unrevoked phones follow the workspace target, and how many have their own override. */
 async function otaReach(db: Db, ws: string): Promise<string> {
   const rows = await db
@@ -506,6 +516,8 @@ async function oneWarning(db: Db, ws: string, c: McpChange, now: Date): Promise<
       return `${OTA_IDLE} ${await otaReach(db, ws)} ${OTA_NATIVE}`;
     case "ota.phone":
       return c.updateId ? `${OTA_IDLE} ${OTA_NATIVE}` : null;
+    case "workspace.update":
+      return c.opsHoursStart ? OPS_HOURS_WARNING : null;
     default:
       return null;
   }
@@ -533,7 +545,7 @@ const input = <C extends McpChange>({ kind: _, ...fields }: C, workspaceId: stri
  * Run one change with `actor` (it carries proposalId and reason into the audit row) through its service:
  * spot.* → catalog/spots, route.* → catalog/routes, service.* / service_vehicle.* → catalog/schedule,
  * vehicle.* → catalog/vehicles, phone.* → devices/phones, pairing_code.create → devices/pairing,
- * notice.* → notices, workspace.create → catalog/workspaces, ota.* → devices/ota. Returns the service's result.
+ * notice.* → notices, workspace.* → catalog/workspaces, ota.* → devices/ota. Returns the service's result.
  */
 export async function applyChange(
   db: Db,
@@ -597,6 +609,8 @@ export async function applyChange(
       return endNotice(db, actor, input(c, ws));
     case "workspace.create":
       return createWorkspace(db, actor, { slug: c.slug, name: c.name });
+    case "workspace.update":
+      return updateWorkspace(db, actor, input(c, ws));
     case "ota.rollout":
       return rolloutUpdate(db, actor, input(c, ws));
     case "ota.rollback":
@@ -623,11 +637,6 @@ export async function liveBoard(
   // listVehicles checks the viewer role before vehicleStates (which takes no actor) is read
   const list = await listVehicles(db, actor, input);
   const states = await vehicleStates(db, input.workspaceId);
-  // SPEC §4: an off-duty vehicle's last position is never shown (ingest clears it too; this covers old rows)
-  const shown = (s: VehicleState): VehicleState =>
-    s.phase === "off_duty" ? { ...s, lat: null, lng: null, alongM: null, geofence: null } : s;
-  return list.map((vehicle) => {
-    const s = states.find((x) => x.vehicleId === vehicle.id);
-    return { vehicle, state: s ? shown(s) : null };
-  });
+  // an off-duty vehicle keeps a position only inside ops hours (ingest/refreshPhases drop it outside them)
+  return list.map((vehicle) => ({ vehicle, state: states.find((x) => x.vehicleId === vehicle.id) ?? null }));
 }

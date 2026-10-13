@@ -1,5 +1,5 @@
 /** svc-catalog: workspaces (SPEC §3 Workspaces). */
-import { WorkspaceCreateFields } from "@eci-shuttle/shared";
+import { checkOpsHours, WorkspaceCreateFields, WorkspaceUpdateFields } from "@eci-shuttle/shared";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
@@ -56,18 +56,27 @@ export async function createWorkspace(
   }
 }
 
-export const UpdateWorkspaceInput = z.object({
-  workspaceId: z.uuid(),
-  version: z.number().int().positive().optional(),
-  name: z.string().trim().min(1).max(100).optional(),
-  groupChatId: z.number().int().nullable().optional(),
-  activeIntervalS: z.number().int().min(5).max(600).optional(),
-  idleHeartbeatS: z.number().int().min(60).max(3600).optional(),
-  minAppVersion: z.string().max(50).nullable().optional(),
-  apkUrl: z.url().nullable().optional(),
-});
+export const UpdateWorkspaceInput = WorkspaceUpdateFields.partial()
+  .extend({
+    workspaceId: z.uuid(),
+    version: z.number().int().positive().optional(),
+    name: z.string().trim().min(1).max(100).optional(),
+    groupChatId: z.number().int().nullable().optional(),
+    activeIntervalS: z.number().int().min(5).max(600).optional(),
+    idleHeartbeatS: z.number().int().min(60).max(3600).optional(),
+    minAppVersion: z.string().max(50).nullable().optional(),
+    apkUrl: z.url().nullable().optional(),
+  })
+  .superRefine(checkOpsHours);
 /** Fields that are part of every phone's config (svc-devices desiredConfig). */
-const DEVICE_FIELDS = ["activeIntervalS", "idleHeartbeatS", "minAppVersion", "apkUrl"] as const;
+const DEVICE_FIELDS = [
+  "activeIntervalS",
+  "idleHeartbeatS",
+  "minAppVersion",
+  "apkUrl",
+  "opsHoursStart",
+  "opsHoursEnd",
+] as const;
 
 /** Admin only. Changing intervals bumps every device config in the workspace (svc-devices bumpConfigs). */
 export async function updateWorkspace(

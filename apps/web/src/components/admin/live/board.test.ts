@@ -131,6 +131,28 @@ describe("buildBoard", () => {
     });
   });
 
+  it("an off-duty vehicle tracked in ops hours shows its last position, and where it is", () => {
+    const gf = (insideSpotId: string | null) =>
+      ({ insideSpotId, enteredAt: null, candidateSpotId: null, candidateSince: null, lastFixAt: null }) as const;
+    const out = buildBoard(
+      base({
+        vehicles: [vehicle("v1", "Bus 1"), vehicle("v2", "Bus 2")],
+        states: [
+          state("v1", { lat: 15.6, lng: 73.7, geofence: gf("riva"), lastPingAt: new Date(NOW - 60_000) }),
+          state("v2", { lat: 15.65, lng: 73.75, geofence: gf(null), lastPingAt: new Date(NOW - 60_000) }),
+        ],
+      }),
+      NOW,
+    );
+    expect(out.cards[0]).toMatchObject({
+      phase: "off_duty",
+      phaseText: "Off duty · at Riva",
+      locationText: "Location 1 min ago",
+      position: { lat: 15.6, lng: 73.7 },
+    });
+    expect(out.cards[1]).toMatchObject({ phaseText: "Off duty · on the road", position: { lat: 15.65, lng: 73.75 } });
+  });
+
   it("shows a phone that checks in without a GPS fix as checked in, not as never seen", () => {
     const bus = vehicle("v1", "Bus 1");
     const out = buildBoard(

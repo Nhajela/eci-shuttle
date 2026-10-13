@@ -17,4 +17,10 @@ describe("shuttle_guide", () => {
     }
     expect(guideFor("phones")).toContain("only while idle");
   });
+
+  it("explains ops tracking hours (workspace.update), admin only", () => {
+    expect(changeKindsReference()).toContain("- `workspace.update` (admin): opsHoursStart*, opsHoursEnd*");
+    for (const topic of ["changes", "phones", "roles"] as const)
+      expect(guideFor(topic)).toContain("workspace.update { opsHoursStart");
+  });
 });

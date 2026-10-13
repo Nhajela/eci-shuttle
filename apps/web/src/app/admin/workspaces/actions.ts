@@ -4,7 +4,7 @@ import { istHHMM } from "@eci-shuttle/shared";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
-import { createWorkspace } from "@/services/catalog/workspaces";
+import { createWorkspace, updateWorkspace } from "@/services/catalog/workspaces";
 import { createPairingCode } from "@/services/devices/pairing";
 import { revokePhone } from "@/services/devices/phones";
 import { userMessage } from "@/services/kernel";
@@ -22,6 +22,26 @@ export async function createWorkspaceAction(_prev: ActionState, fd: FormData): P
     const ws = await createWorkspace(db(), actor, { slug: str(fd, "slug"), name: str(fd, "name") });
     revalidatePath(PATH);
     return { ok: true, message: `Created ${ws.name}.`, slug: ws.slug };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Ops tracking hours: two native time inputs; the Turn off button (or both empty) clears them. Admin only. */
+export async function opsHoursAction(_prev: ActionState, fd: FormData): Promise<NonNullable<ActionState>> {
+  const { actor, workspace } = await requireAdmin({ w: fd.get("w") as string | null, minRole: "admin" });
+  const off = fd.has("off");
+  const start = off ? null : str(fd, "start") || null;
+  const end = off ? null : str(fd, "end") || null;
+  try {
+    await updateWorkspace(db(), actor, { workspaceId: workspace.id, opsHoursStart: start, opsHoursEnd: end });
+    revalidatePath(PATH);
+    return {
+      ok: true,
+      message: start
+        ? `Phones in vehicles track ${start}–${end} every day.`
+        : "Ops hours off: phones track only during services.",
+    };
   } catch (e) {
     return fail(e);
   }

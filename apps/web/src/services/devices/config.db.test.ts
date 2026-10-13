@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SyncResponse, trackingWindows, type VehicleWindow } from "@eci-shuttle/shared";
+import { OPS_HOURS_LABEL, resolveMode, SyncResponse, trackingWindows, type VehicleWindow } from "@eci-shuttle/shared";
 import { makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
@@ -238,6 +238,38 @@ describe("desiredConfig", () => {
         label: null,
       },
     ]);
+  });
+
+  it("ops hours add a daily active window for an assigned phone only; silence and kill still win", async () => {
+    const ws = await makeWorkspace(db(), { opsHoursStart: "09:00", opsHoursEnd: "21:00" });
+    const d = await makeDevice(ws.id);
+    const loose = await makeDevice(ws.id);
+    const v = await makeVehicle(ws.id);
+    await assign(ws.id, d.id, v.id);
+    const ist = (date: string, hhmm: string) => Date.parse(`${date}T${hhmm}:00+05:30`);
+    const ops = (from: number, to: number) => ({
+      startsAt: from,
+      endsAt: to,
+      mode: "active",
+      intervalS: null,
+      source: "active_window",
+      label: OPS_HOURS_LABEL,
+    });
+    const c = await desiredConfig(db(), d.id, NOW);
+    expect(c.schedule).toEqual([
+      ops(ist("2026-10-15", "09:00"), ist("2026-10-15", "21:00")),
+      ops(ist("2026-10-16", "09:00"), ist("2026-10-16", "21:00")),
+      ops(ist("2026-10-17", "09:00"), NOW.getTime() + 48 * H),
+    ]);
+    expect(resolveMode(c, NOW.getTime()).mode).toBe("active");
+    expect((await desiredConfig(db(), loose.id, NOW)).schedule).toEqual([]);
+
+    await db()
+      .insert(directives)
+      .values({ workspaceId: ws.id, deviceId: d.id, kind: "silence_until", startsAt: at(-1), endsAt: at(1) });
+    expect(resolveMode(await desiredConfig(db(), d.id, NOW), NOW.getTime()).mode).toBe("idle");
+    await db().update(devices).set({ killedAt: NOW }).where(eq(devices.id, d.id));
+    expect(resolveMode(await desiredConfig(db(), d.id, at(2)), at(2).getTime()).mode).toBe("killed");
   });
 });
 

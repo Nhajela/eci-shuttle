@@ -1,5 +1,13 @@
 /** svc-devices: the desired config each phone should run (SPEC §4). */
-import { type SyncResponse, trackingWindows, type Window } from "@eci-shuttle/shared";
+import {
+  OPS_HOURS_LABEL,
+  type OpsHours,
+  opsHourSpans,
+  opsHoursOf,
+  type SyncResponse,
+  trackingWindows,
+  type Window,
+} from "@eci-shuttle/shared";
 import { and, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import {
@@ -17,12 +25,11 @@ import { enqueue, ServiceError } from "../kernel";
 
 const HORIZON_MS = 48 * 3_600_000;
 const LOOKBACK_MS = 24 * 3_600_000;
-
 /**
  * The full desired config for one device at `now`: killed/revoked flags; schedule = next 48 h of windows for its
  * assigned vehicle (trackingWindows over service_vehicles ±15 min, plus active_window/force_active directives as
- * active windows and silence_until as idle windows, for the device or its vehicle); intervals from the
- * workspace; OTA target (device override ?? workspace); minAppVersion/apkUrl; apiOrigin = PUBLIC_ORIGIN;
+ * active windows and silence_until as idle windows, for the device or its vehicle, plus the workspace's daily ops
+ * tracking hours as active windows labelled OPS_HOURS_LABEL); intervals from the workspace; OTA target (device override ?? workspace); minAppVersion/apkUrl; apiOrigin = PUBLIC_ORIGIN;
  * serverTime = now. configVersion = devices.config_version. Unassigned phone → no windows (idle).
  */
 export async function desiredConfig(db: Db, deviceId: string, now: Date): Promise<SyncResponse> {
@@ -47,7 +54,7 @@ export async function desiredConfig(db: Db, deviceId: string, now: Date): Promis
     )
     .limit(1);
 
-  const schedule = vehicle ? await windowsFor(db, d.id, vehicle.id, now) : [];
+  const schedule = vehicle ? await windowsFor(db, d.id, vehicle.id, opsHoursOf(ws), now) : [];
 
   return {
     configVersion: d.configVersion,
@@ -67,7 +74,13 @@ export async function desiredConfig(db: Db, deviceId: string, now: Date): Promis
 }
 
 /** Service windows of the vehicle plus directives on the device or vehicle still open at `now` and starting before now + 48 h, by start. */
-async function windowsFor(db: Db, deviceId: string, vehicleId: string, now: Date): Promise<Window[]> {
+async function windowsFor(
+  db: Db,
+  deviceId: string,
+  vehicleId: string,
+  opsHours: OpsHours | null,
+  now: Date,
+): Promise<Window[]> {
   const to = new Date(now.getTime() + HORIZON_MS);
 
   const svRows = await db
@@ -153,7 +166,12 @@ async function windowsFor(db: Db, deviceId: string, vehicleId: string, now: Date
     label: null,
   }));
 
-  return [...service, ...overrides].sort((a, b) => a.startsAt - b.startsAt);
+  // looked back like services, so a running ops window keeps its real start
+  const ops: Window[] = opsHourSpans(opsHours, now.getTime() - LOOKBACK_MS, to.getTime())
+    .filter((w) => w.endsAt > now.getTime())
+    .map((w) => ({ ...w, mode: "active", intervalS: null, source: "active_window", label: OPS_HOURS_LABEL }));
+
+  return [...service, ...ops, ...overrides].sort((a, b) => a.startsAt - b.startsAt);
 }
 
 /**

@@ -8,6 +8,7 @@ import type {
   ServiceExceptionDef,
   ServiceVehicleDef,
   VehicleWindow,
+  Window,
 } from "../contracts";
 import { IST_OFFSET_MIN } from "../contracts";
 
@@ -135,3 +136,39 @@ export function applyDirectives(windows: VehicleWindow[], directives: VehicleDir
   }
   return out;
 }
+
+/** A workspace's daily ops tracking hours, IST; end <= start crosses midnight. */
+export type OpsHours = { start: HHMM; end: HHMM };
+/** A workspace row's ops tracking hours (`ops_hours_start` / `_end`), or null when not set. */
+export const opsHoursOf = (ws: { opsHoursStart: string | null; opsHoursEnd: string | null }): OpsHours | null =>
+  ws.opsHoursStart && ws.opsHoursEnd ? { start: ws.opsHoursStart, end: ws.opsHoursEnd } : null;
+
+/**
+ * Ops tracking hours as [startsAt, endsAt) spans overlapping [from, to), clipped to it, one per IST day. Phones
+ * assigned to a vehicle track during them, off duty (positions for ops only, never public). Pure.
+ */
+export function opsHourSpans(
+  hours: OpsHours | null,
+  from: number,
+  to: number,
+): { startsAt: EpochMs; endsAt: EpochMs }[] {
+  if (!hours) return [];
+  const s = toMin(hours.start);
+  const e = toMin(hours.end) <= s ? toMin(hours.end) + 1440 : toMin(hours.end);
+  const out: { startsAt: EpochMs; endsAt: EpochMs }[] = [];
+  // a span that started yesterday (cross-midnight) can still be open at `from`
+  for (let d = dayStart(istDate(from)) - DAY; d < to; d += DAY) {
+    const startsAt = Math.max(d + s * MIN, from);
+    const endsAt = Math.min(d + e * MIN, to);
+    if (endsAt > startsAt) out.push({ startsAt, endsAt });
+  }
+  return out;
+}
+
+/** Label of an ops-hours window in a phone's schedule (shown in its notification; tells them apart). */
+export const OPS_HOURS_LABEL = "Ops hours";
+/** A phone schedule without its ops-hours windows: what the vehicle is on duty for (silent alerts judge this). */
+export const dutyWindows = (schedule: Window[]) => schedule.filter((w) => w.label !== OPS_HOURS_LABEL);
+
+/** Is `t` inside the ops tracking hours? */
+export const inOpsHours = (hours: OpsHours | null, t: number) => opsHourSpans(hours, t, t + 1).length > 0;

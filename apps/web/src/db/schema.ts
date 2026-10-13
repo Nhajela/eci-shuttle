@@ -96,6 +96,9 @@ export const workspaces = pgTable(
     idleHeartbeatS: integer("idle_heartbeat_s").notNull().default(180),
     /** Telegram group for notices (§6b channels) and ops alerts chat, per workspace so test never reaches real ops */
     groupChatId: bigint("group_chat_id", { mode: "number" }),
+    /** daily ops tracking hours, IST HH:MM (both or neither): assigned phones track off duty, positions ops-only */
+    opsHoursStart: text("ops_hours_start"),
+    opsHoursEnd: text("ops_hours_end"),
     version: version(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

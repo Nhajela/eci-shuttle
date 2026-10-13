@@ -15,6 +15,13 @@
       "when": 1791862449209,
       "tag": "0001_idle_heartbeat_3min",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791866849290,
+      "tag": "0002_ops_hours",
+      "breakpoints": true
     }
   ]
 }
