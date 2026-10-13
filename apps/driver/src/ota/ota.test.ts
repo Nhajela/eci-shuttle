@@ -1,6 +1,6 @@
 import type { Mode } from "@eci-shuttle/shared/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { createOta } from "./ota";
+import { createOta, OTA_MAX_TRIES } from "./ota";
 
 type Opts = {
   running?: string | null;
@@ -81,11 +81,9 @@ describe("createOta (SPEC §5: server-controlled OTA)", () => {
     expect(t.updates.reloadAsync).not.toHaveBeenCalled();
   });
 
-  it("never downloads an update that isn't the target (EAS serves the channel's latest), and stops asking", async () => {
+  it("never downloads an update that isn't the target (EAS serves the channel's latest)", async () => {
     const t = setup({ fetched: "u3" });
     expect(await t.ota.reconcile("u2")).toBe("mismatch");
-    expect(await t.ota.reconcile("u2")).toBe("mismatch");
-    expect(t.updates.checkForUpdateAsync).toHaveBeenCalledOnce();
     expect(t.updates.fetchUpdateAsync).not.toHaveBeenCalled();
     expect(t.updates.reloadAsync).not.toHaveBeenCalled();
     const none = setup({ fetched: null });
@@ -120,6 +118,54 @@ describe("createOta (SPEC §5: server-controlled OTA)", () => {
     const [a, b] = await Promise.all([t.ota.reconcile("u2"), t.ota.reconcile("u2")]);
     expect([a, b]).toEqual(["apply", "busy"]);
     expect(t.updates.fetchUpdateAsync).toHaveBeenCalledOnce();
+  });
+
+  describe("targets the phone can't get (admin rollback to an id that isn't the channel's latest)", () => {
+    it("reports updateFailed after OTA_MAX_TRIES mismatches and stops asking until the target changes", async () => {
+      const t = setup({ fetched: "u3" });
+      for (let i = 1; i < OTA_MAX_TRIES; i++) expect(await t.ota.reconcile("u2")).toBe("mismatch");
+      expect(await t.ota.report()).toEqual({ updateId: "u1" });
+      expect(await t.ota.reconcile("u2")).toBe("failed");
+      expect(await t.ota.report()).toEqual({ updateId: "u1", updateFailed: true });
+      expect(await t.ota.reconcile("u2")).toBe("failed");
+      expect(t.updates.checkForUpdateAsync).toHaveBeenCalledTimes(OTA_MAX_TRIES);
+      expect(t.updates.fetchUpdateAsync).not.toHaveBeenCalled();
+      // admin republished u3 as the target: try again, failure cleared
+      expect(await t.ota.reconcile("u3")).toBe("apply");
+      expect(await t.ota.report()).toEqual({ updateId: "u1", updateFailed: true }); // the reload into u3 is pending
+    });
+
+    it("clears the failure when the server moves the target back to what runs", async () => {
+      const t = setup({ fetched: "u3" });
+      for (let i = 0; i < OTA_MAX_TRIES; i++) await t.ota.reconcile("u2");
+      expect(await t.ota.reconcile("u1")).toBe("none");
+      expect(await t.ota.report()).toEqual({ updateId: "u1" });
+    });
+
+    it("reports updateFailed after OTA_MAX_TRIES fetch errors, then stops fetching", async () => {
+      const t = setup();
+      t.updates.fetchUpdateAsync.mockRejectedValue(new Error("bad bundle"));
+      for (let i = 1; i < OTA_MAX_TRIES; i++) expect(await t.ota.reconcile("u2")).toBe("error");
+      expect(await t.ota.reconcile("u2")).toBe("failed");
+      expect(await t.ota.report()).toEqual({ updateId: "u1", updateFailed: true });
+      expect(await t.ota.reconcile("u2")).toBe("failed");
+      expect(t.updates.fetchUpdateAsync).toHaveBeenCalledTimes(OTA_MAX_TRIES);
+    });
+
+    it("counts tries per target: a new target starts fresh", async () => {
+      const t = setup({ fetched: "u4" });
+      for (let i = 1; i < OTA_MAX_TRIES; i++) await t.ota.reconcile("u2");
+      expect(await t.ota.reconcile("u3")).toBe("mismatch");
+      expect(await t.ota.report()).toEqual({ updateId: "u1" });
+    });
+
+    it("on an emergency launch, does not chase the target until it changes", async () => {
+      const t = setup({ running: null, emergency: true });
+      expect(await t.ota.reconcile("u2")).toBe("failed");
+      expect(t.updates.checkForUpdateAsync).not.toHaveBeenCalled();
+      expect(await t.ota.report()).toEqual({ updateId: null, updateFailed: true });
+      expect(await t.ota.reconcile("u3")).toBe("mismatch");
+    });
   });
 
   describe("failed and emergency launches", () => {
