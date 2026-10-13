@@ -58,6 +58,22 @@ describe("answerParts", () => {
   });
 });
 
+describe("live with no minutes (the only vehicle is off route) never says 'No more today'", () => {
+  const off = line({ minutes: null, rangeLo: null, rangeHi: null, phaseText: "off the usual route" });
+
+  it("says live tracking is off, in the small style", () => {
+    expect(answerParts(off, true)).toEqual({ label: "Shuttle", value: "Live tracking off", range: null, small: true });
+  });
+
+  it("shows the next scheduled time when known", () => {
+    expect(answerParts({ ...off, nextAtLabel: "09:40" }, false)).toEqual({
+      label: "To Circle",
+      value: "09:40",
+      range: null,
+    });
+  });
+});
+
 describe("stale live data (>2 min since last seen) never pretends to be live", () => {
   it("no minutes once lastSeenS + ageS > 120", () => {
     const p = answerParts(line(), true, 200);

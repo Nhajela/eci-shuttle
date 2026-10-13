@@ -19,7 +19,8 @@ const isStale = (line: AnswerLine, ageS: number) =>
  */
 export function answerParts(line: AnswerLine, single: boolean, ageS = 0): AnswerParts {
   const label = single ? null : line.serviceName;
-  if (isStale(line, ageS))
+  // stale, or live with no ETA (vehicle off route): a vehicle is out, so never "No more today"
+  if (isStale(line, ageS) || (line.kind === "live" && line.minutes === null))
     return line.nextAtLabel
       ? { label: label ?? "Next scheduled", value: line.nextAtLabel, range: null }
       : { label: label ?? "Shuttle", value: "Live tracking off", range: null, small: true };

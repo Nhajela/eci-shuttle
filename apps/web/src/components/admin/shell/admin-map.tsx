@@ -102,7 +102,7 @@ export function AdminMap({
 
   if (failed)
     return (
-      <section className="w-full overflow-hidden rounded-xl border" aria-label={label}>
+      <section className="isolate w-full overflow-hidden rounded-xl border" aria-label={label}>
         <div className="flex items-center justify-between gap-2 border-b bg-muted px-3 py-2">
           <p className="text-sm text-muted-foreground">The map didn't load. As a list:</p>
           <Button variant="outline" className="h-11" onClick={() => setFailed(false)}>
@@ -112,7 +112,13 @@ export function AdminMap({
         <MapList spots={spots} markers={markers} />
       </section>
     );
-  return <section ref={el} className="h-[60vh] min-h-72 w-full overflow-hidden rounded-xl border" aria-label={label} />;
+  return (
+    <section
+      ref={el}
+      className="isolate h-[60vh] min-h-72 w-full overflow-hidden rounded-xl border"
+      aria-label={label}
+    />
+  );
 }
 
 function drawMarkers(m: Live, markers: MapMarker[]) {
