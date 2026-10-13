@@ -20,8 +20,9 @@ const config: ExpoConfig = {
   orientation: "portrait",
   platforms: ["android"],
   userInterfaceStyle: "automatic",
-  // Native changes (location service, permissions, SDK) change the fingerprint, so old APKs ignore OTA they can't run.
-  runtimeVersion: { policy: "fingerprint" },
+  // Native changes (location service, permissions, SDK) must bump `version`, so old APKs ignore OTA they can't run.
+  // Not "fingerprint": with pnpm the fingerprint differs between this machine and EAS and the build refuses.
+  runtimeVersion: { policy: "appVersion" },
   updates: {
     // The app never restarts, so the server decides when to fetch and apply (targetUpdateId in sync).
     checkAutomatically: "NEVER",
