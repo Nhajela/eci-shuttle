@@ -10,6 +10,7 @@ import { and, eq, gt, isNull, lte } from "drizzle-orm";
 import type { Db } from "@/db";
 import { alertPrefs, auditLog, memberships, people, workspaces } from "@/db/schema";
 import { origin } from "@/lib/env";
+import { escapeHtml } from "@/lib/telegram/html";
 import { getInsights, listSuggestions } from "@/services/learning/insights";
 import { enqueue, systemActor, type TelegramButton } from "../kernel";
 import { DEFAULT_ALERT_KINDS, quietUntil } from "./prefs";
@@ -32,7 +33,6 @@ export type AlertEvent = {
 };
 
 /** Telegram HTML escape for text people typed (labels, names). */
-export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** URL button to an admin page of the workspace. */
 export async function adminButton(db: Db, workspaceId: string, page: string): Promise<TelegramButton> {

@@ -4,6 +4,7 @@
  */
 import type { AnswerLine, PublicNotice, PublicSpot, PublicStatus } from "@eci-shuttle/shared";
 import { spots } from "@/db/schema";
+import { escapeHtml } from "@/lib/telegram/html";
 import { attendeeActor } from "../auth/actor";
 import { findInWorkspace, isServiceError, type TelegramButton, userMessage } from "../kernel";
 import { publicStatus } from "../public/status";
@@ -11,7 +12,7 @@ import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } fro
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const esc = escapeHtml;
 
 const btn = (text: string, action: CallbackAction, ...args: string[]): TelegramButton => ({
   text,

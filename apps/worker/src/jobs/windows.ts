@@ -1,7 +1,7 @@
 import type { Window } from "@eci-shuttle/shared";
 import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { bumpConfigs, desiredConfig } from "@/services/devices/config";
-import { listPhones } from "@/services/devices/phones";
+import { trackedDevices } from "@/services/devices/phones";
 import { refreshPhases } from "@/services/ingest/ingest";
 import { mutate, systemActor } from "@/services/kernel";
 import type { Job } from "../job";
@@ -37,11 +37,10 @@ export const windows: Job = {
     for (const { id: workspaceId } of all) {
       try {
         const deviceIds: string[] = [];
-        for (const { device, vehicle } of await listPhones(db, actor, { workspaceId }, now)) {
-          if (!vehicle || device.revokedAt) continue;
+        for (const { deviceId } of await trackedDevices(db, workspaceId)) {
           // read as of the range start, so a window that closed since is still in the schedule
-          const c = await desiredConfig(db, device.id, prev);
-          if (!c.killed && !c.revoked && edgeIn(c.schedule, from, to)) deviceIds.push(device.id);
+          const c = await desiredConfig(db, deviceId, prev);
+          if (!c.killed && !c.revoked && edgeIn(c.schedule, from, to)) deviceIds.push(deviceId);
         }
         if (deviceIds.length) {
           bumped += (

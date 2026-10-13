@@ -68,6 +68,13 @@ describe("drainQueue", () => {
     expect(await get(tired.id)).toMatchObject({ status: "dead", attempts: 8, error: "503" });
   });
 
+  it("retry with retryAfterMs (Telegram 429) waits that long instead of the backoff", async () => {
+    const row = await push();
+    const h = harness(() => ({ ok: false, retry: true, error: "429", retryAfterMs: 30_000 }));
+    await drainQueue(testDb(), NOW, h.deps);
+    expect(await get(row.id)).toMatchObject({ attempts: 1, runAfter: new Date(NOW.getTime() + 30_000) });
+  });
+
   it("retry false marks the row dead with the error; a throwing deliverer is retried", async () => {
     const blocked = await tg(201);
     const flaky = await tg(202);

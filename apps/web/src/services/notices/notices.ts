@@ -12,6 +12,7 @@ import { z } from "zod";
 import type { Db } from "@/db";
 import { notices, people, services, spots, subscriptions, workspaces } from "@/db/schema";
 import type { Notice } from "@/db/types";
+import { escapeHtml } from "@/lib/telegram/html";
 import {
   type Actor,
   checkVersion,
@@ -214,8 +215,6 @@ export async function activeNotices(
     );
   return rows.sort(compareNotices);
 }
-
-const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const istTime = new Intl.DateTimeFormat("en-GB", {
   timeZone: IST_TZ,

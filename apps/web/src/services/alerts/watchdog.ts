@@ -6,11 +6,12 @@ import { type AlertKind, istDate, istHHMM, istToEpoch, resolveMode } from "@eci-
 import { and, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, outbox, vehicleState, vehicles, workspaces } from "@/db/schema";
+import { escapeHtml } from "@/lib/telegram/html";
 import { encodeCallback } from "@/services/bot/callbacks";
 import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { desiredConfig } from "@/services/devices/config";
 import { refreshPhases } from "@/services/ingest/ingest";
-import { adminButton, alertAdminChanges, escapeHtml, raiseAlert } from "./alerts";
+import { adminButton, alertAdminChanges, raiseAlert } from "./alerts";
 import { LOW_BATTERY_PCT, SILENT_AFTER_MS } from "./thresholds";
 
 export { LOW_BATTERY_PCT, SILENT_AFTER_MS };

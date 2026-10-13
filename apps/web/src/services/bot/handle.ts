@@ -1,8 +1,7 @@
 /** svc-bot: the webhook entry. app/api/telegram/route.ts checks the secret header, then calls handleUpdate. */
-import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@/db";
-import { spots } from "@/db/schema";
 import { markBlockedBot, upsertPersonFromTelegram } from "../catalog/people";
+import { isSpotName } from "../catalog/spots";
 import { listAllWorkspaces, workspaceBySlug } from "../catalog/workspaces";
 import { isServiceError, systemActor, userMessage } from "../kernel";
 import { onNotice, onSilence, onStatus, onToday } from "./admin";
@@ -17,23 +16,6 @@ const HELP =
   "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
   "/stop turns off your alerts and notices.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
-
-/** A spot of the workspace (not archived) whose short name or name is exactly `text`, case-insensitive. */
-async function isSpotName(db: Db, workspaceId: string, text: string): Promise<boolean> {
-  const q = text.toLowerCase();
-  const [hit] = await db
-    .select({ id: spots.id })
-    .from(spots)
-    .where(
-      and(
-        eq(spots.workspaceId, workspaceId),
-        isNull(spots.archivedAt),
-        or(eq(sql`lower(${spots.shortName})`, q), eq(sql`lower(${spots.name})`, q)),
-      ),
-    )
-    .limit(1);
-  return !!hit;
-}
 
 /**
  * Route one update (never throws for a person's mistake: a ServiceError becomes a reply with userMessage(e), or an alert on a button press):

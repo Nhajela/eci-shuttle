@@ -28,8 +28,8 @@ export type TelegramPayload = {
 /** What a deliverer (deliverPush, deliverTelegram) tells the worker queue job. */
 export type DeliveryResult =
   | { ok: true }
-  /** retry later with backoff (network, 5xx, 429) */
-  | { ok: false; retry: true; error: string }
+  /** retry later with backoff (network, 5xx), or after `retryAfterMs` when the far side says (Telegram 429) */
+  | { ok: false; retry: true; error: string; retryAfterMs?: number }
   /** give up: mark the job dead (no token, blocked bot, DeviceNotRegistered) */
   | { ok: false; retry: false; error: string };
 

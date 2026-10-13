@@ -13,9 +13,6 @@ import { type DeliveryResult, type OutboxJob, systemActor, type TelegramButton, 
 import { recordGroupPost } from "../notices/notices";
 import type { BotReply } from "./types";
 
-/** DeliveryResult plus Telegram's 429 retry_after (contract request: add retryAfterMs to DeliveryResult). */
-export type TelegramDeliveryResult = DeliveryResult | { ok: false; retry: true; error: string; retryAfterMs: number };
-
 /** A Bot API error: `code` is Telegram's error_code (or the HTTP status), `retryAfterS` its 429 retry_after. */
 export class TelegramError extends Error {
   constructor(
@@ -68,7 +65,7 @@ const noToken = () => !process.env.TELEGRAM_BOT_TOKEN;
 const dev = () => noToken() && process.env.NODE_ENV !== "production";
 const BOT = systemActor("bot-deliver");
 
-function failure(e: unknown): TelegramDeliveryResult {
+function failure(e: unknown): DeliveryResult {
   if (noToken()) return { ok: false, retry: false, error: NO_TOKEN };
   const error = e instanceof Error ? e.message : String(e);
   if (!(e instanceof TelegramError)) return { ok: false, retry: true, error }; // network
@@ -81,7 +78,7 @@ async function send(
   p: TelegramPayload,
   fetchImpl: typeof fetch,
   workspaceId: string | null,
-): Promise<TelegramDeliveryResult> {
+): Promise<DeliveryResult> {
   if (p.unpinMessageId !== undefined) {
     if (dev()) return { ok: true };
     try {
@@ -151,7 +148,7 @@ export async function sendNow(
   db: Db,
   payload: TelegramPayload,
   fetchImpl: typeof fetch = fetch,
-): Promise<TelegramDeliveryResult> {
+): Promise<DeliveryResult> {
   return send(db, payload, fetchImpl, null);
 }
 
@@ -160,7 +157,7 @@ export async function deliverTelegram(
   db: Db,
   job: OutboxJob,
   fetchImpl: typeof fetch = fetch,
-): Promise<TelegramDeliveryResult> {
+): Promise<DeliveryResult> {
   return send(db, job.payload as TelegramPayload, fetchImpl, job.workspaceId);
 }
 

@@ -5,12 +5,12 @@ import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog } from "@/db/schema";
 import { bumpConfigs, desiredConfig } from "@/services/devices/config";
-import { listPhones, type PhoneHealth } from "@/services/devices/phones";
+import { trackedDevices } from "@/services/devices/phones";
 import { refreshPhases } from "@/services/ingest/ingest";
 import { windows } from "./windows";
 
 vi.mock("@/services/devices/config", () => ({ desiredConfig: vi.fn(), bumpConfigs: vi.fn() }));
-vi.mock("@/services/devices/phones", () => ({ listPhones: vi.fn() }));
+vi.mock("@/services/devices/phones", () => ({ trackedDevices: vi.fn() }));
 vi.mock("@/services/ingest/ingest", () => ({ refreshPhases: vi.fn() }));
 
 const NOW = new Date("2026-10-12T04:10:00.300Z");
@@ -26,21 +26,17 @@ const win = (startsAt: number, endsAt: number, mode: Window["mode"] = "active"):
   source: "service",
   label: null,
 });
-const phone = (id: string, over: { vehicle?: boolean; revoked?: boolean } = {}) =>
-  ({
-    device: { id, revokedAt: over.revoked ? NOW : null },
-    vehicle: over.vehicle === false ? null : { id: `v-${id}` },
-  }) as unknown as PhoneHealth;
+const phone = (id: string) => ({ deviceId: id, vehicleId: `v-${id}` });
 
 /** device id → its schedule */
 let schedules: Record<string, Window[]>;
-let phonesByWs: Record<string, PhoneHealth[]>;
+let phonesByWs: Record<string, ReturnType<typeof phone>[]>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   schedules = {};
   phonesByWs = {};
-  vi.mocked(listPhones).mockImplementation(async (_db, _actor, { workspaceId }) => phonesByWs[workspaceId] ?? []);
+  vi.mocked(trackedDevices).mockImplementation(async (_db, workspaceId) => phonesByWs[workspaceId] ?? []);
   vi.mocked(desiredConfig).mockImplementation(
     async (_db, deviceId) => ({ killed: false, revoked: false, schedule: schedules[deviceId] ?? [] }) as SyncResponse,
   );
@@ -95,10 +91,8 @@ describe("windows job", () => {
     expect(bumpConfigs).not.toHaveBeenCalled();
   });
 
-  it("skips unassigned and revoked phones; no bump means no audit, but phases still refresh", async () => {
+  it("no tracked phones: no bump means no audit, but phases still refresh", async () => {
     const ws = await makeWorkspace(testDb());
-    phonesByWs[ws.id] = [phone("loose", { vehicle: false }), phone("gone", { revoked: true })];
-    schedules = { loose: [win(t - 5_000, t + MIN)], gone: [win(t - 5_000, t + MIN)] };
     await run();
     expect(desiredConfig).not.toHaveBeenCalled();
     expect(bumpConfigs).not.toHaveBeenCalled();
@@ -123,7 +117,7 @@ describe("windows job", () => {
     const good = await makeWorkspace(testDb());
     phonesByWs[good.id] = [phone("ok")];
     schedules = { ok: [win(t - 5_000, t + MIN)] };
-    vi.mocked(listPhones).mockImplementation(async (_db, _a, { workspaceId }) => {
+    vi.mocked(trackedDevices).mockImplementation(async (_db, workspaceId) => {
       if (workspaceId === bad.id) throw new Error("boom");
       return phonesByWs[workspaceId] ?? [];
     });

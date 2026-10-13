@@ -20,6 +20,7 @@ import type { Db } from "@/db";
 import { devices, directives, services } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { origin } from "@/lib/env";
+import { escapeHtml } from "@/lib/telegram/html";
 import { detectProblems } from "@/services/alerts/watchdog";
 import { adminActor, resolveWorkspace } from "@/services/auth/actor";
 import { addException, getSchedule } from "@/services/catalog/schedule";
@@ -42,7 +43,7 @@ import { type Callback, encodeCallback } from "./callbacks";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
 const H = 3_600_000;
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const esc = escapeHtml;
 const TEST_TAG = "TEST workspace: ";
 const tag = (ws: Workspace) => (ws.isLive ? "" : `<i>${TEST_TAG}${esc(ws.slug)}</i>\n`);
 /** IST time, with the day when it isn't today. */
