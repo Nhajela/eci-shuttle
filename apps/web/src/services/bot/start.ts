@@ -1,5 +1,6 @@
 /** svc-bot: /start and /login (SPEC §6c Login, as Travel CoOp). */
 import { istHHMM } from "@eci-shuttle/shared";
+import { env } from "@/lib/env";
 import { resolveWorkspace } from "../auth/actor";
 import { claimLogin, createMagicLink, pendingLoginStartedAt } from "../auth/codes";
 import { isServiceError, type TelegramPayload } from "../kernel";
@@ -14,9 +15,16 @@ const msg = (ctx: BotContext, html: string): TelegramPayload => ({
   personId: ctx.person.id,
 });
 
-/** A magic login link for a person with any membership; null for everyone else. */
+/**
+ * A magic login link for a person with any membership; null for everyone else. Only in their own private chat
+ * (whose id is their telegram id): anywhere else the whole chat would see it, so they're told to DM the bot.
+ */
 async function magicLink(ctx: BotContext): Promise<TelegramPayload | null> {
   if (!(await resolveWorkspace(ctx.db, ctx.person.id))) return null;
+  if (ctx.chatId !== ctx.person.telegramId) {
+    const bot = `https://t.me/${env.telegramBotUsername()}`;
+    return msg(ctx, `Message me privately to log in: <a href="${bot}">${bot}</a>`);
+  }
   const { url, expiresAt } = await createMagicLink(ctx.db, ctx.person.id, ctx.now);
   return msg(ctx, `Log in to admin: <a href="${url}">open admin</a>\nValid until ${istHHMM(expiresAt)}.`);
 }
