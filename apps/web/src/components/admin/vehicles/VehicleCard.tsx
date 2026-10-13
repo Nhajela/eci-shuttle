@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import type { ComponentProps } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,8 +50,9 @@ export function VehicleCard({ vehicle: v, phoneLabel, service, trips, w, action 
           <span className="text-muted-foreground">Now: </span>
           {service ? `${service.name}, until ${service.until}` : "not on a service"}
         </p>
-        <details className="mt-2">
+        <details className="group mt-2">
           <summary className="flex min-h-11 cursor-pointer items-center font-medium">
+            <ChevronRight aria-hidden className="mr-1 size-4 shrink-0 transition-transform group-open:rotate-90" />
             Trips, last 7 days ({total})
           </summary>
           {trips.length === 0 ? (
@@ -67,8 +69,11 @@ export function VehicleCard({ vehicle: v, phoneLabel, service, trips, w, action 
           )}
         </details>
         {action && (
-          <details>
-            <summary className="flex min-h-11 cursor-pointer items-center font-medium">Edit</summary>
+          <details className="group">
+            <summary className="flex min-h-11 cursor-pointer items-center font-medium">
+              <ChevronRight aria-hidden className="mr-1 size-4 shrink-0 transition-transform group-open:rotate-90" />
+              Edit
+            </summary>
             <VehicleForm w={w} action={action} vehicle={v} />
           </details>
         )}

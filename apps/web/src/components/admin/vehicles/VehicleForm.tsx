@@ -1,5 +1,5 @@
 "use client";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +19,7 @@ type Props = {
 export function VehicleForm({ w, action, vehicle }: Props) {
   const [state, submit, pending] = useActionState(action, { ok: true, message: null });
   const id = vehicle?.id ?? "new";
+  const [noColour, setNoColour] = useState(!!vehicle && !vehicle.colour);
   return (
     <form action={submit} className="flex flex-col gap-4">
       <input type="hidden" name="w" value={w} />
@@ -56,10 +57,18 @@ export function VehicleForm({ w, action, vehicle }: Props) {
             name="colour"
             type="color"
             defaultValue={vehicle?.colour ?? "#1f6feb"}
-            className="h-11 w-16 cursor-pointer rounded-(--radius-field) border border-input bg-background"
+            // picking a colour means the admin wants one: untick "No colour" so it is saved
+            onChange={() => setNoColour(false)}
+            className={`h-11 w-16 cursor-pointer rounded-(--radius-field) border border-input bg-background ${noColour ? "opacity-40 grayscale" : ""}`}
           />
           <Label className="min-h-11">
-            <input type="checkbox" name="noColour" defaultChecked={!!vehicle && !vehicle.colour} className="size-5" />
+            <input
+              type="checkbox"
+              name="noColour"
+              checked={noColour}
+              onChange={(e) => setNoColour(e.target.checked)}
+              className="size-5"
+            />
             No colour
           </Label>
         </div>
