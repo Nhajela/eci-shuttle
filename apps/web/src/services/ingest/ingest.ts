@@ -57,6 +57,7 @@ export type IngestResult = {
 const GAP_MS = 2 * 60_000;
 const OFF_ROUTE_M = 150;
 const OFF_ROUTE_MS = 60_000;
+const OFF_ROUTE_LOOKBACK_MS = 10 * 60_000;
 const OFFLINE_MS = 2 * 60_000;
 const MATCH_TOL_MS = 25 * 60_000;
 const DAY_MS = 86_400_000;
@@ -300,8 +301,10 @@ async function processVehicle(
           ? fresh[0].recordedAt
           : st.since;
   const offStart = !stale && !atSpot && route ? await offRouteStart(tx, vehicleId, route.path, lastAt) : null;
-  // keep the stretch's first start: the 10 min look-back loses it on long stretches
-  const offRouteSince = offStart == null ? null : (st.offRouteSince ?? new Date(offStart));
+  // inside the look-back offStart is exact; a stored start older than it is the same long stretch, so keep it
+  // ponytail: a rejoin older than 10 min within one batch still keeps the old start; fine for live phones
+  const keep = st.offRouteSince != null && st.offRouteSince.getTime() < lastAt - OFF_ROUTE_LOOKBACK_MS;
+  const offRouteSince = offStart == null ? null : keep ? st.offRouteSince : new Date(offStart);
   await tx
     .update(vehicleState)
     .set({
@@ -364,7 +367,7 @@ async function offRouteStart(tx: Db, vehicleId: string, path: LatLng[], lastAt: 
     .where(
       and(
         eq(pingsTable.vehicleId, vehicleId),
-        gte(pingsTable.recordedAt, new Date(lastAt - 10 * 60_000)),
+        gte(pingsTable.recordedAt, new Date(lastAt - OFF_ROUTE_LOOKBACK_MS)),
         lte(pingsTable.recordedAt, new Date(lastAt)),
       ),
     )

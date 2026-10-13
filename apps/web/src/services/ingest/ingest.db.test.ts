@@ -231,6 +231,20 @@ describe("ingestPings", () => {
     expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(since) });
   });
 
+  it("off_route_since restarts when a batch rejoins the path between two stretches", async () => {
+    const w = await world();
+    const mid = { lat: 15.705, lng: 73.7 };
+    const off = { lat: 15.705, lng: 73.7028 };
+    await w.send([
+      ...riva,
+      ...track(ist("09:01:10"), ist("09:01:50"), RIVA, mid),
+      ...track(ist("09:02:00"), ist("09:04:00"), off),
+    ]);
+    expect(await w.state()).toMatchObject({ offRouteSince: new Date(ist("09:02:00")) });
+    await w.send([...track(ist("09:04:10"), ist("09:04:40"), mid), ...track(ist("09:04:50"), ist("09:06:30"), off)]);
+    expect(await w.state()).toMatchObject({ offRoute: true, offRouteSince: new Date(ist("09:04:50")) });
+  });
+
   it("a short excursion off the path (< 1 min) is not off route", async () => {
     const w = await world();
     const blip = drive.map((p) =>
