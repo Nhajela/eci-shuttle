@@ -1,6 +1,6 @@
 import type { AnswerLine } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
-import { ageSeconds, answerParts, contextText, pickSpot, spotCookieName } from "./format";
+import { ageSeconds, answerParts, contextText, pickSpot, scheduleWindow, spotCookieName } from "./format";
 
 const line = (over: Partial<AnswerLine> = {}): AnswerLine => ({
   serviceId: "s1",
@@ -187,5 +187,41 @@ describe("spotCookieName", () => {
   it("one cookie per workspace", () => {
     expect(spotCookieName(null)).toBe("eci_spot");
     expect(spotCookieName("test")).toBe("eci_spot_test");
+  });
+});
+
+describe("scheduleWindow", () => {
+  const rows = (n: number, nextIdx: number | null) =>
+    Array.from({ length: n }, (_, i) => ({ i, past: nextIdx === null ? true : i < nextIdx, next: i === nextIdx }));
+
+  it("keeps the last departure that left and five from next, hiding the rest on both sides", () => {
+    const w = scheduleWindow(rows(24, 6));
+    expect(w.visible.map((r) => r.i)).toEqual([5, 6, 7, 8, 9, 10]);
+    expect(w.earlier).toBe(5);
+    expect(w.later).toBe(13);
+  });
+
+  it("hides nothing when the list is short", () => {
+    const w = scheduleWindow(rows(4, 1));
+    expect(w.visible.map((r) => r.i)).toEqual([0, 1, 2, 3]);
+    expect(w).toMatchObject({ earlier: 0, later: 0 });
+  });
+
+  it("shows the start of the day when nothing has left yet", () => {
+    const w = scheduleWindow(rows(24, 0));
+    expect(w.visible.map((r) => r.i)).toEqual([0, 1, 2, 3, 4]);
+    expect(w).toMatchObject({ earlier: 0, later: 19 });
+  });
+
+  it("shows the last departure once the day is over", () => {
+    const w = scheduleWindow(rows(24, null));
+    expect(w.visible.map((r) => r.i)).toEqual([23]);
+    expect(w).toMatchObject({ earlier: 23, later: 0 });
+  });
+
+  it("shows everything when expanded", () => {
+    const w = scheduleWindow(rows(24, 6), { showEarlier: true, showLater: true });
+    expect(w.visible).toHaveLength(24);
+    expect(w).toMatchObject({ earlier: 0, later: 0 });
   });
 });

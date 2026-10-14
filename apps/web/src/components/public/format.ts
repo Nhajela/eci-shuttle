@@ -76,3 +76,21 @@ export function pickSpot(spots: { spotId: string }[], remembered: string | undef
 export function spotCookieName(slug: string | null): string {
   return slug ? `eci_spot_${slug}` : "eci_spot";
 }
+
+const KEEP_PAST = 1;
+const KEEP_AHEAD = 5;
+
+/**
+ * Today's departures trimmed around "next": the last one that left and the next five (from "next"). The rest
+ * fold into "earlier" / "later" counts the page shows as buttons. Once the day is over, only the last departure.
+ */
+export function scheduleWindow<T extends { past: boolean; next: boolean }>(
+  rows: T[],
+  expand: { showEarlier?: boolean; showLater?: boolean } = {},
+): { visible: T[]; earlier: number; later: number } {
+  const nextIdx = rows.findIndex((r) => r.next);
+  const anchor = nextIdx === -1 ? rows.length : nextIdx;
+  const start = expand.showEarlier ? 0 : Math.max(0, anchor - KEEP_PAST);
+  const end = expand.showLater || nextIdx === -1 ? rows.length : Math.min(rows.length, anchor + KEEP_AHEAD);
+  return { visible: rows.slice(start, end), earlier: start, later: rows.length - end };
+}

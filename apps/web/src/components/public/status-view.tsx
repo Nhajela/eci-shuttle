@@ -7,7 +7,7 @@ import type { AnswerLine, PublicSpot, PublicStatus } from "@eci-shuttle/shared";
 import { cn } from "cn";
 import { type ReactNode, useEffect, useState } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { ageSeconds, answerParts, contextText, pickSpot, spotCookieName } from "./format";
+import { ageSeconds, answerParts, contextText, pickSpot, scheduleWindow, spotCookieName } from "./format";
 import { Notices } from "./notices";
 import { StaffMap } from "./staff-map";
 
@@ -195,6 +195,9 @@ function AnswerRow({ line, single, ageS }: { line: AnswerLine; single: boolean; 
 function Schedule({ spot }: { spot: PublicSpot }) {
   const { rows, loops, notices } = spot.schedule;
   const manyServices = new Set(rows.map((r) => r.serviceId)).size > 1;
+  const [showEarlier, setShowEarlier] = useState(false);
+  const [showLater, setShowLater] = useState(false);
+  const { visible, earlier, later } = scheduleWindow(rows, { showEarlier, showLater });
   return (
     <section aria-labelledby="schedule" className="flex flex-col gap-3">
       <h2 id="schedule" className="font-heading text-base font-semibold text-ink">
@@ -207,9 +210,10 @@ function Schedule({ spot }: { spot: PublicSpot }) {
         </p>
       ))}
       {rows.length === 0 && loops.length === 0 && <p className="text-[15px] text-ink-soft">No departures today.</p>}
+      {earlier > 0 && <MoreButton onClick={() => setShowEarlier(true)}>{`Show ${earlier} earlier`}</MoreButton>}
       {rows.length > 0 && (
         <ol className="flex flex-col">
-          {rows.map((r) => (
+          {visible.map((r) => (
             <li
               key={`${r.serviceId}-${r.at}`}
               aria-current={r.next ? "true" : undefined}
@@ -229,6 +233,19 @@ function Schedule({ spot }: { spot: PublicSpot }) {
           ))}
         </ol>
       )}
+      {later > 0 && <MoreButton onClick={() => setShowLater(true)}>{`Show ${later} later`}</MoreButton>}
     </section>
+  );
+}
+
+function MoreButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="min-h-11 self-start px-2 text-[15px] font-medium text-ink-soft underline underline-offset-4"
+    >
+      {children}
+    </button>
   );
 }

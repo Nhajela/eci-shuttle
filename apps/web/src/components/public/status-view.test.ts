@@ -102,6 +102,27 @@ describe("StatusView (server render)", () => {
     expect(empty).toContain("Nanu pickup 08:00");
   });
 
+  it("a long timetable shows the last departure and the next five, with buttons for the rest", () => {
+    const hhmm = (i: number) =>
+      `${String(11 + Math.floor(i / 3)).padStart(2, "0")}:${String((i % 3) * 20).padStart(2, "0")}`;
+    const rows = Array.from({ length: 24 }, (_, i) => ({
+      serviceId: "s1",
+      serviceName: "To Circle",
+      at: `2026-10-12T${String(5 + Math.floor(i / 3)).padStart(2, "0")}:${String(30 + (i % 3) * 20 - (i % 3 === 2 ? 60 : 0)).padStart(2, "0")}:00Z`,
+      label: hhmm(i),
+      past: i < 6,
+      next: i === 6,
+    }));
+    const spots = status.spots.map((s) => (s.spotId === "riva" ? { ...s, schedule: { ...s.schedule, rows } } : s));
+    const html = renderToString(
+      createElement(StatusView, { initial: { ...status, spots }, slug: "test", initialSpotId: "riva" }),
+    );
+    for (const t of ["12:40", "13:00", "14:20"]) expect(html).toContain(`>${t}<`);
+    for (const t of ["11:00", "12:20", "14:40", "18:40"]) expect(html).not.toContain(`>${t}<`);
+    expect(html).toMatch(/Show 5 earlier/);
+    expect(html).toMatch(/Show 13 later/);
+  });
+
   it("no spots: says so plainly", () => {
     const html = renderToString(
       createElement(StatusView, { initial: { ...status, spots: [] }, slug: null, initialSpotId: null }),
