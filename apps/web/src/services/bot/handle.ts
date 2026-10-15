@@ -21,7 +21,7 @@ const HELP =
   "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
   "/subscribe sends you where the shuttle is every 15 min; /unsubscribe stops it.\n" +
   "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you when it's here.\n" +
-  "/stop turns off your alerts, updates, notices and shuttle request.\n" +
+  "/stop (or just stop) turns off your alerts, updates, notices and shuttle request.\n" +
   "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
 
@@ -33,6 +33,7 @@ const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html
  * - "/shuttle" or a spot's short name / name typed alone ("riva", case-insensitive) → attendee handlers.
  * - "/status", "/today", "/notice", "/silence", "/setgroup" → admin handlers (need a membership; otherwise a polite no).
  * - "/stop" → attendee.onStop. "/pair <code>" in a private chat → live.onPair.
+ * - "stop" / "unsubscribe" typed without the slash in a private chat → onStop / onUnsubscribe (the welcome says so).
  * - a location message or any edited_message → live.onLocation (first, without the person upsert).
  * - callback_query → callbacks.handleCallback.
  * - anything else in a private chat → a short help text; in groups → nothing.
@@ -161,9 +162,14 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
       case "pair":
         // the code is a credential: never take it from a group
         return isPrivate ? await onPair(ctx, rest) : NONE;
-      case null:
+      case null: {
+        // the welcome tells people to "just send 'stop' or 'unsubscribe'": take the bare words, only in private
+        const word = isPrivate ? text?.toLowerCase().replace(/[^a-z]/g, "") : null;
+        if (word === "stop") return await onStop(ctx);
+        if (word === "unsubscribe") return await onUnsubscribe(ctx);
         // ponytail: one indexed lookup per short message, groups included; cache spot names if groups get busy
         if (text && text.length <= 60 && (await isSpotName(db, workspace.id, text))) return await onShuttle(ctx, text);
+      }
     }
     return isPrivate ? say(chatId, HELP) : NONE;
   } catch (e) {

@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import { resolveWorkspace } from "../auth/actor";
 import { claimLogin, createMagicLink, pendingLoginStartedAt } from "../auth/codes";
 import { isServiceError, type TelegramPayload } from "../kernel";
-import { onShuttle } from "./attendee";
+import { onShuttle, onWelcome } from "./attendee";
 import { encodeCallback } from "./callbacks";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
@@ -35,7 +35,8 @@ const EXPIRED = "That login link expired. Start again from the website.";
  * `/start <code>` only asks: "Log in … in a browser? Only tap if you just pressed Log in (started HH:MM)" with a
  * [Yes, log me in] button (`login:<code>`); the code is claimed by onLoginButton, never by the bare deep link
  * (else anyone could send staff their own code and get their session). Unknown/expired/used → start again.
- * `/start` alone → welcome with the spot buttons (attendee), plus a magic login link when the person has any membership.
+ * `/start` alone → in a private chat, the welcome: subscribed to the 15-min updates for every stop (attendee.onWelcome);
+ * in a group, the spot buttons (updates come only by private message). Plus a magic login link for members.
  */
 export async function onStart(ctx: BotContext, payload: string | null): Promise<BotReply> {
   const code = payload?.trim();
@@ -46,7 +47,8 @@ export async function onStart(ctx: BotContext, payload: string | null): Promise<
     const yes = { text: "Yes, log me in", callbackData: encodeCallback({ action: "login", args: [code] }) };
     return { send: [{ ...msg(ctx, ask), buttons: [[yes]] }] };
   }
-  const [link, shuttle] = await Promise.all([magicLink(ctx), onShuttle(ctx, null)]);
+  const isPrivate = ctx.chatId === ctx.person.telegramId;
+  const [link, shuttle] = await Promise.all([magicLink(ctx), isPrivate ? onWelcome(ctx) : onShuttle(ctx, null)]);
   return { ...shuttle, send: [...(link ? [link] : []), ...shuttle.send] };
 }
 

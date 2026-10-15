@@ -5,15 +5,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginCodes } from "@/db/schema";
 import type { Person, Workspace } from "@/db/types";
 import { finishLogin, LOGIN_CODE_TTL_MS, startLogin } from "../auth/codes";
-import { onShuttle } from "./attendee";
+import { onShuttle, onWelcome } from "./attendee";
 import { onLogin, onLoginButton, onStart } from "./start";
 import type { BotContext } from "./types";
 
-vi.mock("./attendee", () => ({ onShuttle: vi.fn() }));
+vi.mock("./attendee", () => ({ onShuttle: vi.fn(), onWelcome: vi.fn() }));
 
 const db = () => testDb();
 const NOW = new Date("2026-10-15T04:30:00Z");
 const SHUTTLE = { chatId: 4242, html: "Where are you?", kind: "reply" as const };
+const WELCOME = { chatId: 4242, html: "Welcome to the shuttle bot!", kind: "reply" as const };
 
 // a private chat's id is the person's telegram id; a group's is negative
 const ctxFor = (person: Person, workspace: Workspace, now = NOW, chatId = person.telegramId): BotContext => ({
@@ -32,6 +33,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(onShuttle).mockResolvedValue({ send: [SHUTTLE] });
+  vi.mocked(onWelcome).mockResolvedValue({ send: [WELCOME] });
 });
 
 describe("/start <code>", () => {
@@ -103,16 +105,25 @@ describe("/start <code>", () => {
 });
 
 describe("plain /start", () => {
-  it("an attendee gets the /shuttle intro only", async () => {
+  it("an attendee in private gets the welcome (subscribed to the 15-min updates) only", async () => {
     const ws = await makeWorkspace(db());
     const person = await makePerson(db());
     const ctx = ctxFor(person, ws);
     const r = await onStart(ctx, null);
-    expect(onShuttle).toHaveBeenCalledWith(ctx, null);
+    expect(onWelcome).toHaveBeenCalledWith(ctx);
+    expect(onShuttle).not.toHaveBeenCalled();
+    expect(r.send).toEqual([WELCOME]);
+  });
+
+  it("in a group, /start shows the /shuttle intro: updates come only by private message", async () => {
+    const ws = await makeWorkspace(db());
+    const person = await makePerson(db());
+    const r = await onStart(ctxFor(person, ws, NOW, GROUP), null);
+    expect(onWelcome).not.toHaveBeenCalled();
     expect(r.send).toEqual([SHUTTLE]);
   });
 
-  it("an admin gets a magic login link, then the /shuttle intro", async () => {
+  it("an admin gets a magic login link, then the welcome", async () => {
     const ws = await makeWorkspace(db());
     const { person } = await makeAdmin(db(), ws.id, "viewer");
     const r = await onStart(ctxFor(person, ws), "  ");
@@ -121,7 +132,7 @@ describe("plain /start", () => {
     expect(r.send[0].html.startsWith(`Log in to admin: <a href="${process.env.PUBLIC_ORIGIN}/login/magic?code=m`)).toBe(
       true,
     );
-    expect(r.send[1]).toEqual(SHUTTLE);
+    expect(r.send[1]).toEqual(WELCOME);
   });
 
   it("in a group, an admin is told to message the bot privately: no link, no code", async () => {

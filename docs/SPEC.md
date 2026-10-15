@@ -255,6 +255,10 @@ preview can't log anyone in. A signed session cookie lasts 60 days. Only admin n
 - Each workspace has its own alert list, so test alerts never reach the real ops team.
 
 **For attendees:**
+- **`/start` (the core experience)**: in a private chat it subscribes the person to where the shuttle is, every
+  15 min, for every stop, straight away: "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about
+  where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop." Plain "stop" / "unsubscribe"
+  (no slash) work like `/stop` / `/unsubscribe` in a private chat. In a group, `/start` shows the spot buttons.
 - `/shuttle` (or just "riva" / "circle") → the same answer as the page ("Here in 6 min · live"), with spot buttons.
 - **"Tell me when it's close"**: a one-shot alert: "Message me when the shuttle is 5 min from Riva".
   The ETA engine fires it once, then it expires (after at most 2h).

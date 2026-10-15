@@ -7,7 +7,7 @@ import { auditLog, memberships, people, workspaces } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { ServiceError } from "../kernel";
 import { onAdminCallback, onNotice, onSilence, onStatus, onToday } from "./admin";
-import { onAttendeeCallback, onShuttle, onStop } from "./attendee";
+import { onAttendeeCallback, onShuttle, onStop, onUnsubscribe } from "./attendee";
 import { handleUpdate } from "./handle";
 import { onLocation, onPair } from "./live";
 import { onNeed } from "./need";
@@ -22,7 +22,12 @@ vi.mock("./admin", () => ({
   onNotice: vi.fn(),
   onAdminCallback: vi.fn(),
 }));
-vi.mock("./attendee", () => ({ onShuttle: vi.fn(), onStop: vi.fn(), onAttendeeCallback: vi.fn() }));
+vi.mock("./attendee", () => ({
+  onShuttle: vi.fn(),
+  onStop: vi.fn(),
+  onUnsubscribe: vi.fn(),
+  onAttendeeCallback: vi.fn(),
+}));
 vi.mock("./live", () => ({ onPair: vi.fn(), onLocation: vi.fn() }));
 vi.mock("./need", () => ({ onNeed: vi.fn() }));
 
@@ -43,6 +48,7 @@ beforeEach(async () => {
     onNotice,
     onShuttle,
     onStop,
+    onUnsubscribe,
     onPair,
     onLocation,
     onNeed,
@@ -114,6 +120,19 @@ describe("handleUpdate", () => {
     const r = await handleUpdate(db(), inGroup(from, "/need riva circle"), NOW);
     expect(r.send[0]).toMatchObject({ chatId: -100, html: "Send /need to me in a private chat." });
     expect(onNeed).toHaveBeenCalledTimes(2);
+  });
+
+  it("'stop' or 'unsubscribe' typed without a slash in private stops; in a group it's just chat", async () => {
+    const from = user();
+    await handleUpdate(db(), dm(from, "stop"), NOW);
+    await handleUpdate(db(), dm(from, " Stop. "), NOW);
+    expect(onStop).toHaveBeenCalledTimes(2);
+    await handleUpdate(db(), dm(from, "Unsubscribe"), NOW);
+    expect(onUnsubscribe).toHaveBeenCalledOnce();
+    expect(await handleUpdate(db(), inGroup(from, "stop"), NOW)).toEqual({ send: [] });
+    expect(await handleUpdate(db(), inGroup(from, "unsubscribe"), NOW)).toEqual({ send: [] });
+    expect(onStop).toHaveBeenCalledTimes(2);
+    expect(onUnsubscribe).toHaveBeenCalledOnce();
   });
 
   it("a spot's name typed alone goes to /shuttle; other text gets help in private, nothing in groups", async () => {

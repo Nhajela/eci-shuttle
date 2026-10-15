@@ -7,7 +7,16 @@ import type { Spot } from "@/db/types";
 import { attendeeActor } from "../auth/actor";
 import { publicStatus, spotAnswer } from "../public/status";
 import { mySubscriptions } from "../subscriptions/subscriptions";
-import { onAttendeeCallback, onShuttle, onSpot, onStop, onSubscribe, onUnsubscribe, renderAnswer } from "./attendee";
+import {
+  onAttendeeCallback,
+  onShuttle,
+  onSpot,
+  onStop,
+  onSubscribe,
+  onUnsubscribe,
+  onWelcome,
+  renderAnswer,
+} from "./attendee";
 import type { BotContext } from "./types";
 
 vi.mock("../public/status", () => ({ publicStatus: vi.fn(), spotAnswer: vi.fn() }));
@@ -229,6 +238,50 @@ describe("/subscribe", () => {
     );
     expect(subs.map((x) => x.spotId)).toEqual([null]);
     expect(riva).toBeTruthy();
+  });
+});
+
+describe("welcome (plain /start)", () => {
+  const WELCOME =
+    "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop.";
+  const me = (ctx: BotContext) => attendee(ctx.person, ctx.workspace.id);
+
+  it("subscribes to every stop straight away, then shows where the shuttle is now, with a stop button", async () => {
+    const { ctx } = await setup();
+    const r = await onWelcome(ctx);
+    expect(r.send).toHaveLength(1);
+    expect(r.send[0].html.startsWith(WELCOME)).toBe(true);
+    expect(r.send[0].html).toContain("<b>Riva Beach</b>");
+    expect(r.send[0].html).toContain("<b>The Circle</b>");
+    const subs = await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW);
+    expect(subs.map((x) => [x.kind, x.spotId])).toEqual([["updates", null]]);
+    expect(buttonData(r)).toEqual([`nunsub:${subs[0].id}`]);
+  });
+
+  it("a second /start keeps the one subscription", async () => {
+    const { ctx } = await setup();
+    await onWelcome(ctx);
+    await onWelcome(ctx);
+    expect(await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW)).toHaveLength(1);
+  });
+
+  it("after the day's last shuttle it still subscribes and says updates start when it runs tomorrow", async () => {
+    const { ctx } = await setup((r, c) =>
+      [r, c].map((s) =>
+        pubSpot(s, { answers: [line({ kind: "none", minutes: null, phaseText: "no more shuttles today" })] }),
+      ),
+    );
+    const r = await onWelcome(ctx);
+    expect(r.send[0].html.startsWith(WELCOME)).toBe(true);
+    expect(r.send[0].html).toContain("finished for today");
+    expect(await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW)).toHaveLength(1);
+  });
+
+  it("no shuttle stops set up: says so and subscribes nobody", async () => {
+    const { ctx } = await setup(() => []);
+    const r = await onWelcome(ctx);
+    expect(r.send[0].html).toBe("No shuttles are running today.");
+    expect(await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW)).toEqual([]);
   });
 });
 

@@ -127,6 +127,25 @@ async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotRe
   return say(ctx, `${intro} /unsubscribe stops them.`, [[btn("Stop updates", "nunsub", sub.id)]]);
 }
 
+export const WELCOME_TEXT =
+  "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop.";
+
+/**
+ * Plain `/start` in a private chat, the bot's core experience: subscribe to the 15-min updates for every stop
+ * straight away, then say so, with where the shuttle is now (or that it's finished for today) and a stop button.
+ */
+export async function onWelcome(ctx: BotContext): Promise<BotReply> {
+  const st = await status(ctx);
+  if (st.spots.length === 0) return say(ctx, "No shuttles are running today.");
+  const actor = attendeeActor(ctx.person, ctx.workspace.id);
+  const sub = await subscribeUpdates(ctx.db, actor, { workspaceId: ctx.workspace.id, spotId: null }, ctx.now);
+  const now = updateText(st.spots);
+  const after = dayOver(st.spots)
+    ? "The shuttle has finished for today. Updates start again when it runs tomorrow."
+    : now;
+  return say(ctx, after ? `${WELCOME_TEXT}\n\n${after}` : WELCOME_TEXT, [[btn("Stop updates", "nunsub", sub.id)]]);
+}
+
 /** `/unsubscribe`: end the 15-min updates (alerts and notices stay; /stop ends everything). */
 export async function onUnsubscribe(ctx: BotContext): Promise<BotReply> {
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
