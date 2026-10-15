@@ -3,19 +3,21 @@
  * only while a shuttle is running there. One open `updates` subscription per person; /stop or the button ends it.
  * Subscribing is audited (subscription.create); sending is worker bookkeeping (last_sent_at), not audited.
  */
-import { istDate, type PublicSpot } from "@eci-shuttle/shared";
-import { and, eq, isNull, type SQL } from "drizzle-orm";
+import { istDate, type PublicSpot, type PublicStatus } from "@eci-shuttle/shared";
+import { and, eq, gt, inArray, isNull, lte, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { people, spots, subscriptions } from "@/db/schema";
+import { people, routes, services, serviceVehicles, spots, subscriptions, vehicleState, vehicles } from "@/db/schema";
 import type { Subscription } from "@/db/types";
-import { renderAnswer } from "../bot/attendee";
 import { encodeCallback } from "../bot/callbacks";
+import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError } from "../kernel";
 import { publicStatus } from "../public/status";
-import { running } from "./need-text";
+import { departedSince, type ShuttleNow, storyText } from "./update-text";
 
 export const UPDATE_EVERY_MS = 15 * 60_000;
+/** a position older than this is not "where the shuttle is" (same as the public answer) */
+const STALE_MS = 2 * 60_000;
 /** the worker runs every minute: a few seconds early still counts as due */
 const SLACK_MS = 30_000;
 
@@ -107,19 +109,86 @@ export function dayOver(list: PublicSpot[]): boolean {
 export const DAY_OVER_TEXT =
   "The shuttle has finished for today, so no more updates today. They start again when it runs tomorrow. /unsubscribe stops them.";
 
-/** Pure. The update text for these stops, or null when no shuttle is running at any of them. */
-export function updateText(list: PublicSpot[]): string | null {
-  const live = list.filter((s) => s.answers.some(running));
-  if (!live.length) return null;
-  return live.map((s) => renderAnswer(s.name, s.answers.filter(running))).join("\n\n");
+/**
+ * What each shuttle on a public service running now is doing (update-text.ShuttleNow): waiting at a stop, on its
+ * way (or paused: the public answer says "stopped on the way"), off its route, on a driver's break, or out of sight
+ * (no position in the last 2 min). No actor: like public/status, it only reads what attendees may know.
+ */
+export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus, now: Date): Promise<ShuttleNow[]> {
+  const serviceIds = [...new Set(st.spots.flatMap((s) => s.answers.map((l) => l.serviceId)))];
+  if (!serviceIds.length) return [];
+  const rows = await db
+    .select({ serviceId: serviceVehicles.serviceId, vehicle: vehicles, state: vehicleState, route: routes })
+    .from(serviceVehicles)
+    .innerJoin(vehicles, eq(vehicles.id, serviceVehicles.vehicleId))
+    .innerJoin(services, eq(services.id, serviceVehicles.serviceId))
+    .innerJoin(routes, eq(routes.id, services.routeId))
+    .leftJoin(vehicleState, eq(vehicleState.vehicleId, vehicles.id))
+    .where(
+      and(
+        eq(serviceVehicles.workspaceId, workspaceId),
+        inArray(serviceVehicles.serviceId, serviceIds),
+        lte(serviceVehicles.startsAt, now),
+        gt(serviceVehicles.endsAt, now),
+        eq(vehicles.active, true),
+      ),
+    );
+  const breaks = await activeBreaks(db, workspaceId, now);
+  const paused = (name: string) =>
+    st.spots.some((s) => s.answers.some((l) => l.vehicleName === name && l.phaseText === "stopped on the way"));
+  const out: ShuttleNow[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const s = r.state;
+    // a vehicle answers only for the service it is running now (as public/status), once
+    if ((s?.serviceId && s.serviceId !== r.serviceId) || seen.has(r.vehicle.id)) continue;
+    seen.add(r.vehicle.id);
+    const brk = breaks.get(r.vehicle.id);
+    const fresh = !!s?.lastPingAt && now.getTime() - s.lastPingAt.getTime() <= STALE_MS;
+    let state: ShuttleNow["state"];
+    if (brk) state = { kind: "break", until: breakEnd(brk)?.getTime() ?? null };
+    else if (!s || !fresh) state = { kind: "no_signal" };
+    else if (s.offRoute) state = { kind: "off_route" };
+    else if (s.phase === "at_spot" && s.spotId) state = { kind: "waiting", spotId: s.spotId, since: s.since.getTime() };
+    else if (s.phase === "en_route" && s.nextSpotId)
+      state = {
+        kind: "moving",
+        toSpotId: s.nextSpotId,
+        fromSpotId: s.spotId,
+        since: s.since.getTime(),
+        stopped: paused(r.vehicle.name),
+      };
+    else state = { kind: "no_signal" };
+    out.push({
+      name: r.vehicle.name,
+      serviceId: r.serviceId,
+      routeSpotIds: r.route.spotIds,
+      legS: r.route.typicalLegS.map((x) => x ?? 0),
+      state,
+    });
+  }
+  return out;
+}
+
+/** The update for one subscription's stops now (update-text.storyText); null when no shuttle runs there. */
+export async function currentUpdate(
+  db: Db,
+  workspaceId: string,
+  st: PublicStatus,
+  focusSpotId: string | null,
+  now: Date,
+): Promise<string | null> {
+  const shuttles = await shuttlesNow(db, workspaceId, st, now);
+  return storyText({ shuttles, spots: st.spots, focusSpotId, now: now.getTime() });
 }
 
 /**
  * The updates job (every minute), over every open `updates` subscription (blocked-bot people skipped):
  * - the day's shuttles are over at its stop(s) and it got an update today → one "finished for today" message
  *   (day_ended_on = today); it stays on, so updates start again when the shuttle runs the next day;
- * - else, its last update ≥ 15 min old and a shuttle running there → the current answer, with a "Stop updates"
- *   button. last_sent_at moves only when something is sent, and only the run that moves it sends.
+ * - else, its last update ≥ 15 min old, or a shuttle left a stop since it (the update promised "as soon as it
+ *   starts moving"), and a shuttle running there → what the shuttle is doing now (update-text.storyText), with a
+ *   "Stop updates" button. last_sent_at moves only when something is sent, and only the run that moves it sends.
  */
 export async function runUpdates(
   db: Db,
@@ -140,6 +209,7 @@ export async function runUpdates(
     );
   const dueBy = now.getTime() - UPDATE_EVERY_MS + SLACK_MS;
   const statuses = new Map<string, ReturnType<typeof publicStatus>>();
+  const fleets = new Map<string, Promise<ShuttleNow[]>>();
   let sent = 0;
   let ended = 0;
   for (const { sub, person } of open_) {
@@ -150,7 +220,15 @@ export async function runUpdates(
     // only after a day it got updates on, once: a day without shuttles, or after the goodbye, stays quiet
     const over = dayOver(list) && sub.dayEndedOn !== today && !!sub.lastSentAt && istDate(sub.lastSentAt) === today;
     if (dayOver(list) && !over) continue;
-    const html = over ? DAY_OVER_TEXT : (sub.lastSentAt?.getTime() ?? 0) <= dueBy ? updateText(list) : null;
+    if (!fleets.has(sub.workspaceId)) fleets.set(sub.workspaceId, shuttlesNow(db, sub.workspaceId, st, now));
+    const shuttles = await (fleets.get(sub.workspaceId) as Promise<ShuttleNow[]>);
+    const last = sub.lastSentAt?.getTime() ?? 0;
+    const due = last <= dueBy || departedSince(shuttles, last);
+    const html = over
+      ? DAY_OVER_TEXT
+      : due
+        ? storyText({ shuttles, spots: st.spots, focusSpotId: sub.spotId, now: now.getTime() })
+        : null;
     if (!html) continue;
     const ok = await db.transaction(async (tx) => {
       const rows = await tx

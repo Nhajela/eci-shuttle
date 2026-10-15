@@ -10,7 +10,7 @@ import { findInWorkspace, isServiceError, type TelegramButton, userMessage } fro
 import { publicStatus } from "../public/status";
 import { myPickup } from "../subscriptions/need";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
-import { DAY_OVER_TEXT, dayOver, subscribeUpdates, unsubscribeUpdates, updateText } from "../subscriptions/updates";
+import { currentUpdate, DAY_OVER_TEXT, dayOver, subscribeUpdates, unsubscribeUpdates } from "../subscriptions/updates";
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
 import { onNeedButton } from "./need";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
@@ -120,7 +120,7 @@ async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotRe
   const st = await status(ctx);
   const list = spotId ? st.spots.filter((s) => s.spotId === spotId) : st.spots;
   const where = spotId ? `<b>${esc(list[0]?.name ?? "that stop")}</b>` : "every stop";
-  const now = updateText(list);
+  const now = await currentUpdate(ctx.db, ctx.workspace.id, st, spotId, ctx.now);
   const intro = dayOver(list)
     ? `${DAY_OVER_TEXT.split(" /unsubscribe")[0]} You'll get an update for ${where} every 15 min then.`
     : `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} every 15 min while the shuttle runs.`;
@@ -139,7 +139,7 @@ export async function onWelcome(ctx: BotContext): Promise<BotReply> {
   if (st.spots.length === 0) return say(ctx, "No shuttles are running today.");
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
   const sub = await subscribeUpdates(ctx.db, actor, { workspaceId: ctx.workspace.id, spotId: null }, ctx.now);
-  const now = updateText(st.spots);
+  const now = await currentUpdate(ctx.db, ctx.workspace.id, st, null, ctx.now);
   const after = dayOver(st.spots)
     ? "The shuttle has finished for today. Updates start again when it runs tomorrow."
     : now;

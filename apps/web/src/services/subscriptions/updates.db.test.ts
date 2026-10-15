@@ -1,10 +1,20 @@
 import type { PublicStatus } from "@eci-shuttle/shared";
-import { attendee, line, makeSpot } from "@tests/factories/bot-attendee";
+import { attendee, line, makeService, makeSpot } from "@tests/factories/bot-attendee";
 import { makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, outbox, people, subscriptions } from "@/db/schema";
+import {
+  auditLog,
+  outbox,
+  people,
+  routes,
+  serviceVehicles,
+  subscriptions,
+  vehicleBreaks,
+  vehicleState,
+  vehicles,
+} from "@/db/schema";
 import { publicStatus } from "../public/status";
 import { unsubscribe } from "./subscriptions";
 import { runUpdates, subscribeUpdates, UPDATE_EVERY_MS } from "./updates";
@@ -160,5 +170,83 @@ describe("runUpdates: end of service", () => {
     const first = line({ kind: "timetable", minutes: null, phaseText: "first shuttle today", nextAtLabel: "08:30" });
     status.mockResolvedValue(world([{ spotId: riva.id, name: "Riva", lines: [first] }]));
     expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+  });
+});
+
+describe("runUpdates: what the shuttle is doing", () => {
+  /** A real service with Shuttle 1 on it (route Riva → Circle → Riva), and the public answer for both stops. */
+  async function onDuty() {
+    const base = await setup();
+    const { ws, riva, circle } = base;
+    const svc = await makeService(db(), ws.id, [riva.id, circle.id, riva.id], "Shuttle");
+    await db()
+      .update(routes)
+      .set({ typicalLegS: [450, 460] })
+      .where(eq(routes.id, svc.routeId));
+    const [bus] = await db().insert(vehicles).values({ workspaceId: ws.id, name: "Shuttle 1" }).returning();
+    await db()
+      .insert(serviceVehicles)
+      .values({ workspaceId: ws.id, serviceId: svc.id, vehicleId: bus.id, startsAt: later(-60), endsAt: later(600) });
+    const answer = (minutes: number) =>
+      line({ serviceId: svc.id, serviceName: "Shuttle", vehicleName: "Shuttle 1", minutes });
+    status.mockResolvedValue(
+      world([
+        { spotId: riva.id, name: "Riva", lines: [answer(0)] },
+        { spotId: circle.id, name: "Circle", lines: [answer(12)] },
+      ]),
+    );
+    const put = (over: Partial<typeof vehicleState.$inferInsert>) =>
+      db()
+        .insert(vehicleState)
+        .values({
+          vehicleId: bus.id,
+          workspaceId: ws.id,
+          serviceId: svc.id,
+          ...over,
+        } as typeof vehicleState.$inferInsert)
+        .onConflictDoUpdate({ target: vehicleState.vehicleId, set: over });
+    return { ...base, svc, bus, put };
+  }
+  const htmlOf = async (ws: string, i = 0) =>
+    ((await sent(ws)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[i].payload as { html: string })
+      .html;
+
+  it("a shuttle waiting at a stop: says so, and promises a message when it moves", async () => {
+    const { ws, riva, actor, put } = await onDuty();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
+    await put({ phase: "at_spot", spotId: riva.id, since: later(10), lastPingAt: later(15) });
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    const html = await htmlOf(ws.id);
+    expect(html).toContain("<b>The shuttle is waiting at Riva</b> for passengers.");
+    expect(html).toContain("Once it leaves, it's about 8 min to Circle.");
+    expect(html).toContain("I'll message you as soon as it starts moving.");
+  });
+
+  it("keeps that promise: an update as soon as it leaves a stop, without waiting 15 min; once per departure", async () => {
+    const { ws, riva, circle, actor, put } = await onDuty();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
+    await put({ phase: "at_spot", spotId: riva.id, since: later(-5), lastPingAt: later(4) });
+    expect(await runUpdates(db(), later(4), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(5), lastPingAt: later(6) });
+    expect(await runUpdates(db(), later(6), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await htmlOf(ws.id)).toContain("<b>The shuttle is on its way to Circle</b> and should be there in about");
+    expect(await runUpdates(db(), later(8), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    // and the 15 min count again from that message
+    expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(21), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+  });
+
+  it("on a break or out of sight: says so calmly instead of a stale position", async () => {
+    const { ws, riva, bus, actor, put } = await onDuty();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
+    await put({ phase: "at_spot", spotId: riva.id, since: later(-30), lastPingAt: later(-20) });
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await htmlOf(ws.id)).toContain("I can't see where the shuttle is right now.");
+
+    await db()
+      .insert(vehicleBreaks)
+      .values({ workspaceId: ws.id, vehicleId: bus.id, startsAt: later(20) });
+    expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await htmlOf(ws.id, 1)).toContain("<b>The shuttle is on a short break.</b>");
   });
 });

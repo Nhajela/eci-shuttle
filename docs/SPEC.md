@@ -259,6 +259,13 @@ preview can't log anyone in. A signed session cookie lasts 60 days. Only admin n
   15 min, for every stop, straight away: "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about
   where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop." Plain "stop" / "unsubscribe"
   (no slash) work like `/stop` / `/unsubscribe` in a private chat. In a group, `/start` shows the spot buttons.
+- **What an update says** (truth first, calm always): what the shuttle is doing now — waiting at a stop, on its
+  way (minutes, or a range when the estimate is wide), paused on the road, on a driver's break, or out of sight.
+  The timetable is only a hint where it can't mislead: a departure still ahead for a shuttle waiting at that stop
+  ("As per the schedule it leaves at 13:45, which gets it to Riva around 13:53"), or the next departures after a
+  break / while we can't see it. Never a planned time for a moving shuttle, never a time already gone, never
+  "late". A loop gives no departure promise, only the travel time once it leaves. An update also goes out as soon
+  as a shuttle leaves a stop ("I'll message you as soon as it starts moving"), and the 15 min count from there.
 - `/shuttle` (or just "riva" / "circle") → the same answer as the page ("Here in 6 min · live"), with spot buttons.
 - **"Tell me when it's close"**: a one-shot alert: "Message me when the shuttle is 5 min from Riva".
   The ETA engine fires it once, then it expires (after at most 2h).
