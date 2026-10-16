@@ -23,7 +23,9 @@ Paused 2026-10-13 08:35 IST, just before Naman's 08:30 driver onboarding. Read t
   - Build: `cd apps/driver && npx eas-cli build -p android --profile live`. Use EAS, because Gradle downloads time out on
     Naman's machine.
   - OTA: `cd apps/driver && npx eas-cli update --channel live --platform android --environment preview --message "..."`.
-    Then set the Android update id as the target in admin → Phones → rollout panel.
+    Then set the NEW Android update id as the target (admin → Phones → rollout panel, or MCP `ota.rollout`).
+    Phones can only fetch the newest update on their channel: a target older than the newest never installs
+    (16 Oct: target was `01a13327…` while `01a1336a…` was newest). Check with `npx eas-cli update:list --branch live`.
   - Phones apply an update only while **idle**.
   - JS-only changes are OTA-able. Native changes need `version` bumped in app.config.ts and a new APK.
 - **Secrets** are only on Naman's machine (`~/.secrets/`, repo-root `.env.local`) and in Coolify env vars.

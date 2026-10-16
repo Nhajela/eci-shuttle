@@ -20,11 +20,11 @@ over MCP.
 | Thing | Value |
 |---|---|
 | Stops | Nanu Resort (15.680278, 73.710722, 150 m) · Riva Beach Resort (15.671151, 73.710554, 200 m) · Circle co-work (15.650722, 73.716417, 150 m) |
-| Route | Nanu → Riva → Circle → Riva → Nanu (road path from OSRM), 5 min planned wait at each stop |
-| Public services (loop, daily until 1 Nov) | Morning 08:30–10:00 · Midday 12:00–15:00 · Evening 17:00–19:00 |
+| Route | Riva → Circle → Riva (road path from OSRM), 5 min planned wait at each stop (16 Oct) |
+| Public services (loop, daily until 1 Nov) | One loop "Shuttle", 08:00–22:00 (16 Oct) |
 | Ops tracking hours | 09:00–21:00 daily. Phones track and admin sees positions between shifts; the public only sees service hours |
-| Shuttle 1 | Yuvraj, Android (Motorola Edge 60 Pro), our app. Working, on OTA update `01a13327…` |
-| Shuttle 2 | iPhone driver on Traccar Client. Connected twice (09:28, 09:31), then iOS stopped it sending. Move to Telegram live location |
+| Shuttle 1 | Shift 08:00–16:00 daily. Karan, Android (Samsung A15), our app (16 Oct) |
+| Shuttle 2 | Shift 14:00–22:00 daily. Suresh, Android (Xiaomi), our app, on OTA `01a1336a…`; needs Xiaomi battery saver "No restrictions" + Autostart (16 Oct) |
 | Admins | @HiiNaman (admin in eci-main and test). Viewers can be added in People by Telegram username |
 | Test workspace | `test`: Riva + a placeholder Circle, Naman's phone (Nothing A015) in "Test shuttle", public page at `/w/test` |
 
