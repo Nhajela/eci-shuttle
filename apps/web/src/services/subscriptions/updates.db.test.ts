@@ -17,7 +17,7 @@ import {
 } from "@/db/schema";
 import { publicStatus } from "../public/status";
 import { unsubscribe } from "./subscriptions";
-import { runUpdates, subscribeUpdates, UPDATE_EVERY_MS } from "./updates";
+import { runUpdates, setUpdateEvery, subscribeUpdates, UPDATE_EVERY_MS } from "./updates";
 
 vi.mock("../public/status", () => ({ publicStatus: vi.fn() }));
 const status = vi.mocked(publicStatus);
@@ -173,46 +173,46 @@ describe("runUpdates: end of service", () => {
   });
 });
 
+/** A real service with Shuttle 1 on it (route Riva → Circle → Riva), and the public answer for both stops. */
+async function onDutyWorld() {
+  const base = await setup();
+  const { ws, riva, circle } = base;
+  const svc = await makeService(db(), ws.id, [riva.id, circle.id, riva.id], "Shuttle");
+  await db()
+    .update(routes)
+    .set({ typicalLegS: [450, 460] })
+    .where(eq(routes.id, svc.routeId));
+  const [bus] = await db().insert(vehicles).values({ workspaceId: ws.id, name: "Shuttle 1" }).returning();
+  await db()
+    .insert(serviceVehicles)
+    .values({ workspaceId: ws.id, serviceId: svc.id, vehicleId: bus.id, startsAt: later(-60), endsAt: later(600) });
+  const answer = (minutes: number) =>
+    line({ serviceId: svc.id, serviceName: "Shuttle", vehicleName: "Shuttle 1", minutes });
+  status.mockResolvedValue(
+    world([
+      { spotId: riva.id, name: "Riva", lines: [answer(0)] },
+      { spotId: circle.id, name: "Circle", lines: [answer(12)] },
+    ]),
+  );
+  const put = (over: Partial<typeof vehicleState.$inferInsert>) =>
+    db()
+      .insert(vehicleState)
+      .values({
+        vehicleId: bus.id,
+        workspaceId: ws.id,
+        serviceId: svc.id,
+        ...over,
+      } as typeof vehicleState.$inferInsert)
+      .onConflictDoUpdate({ target: vehicleState.vehicleId, set: over });
+  return { ...base, svc, bus, put };
+}
 describe("runUpdates: what the shuttle is doing", () => {
-  /** A real service with Shuttle 1 on it (route Riva → Circle → Riva), and the public answer for both stops. */
-  async function onDuty() {
-    const base = await setup();
-    const { ws, riva, circle } = base;
-    const svc = await makeService(db(), ws.id, [riva.id, circle.id, riva.id], "Shuttle");
-    await db()
-      .update(routes)
-      .set({ typicalLegS: [450, 460] })
-      .where(eq(routes.id, svc.routeId));
-    const [bus] = await db().insert(vehicles).values({ workspaceId: ws.id, name: "Shuttle 1" }).returning();
-    await db()
-      .insert(serviceVehicles)
-      .values({ workspaceId: ws.id, serviceId: svc.id, vehicleId: bus.id, startsAt: later(-60), endsAt: later(600) });
-    const answer = (minutes: number) =>
-      line({ serviceId: svc.id, serviceName: "Shuttle", vehicleName: "Shuttle 1", minutes });
-    status.mockResolvedValue(
-      world([
-        { spotId: riva.id, name: "Riva", lines: [answer(0)] },
-        { spotId: circle.id, name: "Circle", lines: [answer(12)] },
-      ]),
-    );
-    const put = (over: Partial<typeof vehicleState.$inferInsert>) =>
-      db()
-        .insert(vehicleState)
-        .values({
-          vehicleId: bus.id,
-          workspaceId: ws.id,
-          serviceId: svc.id,
-          ...over,
-        } as typeof vehicleState.$inferInsert)
-        .onConflictDoUpdate({ target: vehicleState.vehicleId, set: over });
-    return { ...base, svc, bus, put };
-  }
   const htmlOf = async (ws: string, i = 0) =>
     ((await sent(ws)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[i].payload as { html: string })
       .html;
 
   it("a shuttle waiting at a stop: says so, and promises a message when it moves", async () => {
-    const { ws, riva, actor, put } = await onDuty();
+    const { ws, riva, actor, put } = await onDutyWorld();
     await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
     await put({ phase: "at_spot", spotId: riva.id, since: later(10), lastPingAt: later(15) });
     expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
@@ -223,7 +223,7 @@ describe("runUpdates: what the shuttle is doing", () => {
   });
 
   it("keeps that promise: an update as soon as it leaves a stop, without waiting 15 min; once per departure", async () => {
-    const { ws, riva, circle, actor, put } = await onDuty();
+    const { ws, riva, circle, actor, put } = await onDutyWorld();
     await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
     await put({ phase: "at_spot", spotId: riva.id, since: later(-5), lastPingAt: later(4) });
     expect(await runUpdates(db(), later(4), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
@@ -237,7 +237,7 @@ describe("runUpdates: what the shuttle is doing", () => {
   });
 
   it("on a break or out of sight: says so calmly instead of a stale position", async () => {
-    const { ws, riva, bus, actor, put } = await onDuty();
+    const { ws, riva, bus, actor, put } = await onDutyWorld();
     await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
     await put({ phase: "at_spot", spotId: riva.id, since: later(-30), lastPingAt: later(-20) });
     expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
@@ -248,5 +248,62 @@ describe("runUpdates: what the shuttle is doing", () => {
       .values({ workspaceId: ws.id, vehicleId: bus.id, startsAt: later(20) });
     expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
     expect(await htmlOf(ws.id, 1)).toContain("<b>The shuttle is on a short break.</b>");
+  });
+});
+
+describe("update frequency (every 15 or 30 min)", () => {
+  const live = (riva: string) => world([{ spotId: riva, name: "Riva", lines: [line({ serviceName: "Shuttle" })] }]);
+
+  it("defaults to 15; switching to 30 is audited and changes the cadence; switching back too", async () => {
+    const { ws, riva, actor } = await setup();
+    const sub = await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
+    expect(sub.everyMin).toBe(15);
+    status.mockResolvedValue(live(riva.id));
+
+    const slow = await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, later(1));
+    expect(slow).toMatchObject({ id: sub.id, everyMin: 30 });
+    const audits = await db().select().from(auditLog).where(eq(auditLog.entityId, sub.id));
+    expect(audits.map((a) => a.action)).toEqual(["subscription.create", "subscription.update"]);
+    expect(audits[1]).toMatchObject({ before: { everyMin: 15 }, after: { everyMin: 30 } });
+    // the same value again changes nothing and writes no audit row
+    await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, later(2));
+    expect(await db().select().from(auditLog).where(eq(auditLog.entityId, sub.id))).toHaveLength(2);
+
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(29), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+
+    const fast = await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 15 }, later(46));
+    expect(fast.everyMin).toBe(15);
+    expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+  });
+
+  it("is kept when the person switches stop; without an open subscription it's NOT_FOUND", async () => {
+    const { ws, riva, actor } = await setup();
+    await expect(setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, NOW)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
+    await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, later(1));
+    const all = await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, later(2));
+    expect(all.everyMin).toBe(30);
+    await expect(
+      setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 20 as 15 }, later(3)),
+    ).rejects.toMatchObject({ code: "INVALID" });
+  });
+
+  it("a 30-min subscriber gets the calm rhythm: no instant 'it just left' push, and no promise of one", async () => {
+    const { ws, riva, circle, actor, put } = await onDutyWorld();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
+    await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, later(1));
+    await put({ phase: "at_spot", spotId: riva.id, since: later(10), lastPingAt: later(30) });
+    expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    const html = ((await sent(ws.id))[0].payload as { html: string }).html;
+    expect(html).toContain("waiting at Riva");
+    expect(html).not.toMatch(/as soon as|the moment it/i);
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(35), lastPingAt: later(36) });
+    expect(await runUpdates(db(), later(36), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(60), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
   });
 });

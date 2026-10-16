@@ -116,6 +116,30 @@ describe("storyText: a shuttle waiting at a stop", () => {
   });
 });
 
+describe("storyText: the calm rhythm (promise false)", () => {
+  it("makes no 'as soon as it moves' promise while waiting or on a break", () => {
+    const spots = [spot(RIVA, "Riva", [live(0)], RIVA_TIMES), spot(CIRCLE, "Circle", [off], CIRCLE_TIMES)];
+    const waiting = storyText({
+      shuttles: [shuttle({ kind: "waiting", spotId: RIVA, since: NOW - min(2) })],
+      spots,
+      focusSpotId: null,
+      now: NOW,
+      promise: false,
+    }) as string;
+    expect(waiting).toContain("waiting at Riva");
+    expect(waiting).not.toMatch(/as soon as/);
+    const brk = storyText({
+      shuttles: [shuttle({ kind: "break", until: null })],
+      spots,
+      focusSpotId: null,
+      now: NOW,
+      promise: false,
+    }) as string;
+    expect(brk).toContain("break");
+    expect(brk).not.toMatch(/as soon as/);
+  });
+});
+
 describe("storyText: a moving shuttle", () => {
   it("on its way: minutes and clock time; no timetable promise (a shuttle off its schedule would make people miss it)", () => {
     const spots = [spot(RIVA, "Riva", [live(4)], RIVA_TIMES), spot(CIRCLE, "Circle", [live(20)], CIRCLE_TIMES)];

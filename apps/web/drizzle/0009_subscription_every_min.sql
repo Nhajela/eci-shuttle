@@ -1,0 +1,2 @@
+ALTER TABLE "subscriptions" ADD COLUMN "every_min" integer DEFAULT 15 NOT NULL;--> statement-breakpoint
+ALTER TABLE "subscriptions" ADD CONSTRAINT "subscriptions_every_min" CHECK ("subscriptions"."every_min" in (15, 30));

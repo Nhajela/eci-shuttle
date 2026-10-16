@@ -670,12 +670,15 @@ export const subscriptions = pgTable(
     lastSentAt: ts("last_sent_at"),
     /** updates: the IST day its "finished for today" went out; updates start again the next day */
     dayEndedOn: date("day_ended_on", { mode: "string" }),
+    /** updates: minutes between updates, 15 (default) or 30, chosen by the person in Telegram */
+    everyMin: integer("every_min").notNull().default(15),
     createdAt: createdAt(),
   },
   (t) => [
     index("subscriptions_open")
       .on(t.workspaceId, t.kind, t.spotId)
       .where(sql`${t.firedAt} is null and ${t.cancelledAt} is null`),
+    check("subscriptions_every_min", sql`${t.everyMin} in (15, 30)`),
   ],
 );
 

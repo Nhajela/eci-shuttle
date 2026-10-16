@@ -55,6 +55,8 @@ export function storyText(input: {
   spots: PublicSpot[];
   focusSpotId: string | null;
   now: number;
+  /** promise a message as soon as the shuttle moves (the 15-min rhythm keeps it; 30 min doesn't). Default true */
+  promise?: boolean;
 }): string | null {
   const { spots, focusSpotId, now } = input;
   const focus = focusSpotId ? spots.filter((s) => s.spotId === focusSpotId) : spots;
@@ -72,7 +74,7 @@ export function storyText(input: {
     return lines("📡 I can't see where the shuttle is right now.", timetableHint([...served], now, "around"));
   }
 
-  const ctx: Ctx = { spots, focus, focusSpotId, now, named: shuttles.length > 1 };
+  const ctx: Ctx = { spots, focus, focusSpotId, now, named: shuttles.length > 1, promise: input.promise ?? true };
   return shuttles.map((s) => paragraph(ctx, s)).join("\n\n");
 
   function timetableHint(serviceIds: string[], after: number, word: "at" | "around"): string | null {
@@ -80,7 +82,14 @@ export function storyText(input: {
   }
 }
 
-type Ctx = { spots: PublicSpot[]; focus: PublicSpot[]; focusSpotId: string | null; now: number; named: boolean };
+type Ctx = {
+  spots: PublicSpot[];
+  focus: PublicSpot[];
+  focusSpotId: string | null;
+  now: number;
+  named: boolean;
+  promise: boolean;
+};
 
 const lines = (...xs: (string | null | false)[]) => xs.filter(Boolean).join("\n");
 
@@ -116,14 +125,14 @@ function paragraph(ctx: Ctx, s: ShuttleNow): string {
               : "";
           plan = `As per the schedule it leaves at <b>${istHHMM(due)}</b>${reach}.`;
         } else if (due !== undefined) plan = "It should leave soon.";
-        return lines(head(".</b>"), plan, "I'll message you as soon as it starts moving.");
+        return lines(head(".</b>"), plan, ctx.promise && "I'll message you as soon as it starts moving.");
       }
       // a loop: no promise on when it leaves, only how far the next stop is once it does
       const legMin = Math.round(legMs / MIN);
       return lines(
         head("</b> for passengers."),
         next && legMin ? `Once it leaves, it's about ${minutesText(legMin)} to ${esc(name(next))}.` : null,
-        "I'll message you as soon as it starts moving.",
+        ctx.promise && "I'll message you as soon as it starts moving.",
       );
     }
     case "moving": {
@@ -151,7 +160,7 @@ function paragraph(ctx: Ctx, s: ShuttleNow): string {
           ? `☕ <b>${who} is on a short break</b> and should be back around ${istHHMM(back)}.`
           : `☕ <b>${who} is on a short break.</b>`,
         hint(ctx.focus, [s.serviceId], back ?? now, "at", "When it's running it comes"),
-        "I'll message you as soon as it's on the road again.",
+        ctx.promise && "I'll message you as soon as it's on the road again.",
       );
     }
     case "no_signal":

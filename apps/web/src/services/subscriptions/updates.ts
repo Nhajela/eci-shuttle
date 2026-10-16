@@ -16,6 +16,9 @@ import { publicStatus } from "../public/status";
 import { departedSince, type ShuttleNow, storyText } from "./update-text";
 
 export const UPDATE_EVERY_MS = 15 * 60_000;
+/** the rhythms a person can pick (schema CHECK subscriptions_every_min); 15 is the default */
+export const UPDATE_EVERY_MIN = [15, 30] as const;
+export type UpdateEveryMin = (typeof UPDATE_EVERY_MIN)[number];
 /** a position older than this is not "where the shuttle is" (same as the public answer) */
 const STALE_MS = 2 * 60_000;
 /** the worker runs every minute: a few seconds early still counts as due */
@@ -64,11 +67,56 @@ export async function subscribeUpdates(
           personId: actor.id,
           kind: "updates",
           spotId: i.spotId,
+          // the rhythm they chose stays when they switch stop
+          everyMin: existing?.everyMin ?? 15,
           lastSentAt: now,
           createdAt: now,
         })
         .returning();
       return { before: null, after: row, result: row };
+    },
+  );
+}
+
+export const SetUpdateEveryInput = z.object({
+  workspaceId: z.uuid(),
+  everyMin: z.union([z.literal(15), z.literal(30)]),
+});
+
+/**
+ * Attendee: how often the updates come, every 15 min (default) or every 30 min, on their open updates
+ * subscription (none → NOT_FOUND: /start first). The same value again changes nothing. Audited subscription.update.
+ */
+export async function setUpdateEvery(
+  db: Db,
+  actor: Actor,
+  input: z.input<typeof SetUpdateEveryInput>,
+  now: Date,
+): Promise<Subscription> {
+  const i = parseInput(SetUpdateEveryInput, input);
+  if (actor.kind !== "attendee" || (actor.workspaceId && actor.workspaceId !== i.workspaceId))
+    throw new ServiceError("FORBIDDEN", "Not allowed.");
+  const mine = and(
+    eq(subscriptions.personId, actor.id),
+    eq(subscriptions.workspaceId, i.workspaceId),
+    eq(subscriptions.kind, "updates"),
+    open,
+  );
+  const [existing] = await db.select().from(subscriptions).where(mine).limit(1);
+  if (!existing) throw new ServiceError("NOT_FOUND", "You're not getting updates right now. Send /start first.");
+  if (existing.everyMin === i.everyMin) return existing;
+  return mutate(
+    db,
+    actor,
+    { action: "subscription.update", entity: "subscription", entityId: existing.id, workspaceId: i.workspaceId },
+    async (tx) => {
+      const [row] = await tx
+        .update(subscriptions)
+        .set({ everyMin: i.everyMin })
+        .where(eq(subscriptions.id, existing.id))
+        .returning();
+      if (!row) throw new ServiceError("NOT_FOUND", "You're not getting updates right now. Send /start first.");
+      return { before: { everyMin: existing.everyMin }, after: { everyMin: row.everyMin }, result: row };
     },
   );
 }
@@ -186,9 +234,11 @@ export async function currentUpdate(
  * The updates job (every minute), over every open `updates` subscription (blocked-bot people skipped):
  * - the day's shuttles are over at its stop(s) and it got an update today → one "finished for today" message
  *   (day_ended_on = today); it stays on, so updates start again when the shuttle runs the next day;
- * - else, its last update ≥ 15 min old, or a shuttle left a stop since it (the update promised "as soon as it
- *   starts moving"), and a shuttle running there → what the shuttle is doing now (update-text.storyText), with a
- *   "Stop updates" button. last_sent_at moves only when something is sent, and only the run that moves it sends.
+ * - else, its last update ≥ every_min (15 or 30) old, or, on the 15-min rhythm, a shuttle left a stop since it
+ *   (the update promised "as soon as it starts moving"), and a shuttle running there → what the shuttle is doing
+ *   now (update-text.storyText), with a "Stop updates" button. The 30-min rhythm is the calm one: no instant
+ *   departure push, and its updates make no such promise. last_sent_at moves only when something is sent, and
+ *   only the run that moves it sends.
  */
 export async function runUpdates(
   db: Db,
@@ -207,7 +257,6 @@ export async function runUpdates(
         input.workspaceId ? eq(subscriptions.workspaceId, input.workspaceId) : undefined,
       ),
     );
-  const dueBy = now.getTime() - UPDATE_EVERY_MS + SLACK_MS;
   const statuses = new Map<string, ReturnType<typeof publicStatus>>();
   const fleets = new Map<string, Promise<ShuttleNow[]>>();
   let sent = 0;
@@ -223,11 +272,13 @@ export async function runUpdates(
     if (!fleets.has(sub.workspaceId)) fleets.set(sub.workspaceId, shuttlesNow(db, sub.workspaceId, st, now));
     const shuttles = await (fleets.get(sub.workspaceId) as Promise<ShuttleNow[]>);
     const last = sub.lastSentAt?.getTime() ?? 0;
-    const due = last <= dueBy || departedSince(shuttles, last);
+    // the instant "it just left" push belongs to the 15-min rhythm; 30 min is the calm one
+    const instant = sub.everyMin === 15;
+    const due = last <= now.getTime() - sub.everyMin * 60_000 + SLACK_MS || (instant && departedSince(shuttles, last));
     const html = over
       ? DAY_OVER_TEXT
       : due
-        ? storyText({ shuttles, spots: st.spots, focusSpotId: sub.spotId, now: now.getTime() })
+        ? storyText({ shuttles, spots: st.spots, focusSpotId: sub.spotId, now: now.getTime(), promise: instant })
         : null;
     if (!html) continue;
     const ok = await db.transaction(async (tx) => {
