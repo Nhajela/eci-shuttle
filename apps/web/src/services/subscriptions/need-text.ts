@@ -33,7 +33,7 @@ export function needSpots(st: PublicStatus): { spots: PublicSpot[]; nextStart: s
 
 /** What to say when no shuttle runs now. */
 export const notRunningText = (nextStart: string | null) =>
-  `No shuttle is running right now.${nextStart ? ` The next one starts at ${nextStart}.` : ""}`;
+  `😴 No shuttle is running right now.${nextStart ? ` The next one starts at ${nextStart}.` : ""}`;
 
 /** One active vehicle for the ops alert: its live state with spot names resolved. */
 export type AlertVehicle = {

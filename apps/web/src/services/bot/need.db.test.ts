@@ -66,7 +66,7 @@ describe("/need", () => {
   it("Where are you? → Where to? (the other stops) → Got it, with a cancel button", async () => {
     const { ctx, nanu, riva, circle } = await setup();
     const ask = await onNeed(ctx, null);
-    expect(ask.send[0].html).toBe("Where are you?");
+    expect(ask.send[0].html).toBe("🙋 Where are you?");
     expect(buttons(ask).map((b) => [b.text, b.callbackData])).toEqual([
       ["Nanu", `need:${nanu.id}`],
       ["Riva", `need:${riva.id}`],
@@ -74,7 +74,7 @@ describe("/need", () => {
     ]);
 
     const to = await onAttendeeCallback(ctx, { action: "need", args: [riva.id] }, press("x"));
-    expect(to.send[0].html).toBe("From <b>Riva</b>. Where to?");
+    expect(to.send[0].html).toBe("From <b>Riva</b> — where to?");
     const toButtons = buttons(to);
     expect(toButtons.map((b) => b.text)).toEqual(["Nanu", "Circle"]);
     for (const b of toButtons) expect(Buffer.byteLength(b.callbackData)).toBeLessThanOrEqual(64);
@@ -86,27 +86,27 @@ describe("/need", () => {
       press(toButtons[1].callbackData),
     );
     expect(done.send[0].html).toBe(
-      "Got it: a shuttle from Riva to Circle. The shuttle team knows. I'll message you when the shuttle is here.",
+      "🙌 Got it: a shuttle from Riva to Circle. The shuttle team knows. I'll message you the moment it's here.",
     );
     const [req] = await open(ctx);
     expect(req).toMatchObject({ spotId: riva.id, toSpotId: circle.id });
     expect(buttons(done)).toEqual([{ text: "Cancel request", callbackData: `needx:${req.id}` }]);
 
     const x = await onAttendeeCallback(ctx, { action: "needx", args: [req.id] }, press("x"));
-    expect(x.send[0].html).toBe("OK, I've cancelled your shuttle request.");
+    expect(x.send[0].html).toBe("👍 Cancelled your shuttle request. Send /need any time you need one again.");
     expect(await open(ctx)).toEqual([]);
   });
 
   it("/need riva circle in one go; a new one replaces the old; one stop asks where to; unknown asks where", async () => {
     const { ctx, nanu, riva, circle } = await setup();
     const one = await onNeed(ctx, "riva circle");
-    expect(one.send[0].html).toContain("Got it: a shuttle from Riva to Circle.");
+    expect(one.send[0].html).toContain("🙌 Got it: a shuttle from Riva to Circle.");
     const two = await onNeed(ctx, "nanu to riva beach");
     expect(two.send[0].html).toContain("from Nanu to Riva");
     expect(two.send[0].html).toContain("This replaces your earlier request.");
     expect((await open(ctx)).map((r) => [r.spotId, r.toSpotId])).toEqual([[nanu.id, riva.id]]);
 
-    expect((await onNeed(ctx, "circle")).send[0].html).toBe("From <b>Circle</b>. Where to?");
+    expect((await onNeed(ctx, "circle")).send[0].html).toBe("From <b>Circle</b> — where to?");
     const unknown = await onNeed(ctx, "the moon");
     expect(unknown.send[0].html).toContain('I don\'t know a stop called "the moon"');
     expect(buttons(unknown)).toHaveLength(3);
@@ -124,23 +124,25 @@ describe("/need", () => {
     });
     vi.mocked(publicStatus).mockResolvedValue({ ...st, spots: [pubSpot(riva, [first]), pubSpot(circle, [first])] });
     expect((await onNeed(ctx, null)).send[0].html).toBe(
-      "No shuttle is running right now. The next one starts at 12:00.",
+      "😴 No shuttle is running right now. The next one starts at 12:00.",
     );
     expect((await onNeed(ctx, "riva circle")).send[0].html).toBe(
-      "No shuttle is running right now. The next one starts at 12:00.",
+      "😴 No shuttle is running right now. The next one starts at 12:00.",
     );
 
     vi.mocked(publicStatus).mockResolvedValue({ ...st, spots: [pubSpot(riva), pubSpot(circle, [first])] });
     const ask = await onNeed(ctx, null);
     expect(buttons(ask).map((b) => b.text)).toEqual(["Riva"]);
     const to = await onAttendeeCallback(ctx, { action: "need", args: [riva.id] }, press("x"));
-    expect(to.send[0].html).toBe("No other stop has a shuttle right now.");
+    expect(to.send[0].html).toBe("Hmm, no other stop has a shuttle right now. 😴");
   });
 
   it("/stop cancels the request and says so", async () => {
     const { ctx } = await setup();
     await onNeed(ctx, "riva circle");
-    expect((await onStop(ctx)).send[0].html).toBe("Done. I've cancelled your shuttle request (Riva → Circle).");
+    expect((await onStop(ctx)).send[0].html).toBe(
+      "🔕 Done. I've cancelled your shuttle request (Riva → Circle). /start brings me back any time.",
+    );
     expect(await open(ctx)).toEqual([]);
     expect((await onStop(ctx)).send[0].html).toMatch(/nothing/i);
   });

@@ -228,7 +228,7 @@ export async function runPickups(
       });
 
     if (!sub.expiresAt || sub.expiresAt <= now) {
-      const html = `Your request for a shuttle from ${esc(from)} to ${esc(to)} has expired after 60 min. Send /need if you still need one.`;
+      const html = `⏳ Your request for a shuttle from ${esc(from)} to ${esc(to)} has expired after 60 min. Send /need if you still need one.`;
       if (await send({ cancelledAt: now }, html, `need-end:${sub.id}`)) out.expired++;
       continue;
     }
@@ -239,7 +239,9 @@ export async function runPickups(
       .filter((l) => l.kind === "live" && l.minutes != null)
       .sort((a, b) => (a.minutes ?? 0) - (b.minutes ?? 0));
     if (live[0]?.minutes === 0) {
-      if (await send({ firedAt: now }, `The shuttle is here at <b>${esc(from)}</b>.`, `need-here:${sub.id}`))
+      if (
+        await send({ firedAt: now }, `🚐 The shuttle is here at <b>${esc(from)}</b> — hop on!`, `need-here:${sub.id}`)
+      )
         out.fired++;
       continue;
     }
@@ -248,7 +250,7 @@ export async function runPickups(
     if (!heading.has(sub.workspaceId)) heading.set(sub.workspaceId, headingTo(db, sub.workspaceId, now));
     if (!near && !(await heading.get(sub.workspaceId))?.has(spotId)) continue;
     const eta = live[0] ? `, ${live[0].approx ? "about " : ""}${live[0].minutes} min` : "";
-    const html = `The shuttle is on its way to <b>${esc(from)}</b>${eta}.`;
+    const html = `🚐 The shuttle is on its way to <b>${esc(from)}</b>${eta}.`;
     if (await send({ lastSentAt: now }, html, `need-way:${sub.id}`)) out.onTheWay++;
   }
   return out;

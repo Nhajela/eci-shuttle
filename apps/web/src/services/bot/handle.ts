@@ -18,11 +18,11 @@ import type { BotContext, BotReply, TgUpdate } from "./types";
 const BOT = systemActor("bot", "telegram");
 const NONE: BotReply = { send: [] };
 const HELP =
-  "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
+  "🚐 Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
   "/subscribe sends you where the shuttle is every 15 min; /unsubscribe stops it.\n" +
   "/every30 makes that every 30 min instead; /every15 brings the quicker rhythm back.\n" +
-  "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you when it's here.\n" +
-  "/stop (or just stop) turns off your alerts, updates, notices and shuttle request.\n" +
+  "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you the moment it's here.\n" +
+  "/stop (or just stop) turns off your alerts, updates, notices and shuttle request. All quiet.\n" +
   "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
 

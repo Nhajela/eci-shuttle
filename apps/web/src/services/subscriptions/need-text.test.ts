@@ -117,8 +117,8 @@ describe("needSpots / notRunningText", () => {
       ]),
     );
     expect(out).toEqual({ spots: [], nextStart: "12:00" });
-    expect(notRunningText(out.nextStart)).toBe("No shuttle is running right now. The next one starts at 12:00.");
-    expect(notRunningText(needSpots(st([spot("a", [done])])).nextStart)).toBe("No shuttle is running right now.");
+    expect(notRunningText(out.nextStart)).toBe("😴 No shuttle is running right now. The next one starts at 12:00.");
+    expect(notRunningText(needSpots(st([spot("a", [done])])).nextStart)).toBe("😴 No shuttle is running right now.");
   });
 });
 

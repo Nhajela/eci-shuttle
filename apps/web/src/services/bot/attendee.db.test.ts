@@ -17,6 +17,7 @@ import {
   onUnsubscribe,
   onWelcome,
   renderAnswer,
+  WELCOME_TEXT,
 } from "./attendee";
 import type { BotContext } from "./types";
 
@@ -243,8 +244,7 @@ describe("/subscribe", () => {
 });
 
 describe("welcome (plain /start)", () => {
-  const WELCOME =
-    "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop.";
+  const WELCOME = WELCOME_TEXT;
   const me = (ctx: BotContext) => attendee(ctx.person, ctx.workspace.id);
 
   it("subscribes to every stop straight away, then shows where the shuttle is now, with a stop button", async () => {
@@ -252,6 +252,9 @@ describe("welcome (plain /start)", () => {
     const r = await onWelcome(ctx);
     expect(r.send).toHaveLength(1);
     expect(r.send[0].html.startsWith(WELCOME)).toBe(true);
+    expect(WELCOME).toMatch(/updates every 15 minutes/);
+    expect(WELCOME).toMatch(/send 'stop' or 'unsubscribe'/);
+    expect(r.send[0]).toMatchObject({ animation: "http://localhost:3000/gifs/welcome.gif" });
     expect(r.send[0].html).toContain("<b>Riva Beach</b>");
     expect(r.send[0].html).toContain("<b>The Circle</b>");
     const subs = await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW);
@@ -281,7 +284,8 @@ describe("welcome (plain /start)", () => {
   it("no shuttle stops set up: says so and subscribes nobody", async () => {
     const { ctx } = await setup(() => []);
     const r = await onWelcome(ctx);
-    expect(r.send[0].html).toBe("No shuttles are running today.");
+    expect(r.send[0].html).toBe("😴 No shuttles are running today.");
+    expect(r.send[0]).not.toHaveProperty("animation");
     expect(await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW)).toEqual([]);
   });
 });

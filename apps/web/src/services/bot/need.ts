@@ -37,10 +37,10 @@ const whereAreYou = (ctx: BotContext, html: string, live: PublicSpot[]) =>
 
 function whereTo(ctx: BotContext, from: PublicSpot, live: PublicSpot[]): BotReply {
   const others = live.filter((s) => s.spotId !== from.spotId);
-  if (!others.length) return say(ctx, "No other stop has a shuttle right now.");
+  if (!others.length) return say(ctx, "Hmm, no other stop has a shuttle right now. 😴");
   return say(
     ctx,
-    `From <b>${esc(from.shortName)}</b>. Where to?`,
+    `From <b>${esc(from.shortName)}</b> — where to?`,
     rows(others.map((s) => btn(s.shortName, "needto", from.spotId, s.spotId.slice(0, TO_PREFIX)))),
   );
 }
@@ -55,8 +55,8 @@ async function requested(ctx: BotContext, fromSpotId: string, toSpotId: string):
   );
   const name = async (id: string) => (await findInWorkspace(ctx.db, spots, ctx.workspace.id, id))?.shortName ?? "";
   const html =
-    `Got it: a shuttle from ${esc(await name(fromSpotId))} to ${esc(await name(toSpotId))}. The shuttle team knows. ` +
-    "I'll message you when the shuttle is here." +
+    `🙌 Got it: a shuttle from ${esc(await name(fromSpotId))} to ${esc(await name(toSpotId))}. The shuttle team knows. ` +
+    "I'll message you the moment it's here." +
     (replaced ? " This replaces your earlier request." : "");
   return say(ctx, html, [[btn("Cancel request", "needx", request.id)]]);
 }
@@ -65,7 +65,7 @@ async function requested(ctx: BotContext, fromSpotId: string, toSpotId: string):
 export async function onNeed(ctx: BotContext, arg: string | null): Promise<BotReply> {
   const { spots: live, nextStart } = await runningNow(ctx);
   if (!live.length) return say(ctx, notRunningText(nextStart));
-  if (!arg?.trim()) return whereAreYou(ctx, "Where are you?", live);
+  if (!arg?.trim()) return whereAreYou(ctx, "🙋 Where are you?", live);
   const m = matchNeed(arg, live);
   if ("unknown" in m)
     return whereAreYou(
@@ -85,7 +85,12 @@ export async function onNeedButton(ctx: BotContext, cb: Callback): Promise<BotRe
   if (cb.action === "needx") {
     const actor = attendeeActor(ctx.person, ctx.workspace.id);
     const n = await unsubscribe(ctx.db, actor, { workspaceId: ctx.workspace.id, subscriptionId: arg ?? "" }, ctx.now);
-    return say(ctx, n ? "OK, I've cancelled your shuttle request." : "That request was already closed.");
+    return say(
+      ctx,
+      n
+        ? "👍 Cancelled your shuttle request. Send /need any time you need one again."
+        : "That request was already closed.",
+    );
   }
   const { spots: live, nextStart } = await runningNow(ctx);
   if (!live.length) return say(ctx, notRunningText(nextStart));

@@ -151,6 +151,7 @@ describe("runUpdates: end of service", () => {
     const [job] = await sent(ws.id);
     expect(job.payload).toMatchObject({ chatId: person.telegramId, kind: "update" });
     expect((job.payload as { html: string }).html).toContain("finished for today");
+    expect(job.payload).toMatchObject({ animation: "http://localhost:3000/gifs/goodnight.gif" });
     const [row] = await db().select().from(subscriptions).where(eq(subscriptions.id, sub.id));
     expect(row).toMatchObject({ cancelledAt: null, dayEndedOn: "2026-10-13" });
     expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
@@ -210,9 +211,12 @@ async function onDutyWorld() {
   return { ...base, svc, bus, put };
 }
 describe("runUpdates: what the shuttle is doing", () => {
-  const htmlOf = async (ws: string, i = 0) =>
-    ((await sent(ws)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[i].payload as { html: string })
-      .html;
+  const payloadOf = async (ws: string, i = 0) =>
+    (await sent(ws)).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[i].payload as {
+      html: string;
+      animation?: string;
+    };
+  const htmlOf = async (ws: string, i = 0) => (await payloadOf(ws, i)).html;
 
   it("a shuttle waiting at a stop: says so, and promises a message when it moves", async () => {
     const { ws, riva, actor, put } = await onDutyWorld();
@@ -220,9 +224,9 @@ describe("runUpdates: what the shuttle is doing", () => {
     await put({ phase: "at_spot", spotId: riva.id, since: later(10), lastPingAt: later(15) });
     expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
     const html = await htmlOf(ws.id);
-    expect(html).toContain("<b>The shuttle is waiting at Riva</b> for passengers.");
-    expect(html).toContain("Once it leaves, it's about 8 min to Circle.");
-    expect(html).toContain("I'll message you as soon as it starts moving.");
+    expect(html).toMatch(/<b>The shuttle (is waiting at|is parked at|is hanging out at) Riva<\/b> for passengers\./);
+    expect(html).toContain("Once it leaves, Circle is about 8 min away.");
+    expect(html).toMatch(/as soon as it starts moving|the moment it starts moving|The second it rolls/);
   });
 
   it("keeps that promise: an update as soon as it leaves a stop, without waiting 15 min; once per departure", async () => {
@@ -232,7 +236,9 @@ describe("runUpdates: what the shuttle is doing", () => {
     expect(await runUpdates(db(), later(4), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(5), lastPingAt: later(6) });
     expect(await runUpdates(db(), later(6), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
-    expect(await htmlOf(ws.id)).toContain("<b>The shuttle is on its way to Circle</b> and should be there in about");
+    expect(await htmlOf(ws.id)).toMatch(
+      /<b>The shuttle (is on its way to|is rolling towards|is heading to) Circle<\/b> and should be there in about/,
+    );
     expect(await runUpdates(db(), later(8), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     // and the 15 min count again from that message
     expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
@@ -244,13 +250,44 @@ describe("runUpdates: what the shuttle is doing", () => {
     await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
     await put({ phase: "at_spot", spotId: riva.id, since: later(-30), lastPingAt: later(-20) });
     expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
-    expect(await htmlOf(ws.id)).toContain("I can't see where the shuttle is right now.");
+    expect(await htmlOf(ws.id)).toMatch(/I can't see where the shuttle is right now|out of sight for a moment/);
 
     await db()
       .insert(vehicleBreaks)
       .values({ workspaceId: ws.id, vehicleId: bus.id, startsAt: later(20) });
     expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
-    expect(await htmlOf(ws.id, 1)).toContain("<b>The shuttle is on a short break.</b>");
+    expect(await htmlOf(ws.id, 1)).toContain("<b>The shuttle is on a short chai break.</b>");
+    // the first update of a break brings the GIF; the next tick of the same break doesn't
+    expect(await payloadOf(ws.id, 1)).toMatchObject({ animation: "http://localhost:3000/gifs/break.gif" });
+    expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await payloadOf(ws.id, 2)).not.toHaveProperty("animation");
+  });
+
+  it("'on its way to your stop' brings a GIF for a one-stop subscriber, at most once an hour; never for all stops", async () => {
+    const { ws, riva, circle, person, actor, put } = await onDutyWorld();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: circle.id }, NOW);
+    const second = await makePerson(db(), { firstName: "Ben" });
+    await subscribeUpdates(db(), attendee(second, ws.id), { workspaceId: ws.id, spotId: null }, NOW);
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(5), lastPingAt: later(6) });
+    expect(await runUpdates(db(), later(6), { workspaceId: ws.id })).toEqual({ sent: 2, ended: 0 });
+    const mine = async () =>
+      (await sent(ws.id))
+        .filter((j) => (j.payload as { chatId: number }).chatId === person.telegramId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .map((j) => j.payload as { html: string; animation?: string });
+    const theirs = (await sent(ws.id)).filter((j) => (j.payload as { chatId: number }).chatId === second.telegramId);
+    expect((await mine())[0]).toMatchObject({ animation: "http://localhost:3000/gifs/on-the-way.gif" });
+    expect(theirs[0].payload).not.toHaveProperty("animation");
+    // back at Riva and off again towards Circle within the hour: the push comes, the GIF doesn't
+    await put({ phase: "at_spot", spotId: riva.id, since: later(30), lastPingAt: later(40) });
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(41), lastPingAt: later(42) });
+    expect(await runUpdates(db(), later(42), { workspaceId: ws.id })).toEqual({ sent: 2, ended: 0 });
+    expect((await mine())[1]).not.toHaveProperty("animation");
+    // an hour later it may again
+    await put({ phase: "at_spot", spotId: riva.id, since: later(60), lastPingAt: later(70) });
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(71), lastPingAt: later(72) });
+    expect(await runUpdates(db(), later(72), { workspaceId: ws.id })).toEqual({ sent: 2, ended: 0 });
+    expect((await mine()).at(-1)).toMatchObject({ animation: "http://localhost:3000/gifs/on-the-way.gif" });
   });
 });
 
@@ -310,7 +347,7 @@ describe("update frequency (every 15 or 30 min)", () => {
     expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
     const html = ((await sent(ws.id))[0].payload as { html: string }).html;
     expect(html).toContain("waiting at Riva");
-    expect(html).not.toMatch(/as soon as|the moment it/i);
+    expect(html).not.toMatch(/as soon as|the moment it|the second it/i);
     await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(35), lastPingAt: later(36) });
     expect(await runUpdates(db(), later(36), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     expect(await runUpdates(db(), later(60), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });

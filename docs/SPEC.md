@@ -256,16 +256,29 @@ preview can't log anyone in. A signed session cookie lasts 60 days. Only admin n
 
 **For attendees:**
 - **`/start` (the core experience)**: in a private chat it subscribes the person to where the shuttle is, every
-  15 min, for every stop, straight away: "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about
-  where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop." Plain "stop" / "unsubscribe"
-  (no slash) work like `/stop` / `/unsubscribe` in a private chat. In a group, `/start` shows the spot buttons.
+  15 min, for every stop, straight away: "🌴 Welcome aboard the shuttle bot! From now on you'll get updates every
+  15 minutes about where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop. Too chatty?
+  Tap 🐢 below for every 30 min instead." Plain "stop" / "unsubscribe" (no slash) work like `/stop` /
+  `/unsubscribe` in a private chat. In a group, `/start` shows the spot buttons.
+- **Rhythm**: every 15 min (default) or every 30 min, per subscription (`subscriptions.every_min`), switched with
+  the 🐢 Every 30 min / 🐇 Every 15 min button on every update, the welcome and `/subscribe`, or `/every30` /
+  `/every15`; confirmed in one line. The 30-min rhythm is the calm one: no instant "it just left" push, and its
+  updates don't promise one.
+- **Voice**: warm and a little playful, never at the cost of the facts: one emoji up front, a "chai break", the
+  "scenic route", 🐄 Goa traffic; the lead sentence varies from a small pool by the minute (deterministic), the
+  facts (times, minutes, stop names) never do. Short: one glance on a phone. Still never "late".
+- **GIF moments** (`sendAnimation`, text as caption; sparing, derived from state, no schema): the `/start`
+  welcome; the first update of a driver's break (not every tick of it); "on its way to your stop", for a
+  subscriber to one stop, at most once an hour; and the once-a-day "finished for today" goodnight. Files are
+  served from the app's `/gifs/*.gif` on the one origin; if Telegram refuses the file the text still goes out.
 - **What an update says** (truth first, calm always): what the shuttle is doing now — waiting at a stop, on its
   way (minutes, or a range when the estimate is wide), paused on the road, on a driver's break, or out of sight.
   The timetable is only a hint where it can't mislead: a departure still ahead for a shuttle waiting at that stop
   ("As per the schedule it leaves at 13:45, which gets it to Riva around 13:53"), or the next departures after a
   break / while we can't see it. Never a planned time for a moving shuttle, never a time already gone, never
   "late". A loop gives no departure promise, only the travel time once it leaves. An update also goes out as soon
-  as a shuttle leaves a stop ("I'll message you as soon as it starts moving"), and the 15 min count from there.
+  as a shuttle leaves a stop ("I'll message you as soon as it starts moving"), and the 15 min count from there
+  (15-min rhythm only). After the day's last shuttle: one "🌙 … finished for today" goodnight, then quiet.
 - `/shuttle` (or just "riva" / "circle") → the same answer as the page ("Here in 6 min · live"), with spot buttons.
 - **"Tell me when it's close"**: a one-shot alert: "Message me when the shuttle is 5 min from Riva".
   The ETA engine fires it once, then it expires (after at most 2h).

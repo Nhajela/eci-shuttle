@@ -12,7 +12,7 @@ import { myPickup } from "../subscriptions/need";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
 import {
   currentUpdate,
-  DAY_OVER_TEXT,
+  DAY_OVER_LEAD,
   dayOver,
   rhythmButton,
   setUpdateEvery,
@@ -21,6 +21,7 @@ import {
   unsubscribeUpdates,
 } from "../subscriptions/updates";
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
+import { gifUrl } from "./gifs";
 import { onNeedButton } from "./need";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
@@ -31,9 +32,19 @@ const btn = (text: string, action: CallbackAction, ...args: string[]): TelegramB
   callbackData: encodeCallback({ action, args }),
 });
 
-const say = (ctx: BotContext, html: string, buttons?: TelegramButton[][]): BotReply => ({
-  send: [{ chatId: ctx.chatId, html, kind: "reply", ...(buttons?.length ? { buttons } : {}) }],
+const say = (ctx: BotContext, html: string, buttons?: TelegramButton[][], animation?: string): BotReply => ({
+  send: [
+    {
+      chatId: ctx.chatId,
+      html,
+      kind: "reply",
+      ...(buttons?.length ? { buttons } : {}),
+      ...(animation ? { animation } : {}),
+    },
+  ],
 });
+
+const NONE_TODAY = "😴 No shuttles are running today.";
 
 /** Spot buttons, three to a row (`action` "usub" for /subscribe). */
 function spotButtons(list: PublicSpot[], action: CallbackAction = "spot"): TelegramButton[][] {
@@ -67,10 +78,10 @@ export async function onShuttle(ctx: BotContext, arg: string | null): Promise<Bo
   const q = arg?.trim().toLowerCase();
   const spot = q ? st.spots.find((s) => s.shortName.toLowerCase() === q || s.name.toLowerCase() === q) : undefined;
   if (spot) return spotReply(ctx, st, spot);
-  if (st.spots.length === 0) return say(ctx, "No shuttles are running today.");
+  if (st.spots.length === 0) return say(ctx, NONE_TODAY);
   return say(
     ctx,
-    q ? `I don't know a stop called "${esc(arg?.trim() ?? "")}". Where are you?` : "Where are you?",
+    q ? `I don't know a stop called "${esc(arg?.trim() ?? "")}". 📍 Where are you?` : "📍 Where are you?",
     spotButtons(st.spots),
   );
 }
@@ -84,7 +95,7 @@ export async function onSpot(ctx: BotContext, spotId: string): Promise<BotReply>
   const st = await status(ctx);
   const spot = st.spots.find((s) => s.spotId === spotId);
   if (spot) return spotReply(ctx, st, spot);
-  return say(ctx, "No shuttle stops there today.", spotButtons(st.spots));
+  return say(ctx, "No shuttle stops there today. 📍 Where are you?", spotButtons(st.spots));
 }
 
 function lineText(l: AnswerLine): string {
@@ -116,8 +127,8 @@ export async function onSubscribe(ctx: BotContext, arg: string | null): Promise<
   const q = arg?.trim().toLowerCase();
   const spot = q ? st.spots.find((s) => s.shortName.toLowerCase() === q || s.name.toLowerCase() === q) : undefined;
   if (spot || q === "all") return subscribed(ctx, spot?.spotId ?? null);
-  if (st.spots.length === 0) return say(ctx, "No shuttles are running today.");
-  return say(ctx, "I'll send you where the shuttle is every 15 min while it runs. For which stop?", [
+  if (st.spots.length === 0) return say(ctx, NONE_TODAY);
+  return say(ctx, "🚐 I'll send you where the shuttle is every 15 min while it runs. Which stop is yours?", [
     ...spotButtons(st.spots, "usub"),
     [btn("All stops", "usub", "all")],
   ]);
@@ -132,8 +143,8 @@ async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotRe
   const every = `every ${sub.everyMin} min`;
   const now = await currentUpdate(ctx.db, ctx.workspace.id, st, spotId, ctx.now);
   const intro = dayOver(list)
-    ? `${DAY_OVER_TEXT.split(" /unsubscribe")[0]} You'll get an update for ${where} ${every} then.`
-    : `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} ${every} while the shuttle runs.`;
+    ? `${DAY_OVER_LEAD} You'll get an update for ${where} ${every} when it runs tomorrow.`
+    : `${now ? `${now}\n\n` : ""}📬 You're on the list: an update for ${where} ${every} while the shuttle runs.`;
   return say(ctx, `${intro} /unsubscribe stops them.`, [
     [btn("Stop updates", "nunsub", sub.id)],
     [rhythmButton(sub.everyMin)],
@@ -160,32 +171,39 @@ export async function onEvery(ctx: BotContext, everyMin: UpdateEveryMin): Promis
 }
 
 export const WELCOME_TEXT =
-  "Welcome to the shuttle bot! Now you'll get updates every 15 minutes about where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop.";
+  "🌴 Welcome aboard the shuttle bot! From now on you'll get updates every 15 minutes about where the shuttle is. " +
+  "Just send 'stop' or 'unsubscribe' whenever you want to stop. Too chatty? Tap 🐢 below for every 30 min instead.";
 
 /**
  * Plain `/start` in a private chat, the bot's core experience: subscribe to the 15-min updates for every stop
- * straight away, then say so, with where the shuttle is now (or that it's finished for today) and a stop button.
+ * straight away, then say so (with the welcome GIF), with where the shuttle is now (or that it's finished for
+ * today), a stop button and the rhythm button.
  */
 export async function onWelcome(ctx: BotContext): Promise<BotReply> {
   const st = await status(ctx);
-  if (st.spots.length === 0) return say(ctx, "No shuttles are running today.");
+  if (st.spots.length === 0) return say(ctx, NONE_TODAY);
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
   const sub = await subscribeUpdates(ctx.db, actor, { workspaceId: ctx.workspace.id, spotId: null }, ctx.now);
   const now = await currentUpdate(ctx.db, ctx.workspace.id, st, null, ctx.now);
-  const after = dayOver(st.spots)
-    ? "The shuttle has finished for today. Updates start again when it runs tomorrow."
-    : now;
-  return say(ctx, after ? `${WELCOME_TEXT}\n\n${after}` : WELCOME_TEXT, [
-    [btn("Stop updates", "nunsub", sub.id)],
-    [rhythmButton(sub.everyMin)],
-  ]);
+  const after = dayOver(st.spots) ? `${DAY_OVER_LEAD} Updates start again when it runs tomorrow.` : now;
+  return say(
+    ctx,
+    after ? `${WELCOME_TEXT}\n\n${after}` : WELCOME_TEXT,
+    [[btn("Stop updates", "nunsub", sub.id)], [rhythmButton(sub.everyMin)]],
+    gifUrl("welcome"),
+  );
 }
 
 /** `/unsubscribe`: end the 15-min updates (alerts and notices stay; /stop ends everything). */
 export async function onUnsubscribe(ctx: BotContext): Promise<BotReply> {
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
   const n = await unsubscribeUpdates(ctx.db, actor, { workspaceId: ctx.workspace.id }, ctx.now);
-  return say(ctx, n ? "Done. No more shuttle updates. /subscribe starts them again." : "You weren't getting updates.");
+  return say(
+    ctx,
+    n
+      ? "👋 Done. No more shuttle updates. /subscribe brings them back any time."
+      : "You weren't getting updates anyway. All quiet here. 🙂",
+  );
 }
 
 /** `/stop`: cancel all of the person's subscriptions (subscriptions.unsubscribe "all"), a /need request included. */
@@ -193,11 +211,11 @@ export async function onStop(ctx: BotContext): Promise<BotReply> {
   const actor = attendeeActor(ctx.person, ctx.workspace.id);
   const pickup = await myPickup(ctx.db, actor, { workspaceId: ctx.workspace.id }, ctx.now);
   const n = await unsubscribe(ctx.db, actor, { workspaceId: ctx.workspace.id, subscriptionId: "all" }, ctx.now);
-  if (!n) return say(ctx, "You had nothing turned on. Nothing to stop.");
+  if (!n) return say(ctx, "Nothing was on, so nothing to stop. All quiet. 🙂");
   const others = n - (pickup ? 1 : 0);
   const request = pickup ? `cancelled your shuttle request (${esc(pickup.from)} → ${esc(pickup.to)})` : "";
   const rest = others > 0 ? "turned off your alerts, updates and notices" : "";
-  return say(ctx, `Done. I've ${[request, rest].filter(Boolean).join(" and ")}.`);
+  return say(ctx, `🔕 Done. I've ${[request, rest].filter(Boolean).join(" and ")}. /start brings me back any time.`);
 }
 
 /** Buttons spot / arrive / nsub / nunsub. */
@@ -222,7 +240,7 @@ export async function onAttendeeCallback(ctx: BotContext, cb: Callback, query: T
         return {
           ...say(
             ctx,
-            `OK. I'll message you when a shuttle is ${leadMin} min from <b>${esc(await spotName(arg))}</b>. This alert ends after 2 h.`,
+            `⏰ On it! I'll message you when a shuttle is ${leadMin} min from <b>${esc(await spotName(arg))}</b>. This alert ends after 2 h.`,
             [[btn("Cancel this alert", "nunsub", sub.id)]],
           ),
           answerCallback: ack("Alert set"),
@@ -233,7 +251,7 @@ export async function onAttendeeCallback(ctx: BotContext, cb: Callback, query: T
         const sub = await subscribeNotices(ctx.db, actor, { workspaceId, spotId }, ctx.now);
         const where = spotId ? `<b>${esc(await spotName(spotId))}</b>` : "every stop";
         return {
-          ...say(ctx, `You'll get notices for ${where}. Send /stop to turn everything off.`, [
+          ...say(ctx, `📣 You'll get notices for ${where}. Send /stop to turn everything off.`, [
             [btn("Stop these notices", "nunsub", sub.id)],
             ...(spotId ? [[btn("Notices for every stop", "nsub", "all")]] : []),
           ]),

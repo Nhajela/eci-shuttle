@@ -191,7 +191,7 @@ describe("requestPickup", () => {
     const input = { workspaceId: ws.id, fromSpotId: riva.id, toSpotId: circle.id };
     await expect(requestPickup(db(), actor, input, NOW)).rejects.toMatchObject({
       code: "INVALID",
-      message: "No shuttle is running right now. The next one starts at 12:00.",
+      message: "😴 No shuttle is running right now. The next one starts at 12:00.",
     });
 
     status.mockResolvedValue(world([pubSpot(riva), pubSpot(circle)]));
@@ -233,7 +233,7 @@ describe("runPickups", () => {
     expect(dms).toHaveLength(1);
     expect(dms[0].dedupeKey).toBe(`need-here:${request.id}`);
     expect(dms[0].payload).toMatchObject({ kind: "arrival", personId: person.id });
-    expect(htmlOf(dms[0])).toBe("The shuttle is here at <b>Riva</b>.");
+    expect(htmlOf(dms[0])).toBe("🚐 The shuttle is here at <b>Riva</b> — hop on!");
     const [row] = await db().select().from(subscriptions).where(eq(subscriptions.id, request.id));
     expect(row.firedAt).toEqual(later(2));
     expect(await runPickups(db(), { workspaceId: ws.id }, later(3))).toEqual({ fired: 0, onTheWay: 0, expired: 0 });
@@ -255,7 +255,7 @@ describe("runPickups", () => {
     expect(await runPickups(db(), { workspaceId: ws.id }, later(5))).toEqual({ fired: 1, onTheWay: 0, expired: 0 });
     const dms = (await jobs(ws.id)).filter((j) => (j.payload as { chatId: number }).chatId === person.telegramId);
     expect(dms.map((j) => j.dedupeKey)).toEqual([`need-way:${request.id}`, `need-here:${request.id}`]);
-    expect(htmlOf(dms[0])).toBe("The shuttle is on its way to <b>Riva</b>, about 6 min.");
+    expect(htmlOf(dms[0])).toBe("🚐 The shuttle is on its way to <b>Riva</b>, about 6 min.");
     expect(htmlOf(dms[0])).not.toMatch(/late/i);
   });
 
@@ -281,7 +281,7 @@ describe("runPickups", () => {
       .where(eq(vehicleState.vehicleId, bus.id));
     expect(await runPickups(db(), { workspaceId: ws.id }, later(1))).toMatchObject({ onTheWay: 1 });
     const dm = (await jobs(ws.id)).find((j) => (j.payload as { chatId: number }).chatId === person.telegramId);
-    expect(dm && htmlOf(dm)).toBe("The shuttle is on its way to <b>Riva</b>, 14 min.");
+    expect(dm && htmlOf(dm)).toBe("🚐 The shuttle is on its way to <b>Riva</b>, 14 min.");
   });
 
   it("expires after 60 min and tells the person; cancelled ones are left alone", async () => {
@@ -306,7 +306,7 @@ describe("runPickups", () => {
     const dm = (await jobs(ws.id)).find((j) => j.dedupeKey === `need-end:${request.id}`);
     expect(dm?.payload).toMatchObject({ chatId: person.telegramId });
     expect(dm && htmlOf(dm)).toBe(
-      "Your request for a shuttle from Riva to Circle has expired after 60 min. Send /need if you still need one.",
+      "⏳ Your request for a shuttle from Riva to Circle has expired after 60 min. Send /need if you still need one.",
     );
     expect(dm && htmlOf(dm)).not.toMatch(/late/i);
     const [row] = await db().select().from(subscriptions).where(eq(subscriptions.id, request.id));

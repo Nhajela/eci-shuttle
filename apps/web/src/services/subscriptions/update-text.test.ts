@@ -45,6 +45,18 @@ const off = line({
 });
 
 const RIVA_TIMES = ["12:40", "13:20", "14:00", "14:40"];
+
+/** The voice varies per minute from a small pool: match any phrasing, pin the facts. */
+const WAITING = (at: string) => new RegExp(`🚐 <b>The shuttle (is waiting at|is parked at|is hanging out at) ${at}`);
+const HERE = (at: string) =>
+  new RegExp(`🚐 <b>The shuttle (is at ${at} now|is right here at ${at}|is at ${at}, right where you are)\\.</b>`);
+const MOVING = (to: string) =>
+  new RegExp(`🚐 <b>The shuttle (is on its way to|is rolling towards|is heading to) ${to}</b>`);
+const MOVE_PROMISE =
+  /(I'll message you as soon as it starts moving|I'll ping you the moment it starts moving|The second it rolls, you'll hear from me)\./;
+const ROAD_PROMISE =
+  /(I'll message you as soon as it's on the road again|You'll hear from me the moment it's rolling again)\./;
+const NO_SIGNAL = /📡 (I can't see where the shuttle is right now|The shuttle is out of sight for a moment)\./;
 const CIRCLE_TIMES = ["13:05", "13:45", "14:25", "15:05"];
 
 const shuttle = (state: ShuttleNow["state"], name = "Shuttle 1"): ShuttleNow => ({
@@ -67,11 +79,10 @@ describe("storyText: a shuttle waiting at a stop", () => {
       focusSpotId: null,
       now: NOW,
     });
-    expect(text).toBe(
-      "🚐 <b>The shuttle is waiting at Circle.</b>\n" +
-        "As per the schedule it leaves at <b>13:45</b>, which gets it to Riva around <b>13:53</b>.\n" +
-        "I'll message you as soon as it starts moving.",
-    );
+    expect(text).toMatch(WAITING("Circle\\.</b>"));
+    expect(text).toContain("\nAs per the schedule it leaves at <b>13:45</b>, landing in Riva around <b>13:53</b>.\n");
+    expect(text).toMatch(MOVE_PROMISE);
+    expect(text?.split("\n")).toHaveLength(3);
   });
 
   it("a stop subscriber at that stop hears it's there now", () => {
@@ -82,7 +93,7 @@ describe("storyText: a shuttle waiting at a stop", () => {
       focusSpotId: RIVA,
       now: NOW - min(2),
     });
-    expect(text).toContain("<b>The shuttle is at Riva now.</b>");
+    expect(text).toMatch(HERE("Riva"));
     expect(text).toContain("As per the schedule it leaves at <b>13:20</b>");
   });
 
@@ -94,7 +105,7 @@ describe("storyText: a shuttle waiting at a stop", () => {
       focusSpotId: null,
       now: at("13:50"),
     }) as string;
-    expect(text).toContain("It should leave soon.");
+    expect(text).toContain("It should be off any minute now.");
     expect(text).not.toContain("13:45");
     expect(text).not.toContain("14:25");
     expect(text).not.toMatch(/late|behind|delay/i);
@@ -108,11 +119,29 @@ describe("storyText: a shuttle waiting at a stop", () => {
       focusSpotId: null,
       now: NOW,
     });
-    expect(text).toBe(
-      "🚐 <b>The shuttle is waiting at Circle</b> for passengers.\n" +
-        "Once it leaves, it's about 8 min to Riva.\n" +
-        "I'll message you as soon as it starts moving.",
-    );
+    expect(text).toMatch(WAITING("Circle</b> for passengers\\."));
+    expect(text).toContain("\nOnce it leaves, Riva is about 8 min away.\n");
+    expect(text).toMatch(MOVE_PROMISE);
+  });
+
+  it("varies its phrasing from minute to minute, but says the same thing for the same minute", () => {
+    const spots = [spot(RIVA, "Riva", [live(14)], [], 23), spot(CIRCLE, "Circle", [live(0)], [], 23)];
+    const say = (now: number) =>
+      storyText({
+        shuttles: [shuttle({ kind: "waiting", spotId: CIRCLE, since: NOW - min(9) })],
+        spots,
+        focusSpotId: null,
+        now,
+      });
+    const leads = new Set([0, 1, 2, 3, 4, 5].map((k) => (say(NOW + min(k)) as string).split("\n")[0]));
+    expect(leads.size).toBeGreaterThan(1);
+    expect(say(NOW)).toBe(say(NOW));
+    expect(say(NOW)).toBe(say(NOW + 10_000));
+    for (const t of [NOW, NOW + min(1), NOW + min(2)]) {
+      const text = say(t) as string;
+      expect(text).toMatch(WAITING("Circle</b> for passengers\\."));
+      expect(text).not.toMatch(/late|behind|delay/i);
+    }
   });
 });
 
@@ -126,17 +155,17 @@ describe("storyText: the calm rhythm (promise false)", () => {
       now: NOW,
       promise: false,
     }) as string;
-    expect(waiting).toContain("waiting at Riva");
-    expect(waiting).not.toMatch(/as soon as/);
+    expect(waiting).toMatch(WAITING("Riva"));
+    expect(waiting).not.toMatch(MOVE_PROMISE);
     const brk = storyText({
-      shuttles: [shuttle({ kind: "break", until: null })],
+      shuttles: [shuttle({ kind: "break", until: null, since: NOW - min(3) })],
       spots,
       focusSpotId: null,
       now: NOW,
       promise: false,
     }) as string;
     expect(brk).toContain("break");
-    expect(brk).not.toMatch(/as soon as/);
+    expect(brk).not.toMatch(ROAD_PROMISE);
   });
 });
 
@@ -149,9 +178,8 @@ describe("storyText: a moving shuttle", () => {
       focusSpotId: null,
       now: NOW,
     });
-    expect(text).toBe(
-      "🚐 <b>The shuttle is on its way to Riva</b> and should be there in about <b>4 min</b> (around 13:24).",
-    );
+    expect(text).toMatch(MOVING("Riva"));
+    expect(text).toMatch(/Riva<\/b> and should be there in about <b>4 min<\/b> \(around 13:24\)\.$/);
     expect(text).not.toContain("14:00");
   });
 
@@ -163,14 +191,15 @@ describe("storyText: a moving shuttle", () => {
       focusSpotId: null,
       now: NOW,
     });
-    expect(text).toBe("🚐 <b>The shuttle is on its way to Riva</b> and should be there in about <b>4–11 min</b>.");
+    expect(text).toMatch(MOVING("Riva"));
+    expect(text).toMatch(/and should be there in about <b>4–11 min<\/b>\.$/);
   });
 
   it("off its usual route: says so gently, with the timetable as a hint", () => {
     const spots = [spot(RIVA, "Riva", [live(9, { phaseText: "off the usual route" })], RIVA_TIMES)];
     const text = storyText({ shuttles: [shuttle({ kind: "off_route" })], spots, focusSpotId: null, now: NOW + 1 });
     expect(text).toBe(
-      "🚐 The shuttle is taking a different road right now.\n" +
+      "🚐 The shuttle is taking the scenic route right now. 🌴\n" +
         "As per the schedule, the next one leaves Riva around <b>14:00</b>.",
     );
   });
@@ -183,8 +212,9 @@ describe("storyText: a moving shuttle", () => {
       focusSpotId: CIRCLE,
       now: NOW,
     });
-    expect(text).toContain("on its way to Riva</b> and should be there in about <b>4 min</b>");
-    expect(text).toContain("Then Circle in about <b>20 min</b>.");
+    expect(text).toMatch(MOVING("Riva"));
+    expect(text).toContain("Riva</b> and should be there in about <b>4 min</b>");
+    expect(text).toContain("\nThen Circle in about <b>20 min</b>.");
   });
 
   it("stopped on the road: says so, with the estimate", () => {
@@ -195,10 +225,10 @@ describe("storyText: a moving shuttle", () => {
       focusSpotId: null,
       now: NOW,
     });
-    expect(text).toBe(
-      "🚐 <b>The shuttle has paused on the way to Riva</b> (traffic or a stop).\n" +
-        "Once it's moving again, it's about <b>6 min</b> away.",
+    expect(text).toMatch(
+      /^🚐 <b>The shuttle has paused on the way to Riva<\/b> (\(traffic or a quick stop\)|\(Goa traffic, most likely 🐄\))\.\n/,
     );
+    expect(text).toContain("\nOnce it's moving again, it's about <b>6 min</b> away.");
   });
 });
 
@@ -214,40 +244,37 @@ describe("storyText: not running now", () => {
       spot(CIRCLE, "Circle", [off], ["10:25", "12:25"]),
     ];
     const text = storyText({
-      shuttles: [shuttle({ kind: "break", until: at("12:00") })],
+      shuttles: [shuttle({ kind: "break", until: at("12:00"), since: at("11:10") })],
       spots,
       focusSpotId: null,
       now: at("11:20"),
     });
-    expect(text).toBe(
-      "☕ <b>The shuttle is on a short break</b> and should be back around 12:00.\n" +
-        "As per the schedule, the next one leaves Riva at <b>12:00</b> and Circle at <b>12:25</b>.\n" +
-        "I'll message you as soon as it's on the road again.",
+    expect(text).toContain(
+      "☕ <b>The shuttle is on a short chai break</b> and should be back around 12:00.\n" +
+        "As per the schedule, the next one leaves Riva at <b>12:00</b> and Circle at <b>12:25</b>.\n",
     );
+    expect(text).toMatch(ROAD_PROMISE);
   });
 
   it("an open-ended break on a loop: no time promised, how often it usually runs", () => {
     const spots = [spot(RIVA, "Riva", [off], [], 23)];
     const text = storyText({
-      shuttles: [shuttle({ kind: "break", until: null })],
+      shuttles: [shuttle({ kind: "break", until: null, since: NOW - min(3) })],
       spots,
       focusSpotId: null,
       now: NOW,
     });
-    expect(text).toBe(
-      "☕ <b>The shuttle is on a short break.</b>\n" +
-        "When it's running it comes about every 23 min.\n" +
-        "I'll message you as soon as it's on the road again.",
+    expect(text).toContain(
+      "☕ <b>The shuttle is on a short chai break.</b>\nWhen it's running it comes about every 23 min.\n",
     );
+    expect(text).toMatch(ROAD_PROMISE);
   });
 
   it("no signal: says live tracking is off, then the schedule", () => {
     const spots = [spot(RIVA, "Riva", [off], RIVA_TIMES), spot(CIRCLE, "Circle", [off], CIRCLE_TIMES)];
     const text = storyText({ shuttles: [shuttle({ kind: "no_signal" })], spots, focusSpotId: RIVA, now: NOW + 1 });
-    expect(text).toBe(
-      "📡 I can't see where the shuttle is right now.\n" +
-        "As per the schedule, the next one leaves Riva around <b>14:00</b>.",
-    );
+    expect(text).toMatch(NO_SIGNAL);
+    expect(text).toContain("\nAs per the schedule, the next one leaves Riva around <b>14:00</b>.");
   });
 
   it("nothing running at the subscriber's stops → null (the job stays quiet)", () => {
@@ -275,14 +302,14 @@ describe("storyText: several shuttles", () => {
     const text = storyText({
       shuttles: [
         shuttle({ kind: "moving", toSpotId: RIVA, fromSpotId: CIRCLE, since: NOW, stopped: false }),
-        shuttle({ kind: "break", until: null }, "Bus <2>"),
+        shuttle({ kind: "break", until: null, since: NOW }, "Bus <2>"),
       ],
       spots,
       focusSpotId: null,
       now: NOW,
     }) as string;
-    expect(text).toContain("<b>Shuttle 1 is on its way to Riva</b>");
-    expect(text).toContain("<b>Bus &lt;2&gt; is on a short break.</b>");
+    expect(text).toMatch(/<b>Shuttle 1 (is on its way to|is rolling towards|is heading to) Riva<\/b>/);
+    expect(text).toContain("<b>Bus &lt;2&gt; is on a short chai break.</b>");
   });
 });
 

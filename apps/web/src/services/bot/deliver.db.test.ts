@@ -266,7 +266,7 @@ describe("sendNow with an animation (GIF moments)", () => {
     const t = fakeTelegram(() => ({ error_code: 403, description: "Forbidden: bot was blocked by the user" }));
     const r = await sendNow(
       db(),
-      { chatId, html: "x", kind: "update", animation: GIF, personId: person!.id },
+      { chatId, html: "x", kind: "update", animation: GIF, personId: person?.id },
       t.fetchImpl,
     );
     expect(r).toMatchObject({ ok: false, retry: false });
