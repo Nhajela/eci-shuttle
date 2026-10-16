@@ -1,7 +1,11 @@
 "use client";
-/** Polls GET /api/positions every 10 s while the tab is visible. Null until the first answer; keeps the last good one. */
+/**
+ * Polls GET /api/positions every 10 s while the tab is visible, and at once when the page is back in view
+ * (resume.watchResume). Null until the first answer; keeps the last good one; an older answer never replaces a newer.
+ */
 import { useEffect, useState } from "react";
 import type { PublicMap } from "@/services/public/positions";
+import { browserTargets, latestOnly, watchResume } from "../resume";
 
 const POLL_MS = 10_000;
 
@@ -11,27 +15,31 @@ export function usePositions(slug: string | null, enabled = true): PublicMap | n
     if (!enabled) return;
     let alive = true;
     const url = slug ? `/api/positions?w=${encodeURIComponent(slug)}` : "/api/positions";
+    const gate = latestOnly();
     const load = async () => {
       if (document.hidden) return;
       try {
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) return;
-        const next = (await res.json()) as PublicMap;
-        if (alive) setData(next);
+        await gate.run(
+          async () => {
+            const res = await fetch(url, { cache: "no-store" });
+            if (!res.ok) throw new Error(String(res.status));
+            return (await res.json()) as PublicMap;
+          },
+          (next) => {
+            if (alive) setData(next);
+          },
+        );
       } catch {
         // keep the last answer; the page says when the server is unreachable
       }
     };
     load();
     const t = setInterval(load, POLL_MS);
-    const onVisible = () => {
-      if (!document.hidden) load();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    const stopWatching = watchResume({ ...browserTargets(), onResume: load });
     return () => {
       alive = false;
       clearInterval(t);
-      document.removeEventListener("visibilitychange", onVisible);
+      stopWatching();
     };
   }, [slug, enabled]);
   return data;

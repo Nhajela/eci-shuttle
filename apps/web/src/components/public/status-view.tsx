@@ -16,6 +16,7 @@ import { ageSeconds, answerParts, contextText, pickSpot, scheduleWindow, spotCoo
 import { PublicMapCard } from "./map/public-map";
 import { usePositions } from "./map/use-positions";
 import { Notices } from "./notices";
+import { browserTargets, latestOnly, watchResume } from "./resume";
 import { StaffMap } from "./staff-map";
 import { pageStory, type Story } from "./story";
 import { stripLayout, VanStrip } from "./van-strip";
@@ -55,30 +56,41 @@ export function StatusView({
   useEffect(() => {
     let stopped = false;
     const url = slug ? `/api/status?w=${encodeURIComponent(slug)}` : "/api/status";
+    const gate = latestOnly();
     async function poll() {
       if (document.hidden) return;
       try {
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) throw new Error(String(res.status));
-        const next = (await res.json()) as PublicStatus;
-        if (!stopped) {
-          setStatus(next);
-          setFailed(false);
-        }
+        await gate.run(
+          async () => {
+            const res = await fetch(url, { cache: "no-store" });
+            if (!res.ok) throw new Error(String(res.status));
+            return (await res.json()) as PublicStatus;
+          },
+          (next) => {
+            if (stopped) return;
+            setStatus(next);
+            setFailed(false);
+          },
+        );
       } catch {
         if (!stopped) setFailed(true);
       }
       if (!stopped) setNow(new Date());
     }
     const timer = setInterval(poll, POLL_MS);
-    const onVisible = () => {
-      if (!document.hidden) poll();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    // back in view (tab switch, phone unlocked, back/forward cache, signal back): age the answer at once, so an
+    // old position reads as old ("last seen 20 min ago" / the timetable) while the fresh one loads
+    const stopWatching = watchResume({
+      ...browserTargets(),
+      onResume: () => {
+        setNow(new Date());
+        poll();
+      },
+    });
     return () => {
       stopped = true;
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
+      stopWatching();
     };
   }, [slug]);
 
