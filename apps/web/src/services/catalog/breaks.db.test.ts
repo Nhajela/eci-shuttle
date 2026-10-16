@@ -65,7 +65,7 @@ describe("endBreak", () => {
     expect(ended).toMatchObject({ id: b.id, endedAt: at(8) });
     expect(breakEnd(ended)).toEqual(at(8));
     expect((await activeBreaks(db(), ws.id, at(9))).has(v.id)).toBe(false);
-    const rows = await db().select().from(auditLog).where(eq(auditLog.entityId, b.id));
+    const rows = await db().select().from(auditLog).where(eq(auditLog.entityId, b.id)).orderBy(auditLog.id);
     expect(rows.map((r) => r.action)).toEqual(["vehicle.break", "vehicle.break_end"]);
   });
 });

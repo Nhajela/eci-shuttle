@@ -302,9 +302,13 @@ describe("update frequency (every 15 or 30 min)", () => {
 
     const slow = await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, later(1));
     expect(slow).toMatchObject({ id: sub.id, everyMin: 30 });
+    // rows come back in no particular order: find each by its action
     const audits = await db().select().from(auditLog).where(eq(auditLog.entityId, sub.id));
-    expect(audits.map((a) => a.action)).toEqual(["subscription.create", "subscription.update"]);
-    expect(audits[1]).toMatchObject({ before: { everyMin: 15 }, after: { everyMin: 30 } });
+    expect(audits.map((a) => a.action).sort()).toEqual(["subscription.create", "subscription.update"]);
+    expect(audits.find((a) => a.action === "subscription.update")).toMatchObject({
+      before: { everyMin: 15 },
+      after: { everyMin: 30 },
+    });
     // the same value again changes nothing and writes no audit row
     await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 30 }, later(2));
     expect(await db().select().from(auditLog).where(eq(auditLog.entityId, sub.id))).toHaveLength(2);
