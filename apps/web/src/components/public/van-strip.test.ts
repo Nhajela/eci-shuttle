@@ -29,6 +29,7 @@ const van = (over: Partial<PublicVehicle>): PublicVehicle => ({
   legIndex: 0,
   legFraction: 0.25,
   headingDeg: 20,
+  alongM: 300,
   lastSeenS: 5,
   ...over,
 });

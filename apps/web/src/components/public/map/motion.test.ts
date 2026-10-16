@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lerpAngle, retarget, sample, type Track } from "./motion";
+import { lerpAngle, pointAt, retarget, routePath, sample, type Track } from "./motion";
 
 describe("lerpAngle", () => {
   it("turns the short way round", () => {
@@ -53,5 +53,70 @@ describe("retarget / sample: a marker glides from where it is to the newest fix"
     expect(sample(t2, 9000).headingDeg).toBeCloseTo(0, 0);
     const t: Track = t2;
     expect(t.to.headingDeg).toBeCloseTo(0, 0);
+  });
+});
+
+describe("along the road: a van on its route glides along the route path, not in a straight line", () => {
+  // an L-shaped road: 0 → 100 m north, then 100 m east (≈ metres at Mandrem's latitude)
+  const lat0 = 15.66;
+  const lng0 = 73.71;
+  const north = 100 / 111_320;
+  const east = 100 / (111_320 * Math.cos((lat0 * Math.PI) / 180));
+  const road = routePath([
+    { lat: lat0, lng: lng0 },
+    { lat: lat0 + north, lng: lng0 },
+    { lat: lat0 + north, lng: lng0 + east },
+  ]);
+  const at = (alongM: number) => ({ ...pointAt(road, alongM), alongM });
+
+  it("measures the path and finds points and headings along it", () => {
+    expect(road.lengthM).toBeCloseTo(200, 0);
+    expect(pointAt(road, 50).lat).toBeCloseTo(lat0 + north / 2, 6);
+    expect(pointAt(road, 50).headingDeg).toBeCloseTo(0, 0);
+    expect(pointAt(road, 150).headingDeg).toBeCloseTo(90, 0);
+    expect(pointAt(road, 999).lng).toBeCloseTo(lng0 + east, 6);
+  });
+
+  it("rounds the corner: halfway through a glide from 50 m to 150 m it is at the corner, not cutting across", () => {
+    const t1 = retarget(undefined, at(50), 0, 4000, road);
+    const t2 = retarget(t1, at(150), 1000, 4000, road);
+    const mid = sample(t2, 3000);
+    expect(mid.lat).toBeCloseTo(lat0 + north, 6);
+    expect(mid.lng).toBeCloseTo(lng0, 6);
+  });
+
+  it("faces the way the road goes", () => {
+    const t1 = retarget(undefined, at(10), 0, 4000, road);
+    const t2 = retarget(t1, at(190), 0, 4000, road);
+    expect(sample(t2, 500).headingDeg).toBeCloseTo(0, 0);
+    expect(sample(t2, 4000).headingDeg).toBeCloseTo(90, 0);
+  });
+
+  it("GPS jitter a few metres backwards doesn't make it reverse; a loop wraps forward past the end", () => {
+    const loop = routePath([
+      { lat: lat0, lng: lng0 },
+      { lat: lat0 + north, lng: lng0 },
+      { lat: lat0, lng: lng0 },
+    ]);
+    const on = (alongM: number) => ({ ...pointAt(loop, alongM), alongM });
+    const t1 = retarget(undefined, on(120), 0, 4000, loop);
+    const jitter = retarget(t1, on(110), 0, 4000, loop);
+    expect(sample(jitter, 4000).lat).toBeCloseTo(pointAt(loop, 120).lat, 7);
+    // near the end of the loop, the next fix is just past the start: it carries on forwards, through the end
+    const t3 = retarget(undefined, on(190), 0, 4000, loop);
+    const t4 = retarget(t3, on(10), 0, 4000, loop);
+    // halfway it is back at the start (reversing would have taken it up to the far end), still heading home
+    expect(sample(t4, 2000).lat).toBeCloseTo(lat0, 5);
+    expect(sample(t4, 1000).headingDeg).toBeCloseTo(180, 0);
+    expect(sample(t4, 4000).headingDeg).toBeCloseTo(0, 0);
+  });
+
+  it("a fix with no road position (off the route) glides straight as before", () => {
+    const t1 = retarget(undefined, at(50), 0, 4000, road);
+    const off = { lat: lat0 + north, lng: lng0 + east, headingDeg: null, alongM: null };
+    const t2 = retarget(t1, off, 0, 4000, road);
+    const mid = sample(t2, 2000);
+    expect(mid.lng).toBeGreaterThan(lng0);
+    expect(mid.lat).toBeLessThan(lat0 + north);
   });
 });

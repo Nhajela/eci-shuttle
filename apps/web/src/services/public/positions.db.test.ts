@@ -121,6 +121,7 @@ describe("publicPositions: what attendees may see", () => {
         legIndex: 0,
         legFraction: expect.any(Number),
         headingDeg: expect.any(Number),
+        alongM: 300,
         lastSeenS: 30,
       },
     ]);
@@ -138,6 +139,14 @@ describe("publicPositions: what attendees may see", () => {
     const [v] = (await publicPositions(db(), w.id, NOW)).vehicles;
     expect(v).toMatchObject({ phase: "at_spot", atSpotId: riva.id, nextSpotId: circle.id, nextSpotName: "Circle" });
     expect(v?.headingDeg).toBeNull();
+    expect(v?.alongM).toBe(0);
+  });
+
+  it("an off-route vehicle has no place along the road (the map draws it where it is)", async () => {
+    const { w, circle, svc } = await world();
+    await bus(w.id, svc.id, "Detour", { phase: "en_route", nextSpotId: circle.id, alongM: 300, offRoute: true });
+    const [v] = (await publicPositions(db(), w.id, NOW)).vehicles;
+    expect(v?.alongM).toBeNull();
   });
 
   it("never shows a vehicle outside its shift: a driver going home is nobody's business", async () => {

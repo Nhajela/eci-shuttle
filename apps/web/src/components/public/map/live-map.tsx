@@ -114,7 +114,15 @@ function labelElement(): HTMLElement {
 }
 
 function vanFixes(data: PublicMap): VanFix[] {
-  return data.vehicles.map((v) => ({ id: v.id, lat: v.lat, lng: v.lng, headingDeg: v.headingDeg, colour: v.colour }));
+  return data.vehicles.map((v) => ({
+    id: v.id,
+    lat: v.lat,
+    lng: v.lng,
+    headingDeg: v.headingDeg,
+    colour: v.colour,
+    routeId: v.routeId,
+    alongM: v.alongM,
+  }));
 }
 
 export function LiveMap({ data, dark, reducedMotion, follow, expanded, onReady, onFail, className }: LiveMapProps) {
@@ -251,6 +259,7 @@ export function LiveMap({ data, dark, reducedMotion, follow, expanded, onReady, 
       );
       map.addLayer(vans);
       syncStops(state, d);
+      vans.setRoutes(d.routes);
       vans.update(vanFixes(d), performance.now());
 
       // the intro: a flat, slightly zoomed-out look, then a glide down into the pitched 3D view. It needs the
@@ -321,6 +330,7 @@ export function LiveMap({ data, dark, reducedMotion, follow, expanded, onReady, 
     if (src && "setData" in src)
       (src as { setData: (d: GeoJSON.FeatureCollection) => void }).setData(routeGeoJson(data, dark));
     syncStops(s, data);
+    s.vans.setRoutes(data.routes);
     s.vans.update(vanFixes(data), performance.now());
     syncLabels(s, data);
   }, [data, dark]);

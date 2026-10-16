@@ -8,7 +8,7 @@ import type { CustomLayerInterface, CustomRenderMethodInput, Map as MlMap } from
 import { MercatorCoordinate } from "maplibre-gl";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
-import { type Pose, retarget, sample, type Track } from "./motion";
+import { type Pose, type RoutePath, retarget, routePath, sample, type Track } from "./motion";
 
 const VAN_LENGTH_M = 5.6;
 /** how long the van should look on screen, in CSS px, whatever the zoom (never smaller than life size) */
@@ -161,7 +161,16 @@ function lit(scene: THREE.Scene) {
   scene.add(fill);
 }
 
-export type VanFix = { id: string; lat: number; lng: number; headingDeg: number | null; colour: string | null };
+export type VanFix = {
+  id: string;
+  lat: number;
+  lng: number;
+  headingDeg: number | null;
+  colour: string | null;
+  /** its route and metres along it: the van then glides along the road (motion.retarget) */
+  routeId?: string;
+  alongM?: number | null;
+};
 
 /** The vans layer: feed it fixes with `update()`; it glides each van there over `glideMs`. */
 export class VanLayer implements CustomLayerInterface {
@@ -175,6 +184,8 @@ export class VanLayer implements CustomLayerInterface {
   private pending: VanFix[] | null = null;
   private pendingAt = 0;
   private glideMs = 4000;
+  /** measured route paths by route id; the same object while the path is unchanged (a glide continues on it) */
+  private routes = new Map<string, { key: string; path: RoutePath }>();
   /** last rendered pose per van, for whoever follows it */
   readonly poses = new Map<string, Pose>();
   animate = true;
@@ -203,7 +214,21 @@ export class VanLayer implements CustomLayerInterface {
     this.map = null;
   }
 
-  /** New fixes at `nowMs`: vans not in the list leave; the rest glide to their fix. */
+  /** The routes the vans run on (call before `update`); an unchanged path keeps its measured object. */
+  setRoutes(routes: { id: string; path: { lat: number; lng: number }[] }[]) {
+    const next = new Map<string, { key: string; path: RoutePath }>();
+    for (const r of routes) {
+      if (r.path.length < 2) continue;
+      const a = r.path[0];
+      const b = r.path[r.path.length - 1];
+      const key = `${r.path.length}:${a?.lat},${a?.lng}:${b?.lat},${b?.lng}`;
+      const old = this.routes.get(r.id);
+      next.set(r.id, old && old.key === key ? old : { key, path: routePath(r.path) });
+    }
+    this.routes = next;
+  }
+
+  /** New fixes at `nowMs`: vans not in the list leave; the rest glide to their fix (along the road when on it). */
   update(fixes: VanFix[], nowMs: number) {
     if (!parts || !this.map) {
       this.pending = fixes;
@@ -218,20 +243,23 @@ export class VanLayer implements CustomLayerInterface {
     const keep = new Set<string>();
     for (const f of fixes) {
       keep.add(f.id);
+      const path = f.routeId ? this.routes.get(f.routeId)?.path : undefined;
       let van = this.vans.get(f.id);
       if (!van) {
         const { group, wheels } = parts.build(f.colour);
         const scene = new THREE.Scene();
         lit(scene);
         scene.add(group);
-        van = { scene, group, wheels, track: retarget(undefined, f, nowMs, 0), speed: 0 };
+        van = { scene, group, wheels, track: retarget(undefined, f, nowMs, 0, path), speed: 0 };
         this.vans.set(f.id, van);
       } else {
         const from = sample(van.track, nowMs);
-        van.track = retarget(van.track, f, nowMs, this.animate ? this.glideMs : 0);
+        van.track = retarget(van.track, f, nowMs, this.animate ? this.glideMs : 0, path);
+        const road = van.track.road;
         const dLat = (f.lat - from.lat) * 111_320;
         const dLng = (f.lng - from.lng) * 111_320 * Math.cos((f.lat * Math.PI) / 180);
-        van.speed = Math.hypot(dLat, dLng) / Math.max(1, this.glideMs / 1000);
+        const distM = road ? Math.abs(road.toM - road.fromM) : Math.hypot(dLat, dLng);
+        van.speed = distM / Math.max(1, this.glideMs / 1000);
       }
     }
     for (const [id, van] of this.vans)
