@@ -2,11 +2,13 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { db } from "@/db";
+import { env } from "@/lib/env";
 import { currentPerson } from "@/lib/session";
 import { membershipsOf } from "@/services/catalog/people";
 import { workspaceBySlug } from "@/services/catalog/workspaces";
 import { publicStatus } from "@/services/public/status";
 import { publicArt } from "./art";
+import { botLink } from "./bot-cta";
 import { pickSpot, spotCookieName } from "./format";
 import { InfoBoard } from "./info-board";
 import { Scene } from "./scene";
@@ -23,6 +25,11 @@ export async function PublicPage({ slug }: { slug: string | null }) {
   // the info board renders here on the server, so the markdown parser stays out of the browser bundle;
   // the painted scene is picked here too (which illustration files exist)
   const art = publicArt();
+  // env is validated on first use: a missing bot username just hides the bot's card
+  let botUrl: string | null = null;
+  try {
+    botUrl = botLink(env.telegramBotUsername());
+  } catch {}
   return (
     <>
       <Scene art={art} />
@@ -33,6 +40,7 @@ export async function PublicPage({ slug }: { slug: string | null }) {
         staff={staff}
         info={<InfoBoard md={ws.infoMd} />}
         art={art}
+        botUrl={botUrl}
       />
     </>
   );
