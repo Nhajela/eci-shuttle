@@ -122,6 +122,7 @@ describe("publicPositions: what attendees may see", () => {
         legFraction: expect.any(Number),
         headingDeg: expect.any(Number),
         alongM: 300,
+        since: expect.any(String),
         lastSeenS: 30,
       },
     ]);

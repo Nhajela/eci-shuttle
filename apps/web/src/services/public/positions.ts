@@ -60,6 +60,8 @@ export const PublicVehicle = z.object({
   headingDeg: z.number().min(0).max(360).nullable(),
   /** metres along its route's path (the map glides it along the road); null when off the route */
   alongM: z.number().nonnegative().nullable(),
+  /** when it got to its stop / left its last one (ISO): the page shows a waiting shuttle's next departure from it */
+  since: z.iso.datetime(),
   lastSeenS: z.number().int().nonnegative(),
 });
 export type PublicVehicle = z.infer<typeof PublicVehicle>;
@@ -170,6 +172,7 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
       legFraction: fraction,
       headingDeg: s.phase === "en_route" && s.alongM !== null ? headingAlongPath(route.path, s.alongM) : null,
       alongM: s.offRoute || s.alongM === null ? null : Math.max(0, s.alongM),
+      since: s.since.toISOString(),
       lastSeenS: Math.max(0, Math.round((nowMs - s.lastPingAt.getTime()) / 1000)),
     });
   }

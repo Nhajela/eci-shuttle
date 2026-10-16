@@ -30,6 +30,7 @@ const van = (over: Partial<PublicVehicle>): PublicVehicle => ({
   legFraction: 0.25,
   headingDeg: 20,
   alongM: 300,
+  since: "2026-10-16T07:00:00.000Z",
   lastSeenS: 5,
   ...over,
 });

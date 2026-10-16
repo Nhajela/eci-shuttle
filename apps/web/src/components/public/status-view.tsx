@@ -9,12 +9,15 @@ import { type AnswerLine, istHHMM, type PublicSpot, type PublicStatus } from "@e
 import { cn } from "cn";
 import { type ReactNode, useEffect, useState } from "react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { PublicMap } from "@/services/public/positions";
 import type { PublicArt } from "./art";
+import { BotCta } from "./bot-cta";
 import { ageSeconds, answerParts, contextText, pickSpot, scheduleWindow, spotCookieName } from "./format";
 import { PublicMapCard } from "./map/public-map";
 import { usePositions } from "./map/use-positions";
 import { Notices } from "./notices";
 import { StaffMap } from "./staff-map";
+import { pageStory, type Story } from "./story";
 import { stripLayout, VanStrip } from "./van-strip";
 import { mood, noShuttleMood } from "./whimsy";
 
@@ -27,6 +30,7 @@ export function StatusView({
   staff = false,
   info,
   art,
+  botUrl = null,
 }: {
   initial: PublicStatus;
   slug: string | null;
@@ -37,6 +41,8 @@ export function StatusView({
   info?: ReactNode;
   /** which illustration files exist (art.ts, server side) */
   art?: PublicArt;
+  /** the Telegram bot's link (bot-cta.botLink); null hides the card */
+  botUrl?: string | null;
 }) {
   const sprite = art?.sceneLayers.find((f) => /\/van\.(webp|png)$/i.test(f)) ?? null;
   const [status, setStatus] = useState(initial);
@@ -169,10 +175,18 @@ export function StatusView({
               </ToggleGroup>
             </div>
             <Notices notices={spot.notices} />
-            <Answer spot={spot} ageS={ageS} hour={hour} />
+            <Answer
+              spot={spot}
+              spots={status.spots}
+              positions={positions}
+              nowMs={now.getTime()}
+              ageS={ageS}
+              hour={hour}
+            />
             {strip && strip.stops.length > 1 && <VanStrip layout={strip} className="-mx-1 -mb-1" />}
           </section>
         )}
+        {botUrl && <BotCta href={botUrl} />}
       </div>
 
       {!nothing && (
@@ -210,7 +224,21 @@ export function StatusView({
   );
 }
 
-function Answer({ spot, ageS, hour }: { spot: PublicSpot; ageS: number; hour: number }) {
+function Answer({
+  spot,
+  spots,
+  positions,
+  nowMs,
+  ageS,
+  hour,
+}: {
+  spot: PublicSpot;
+  spots: PublicSpot[];
+  positions: PublicMap | null;
+  nowMs: number;
+  ageS: number;
+  hour: number;
+}) {
   const m = noShuttleMood(hour);
   if (spot.answers.length === 0)
     return (
@@ -235,16 +263,56 @@ function Answer({ spot, ageS, hour }: { spot: PublicSpot; ageS: number; hour: nu
   return (
     <section aria-live="polite" className="flex flex-col gap-4">
       {lines.map((line) => (
-        <AnswerRow key={line.serviceId} line={line} single={single} ageS={ageS} hour={hour} />
+        <AnswerRow
+          key={line.serviceId}
+          line={line}
+          single={single}
+          ageS={ageS}
+          hour={hour}
+          story={
+            positions
+              ? pageStory({
+                  line,
+                  spot,
+                  spots,
+                  vehicles: positions.vehicles,
+                  routes: positions.routes,
+                  nowMs,
+                  ageS,
+                })
+              : null
+          }
+        />
       ))}
     </section>
   );
 }
 
-function AnswerRow({ line, single, ageS, hour }: { line: AnswerLine; single: boolean; ageS: number; hour: number }) {
-  const p = answerParts(line, single, ageS);
+function AnswerRow({
+  line,
+  single,
+  ageS,
+  hour,
+  story,
+}: {
+  line: AnswerLine;
+  single: boolean;
+  ageS: number;
+  hour: number;
+  /** what the shuttle is doing (story.ts), over the usual minutes when it says more truthfully */
+  story: Story | null;
+}) {
+  const usual = answerParts(line, single, ageS);
+  const p = story
+    ? {
+        ...usual,
+        label: single ? story.label : usual.label,
+        value: story.value ?? usual.value,
+        range: story.value ? null : usual.range,
+      }
+    : usual;
   const big = line.kind !== "none" && !p.small;
-  const m = mood(line, ageS, hour);
+  const m = story?.mood ?? mood(line, ageS, hour);
   const here = line.kind === "live" && line.minutes === 0 && m.emoji === "🚐";
   return (
     <div className="flex flex-col gap-1">
@@ -263,7 +331,7 @@ function AnswerRow({ line, single, ageS, hour }: { line: AnswerLine; single: boo
         {p.value}
         {p.range && <span className="ml-2 text-xl font-medium text-ink-soft">({p.range})</span>}
       </p>
-      <p className="text-sm text-ink-soft">{contextText(line, ageS)}</p>
+      <p className="text-sm text-ink-soft">{story?.context ?? contextText(line, ageS)}</p>
       <p className="mt-1 flex items-center gap-2 text-[15px] text-ink">
         <span aria-hidden className="text-lg leading-none">
           {m.emoji}
