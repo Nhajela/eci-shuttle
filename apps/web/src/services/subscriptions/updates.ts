@@ -4,18 +4,32 @@
  * Subscribing is audited (subscription.create); sending is worker bookkeeping (last_sent_at), not audited.
  */
 import { istDate, type PublicSpot, type PublicStatus } from "@eci-shuttle/shared";
-import { and, eq, gt, inArray, isNull, lte, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, like, lte, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { people, routes, services, serviceVehicles, spots, subscriptions, vehicleState, vehicles } from "@/db/schema";
+import {
+  outbox,
+  people,
+  routes,
+  services,
+  serviceVehicles,
+  spots,
+  subscriptions,
+  vehicleState,
+  vehicles,
+} from "@/db/schema";
 import type { Subscription } from "@/db/types";
 import { encodeCallback } from "../bot/callbacks";
+import { type Gif, gifUrl } from "../bot/gifs";
 import { activeBreaks, breakEnd } from "../catalog/breaks";
-import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError } from "../kernel";
+import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError, type TelegramButton } from "../kernel";
 import { publicStatus } from "../public/status";
 import { departedSince, type ShuttleNow, storyText } from "./update-text";
 
 export const UPDATE_EVERY_MS = 15 * 60_000;
+/** the rhythms a person can pick (schema CHECK subscriptions_every_min); 15 is the default */
+export const UPDATE_EVERY_MIN = [15, 30] as const;
+export type UpdateEveryMin = (typeof UPDATE_EVERY_MIN)[number];
 /** a position older than this is not "where the shuttle is" (same as the public answer) */
 const STALE_MS = 2 * 60_000;
 /** the worker runs every minute: a few seconds early still counts as due */
@@ -64,11 +78,63 @@ export async function subscribeUpdates(
           personId: actor.id,
           kind: "updates",
           spotId: i.spotId,
+          // the rhythm they chose stays when they switch stop
+          everyMin: existing?.everyMin ?? 15,
           lastSentAt: now,
           createdAt: now,
         })
         .returning();
       return { before: null, after: row, result: row };
+    },
+  );
+}
+
+/** The button that switches to the other rhythm: 🐢 slower for a 15-min subscriber, 🐇 faster for a 30-min one. */
+export function rhythmButton(everyMin: number): TelegramButton {
+  return everyMin === 30
+    ? { text: "🐇 Every 15 min", callbackData: encodeCallback({ action: "every", args: ["15"] }) }
+    : { text: "🐢 Every 30 min", callbackData: encodeCallback({ action: "every", args: ["30"] }) };
+}
+
+export const SetUpdateEveryInput = z.object({
+  workspaceId: z.uuid(),
+  everyMin: z.union([z.literal(15), z.literal(30)]),
+});
+
+/**
+ * Attendee: how often the updates come, every 15 min (default) or every 30 min, on their open updates
+ * subscription (none → NOT_FOUND: /start first). The same value again changes nothing. Audited subscription.update.
+ */
+export async function setUpdateEvery(
+  db: Db,
+  actor: Actor,
+  input: z.input<typeof SetUpdateEveryInput>,
+  now: Date,
+): Promise<Subscription> {
+  const i = parseInput(SetUpdateEveryInput, input);
+  if (actor.kind !== "attendee" || (actor.workspaceId && actor.workspaceId !== i.workspaceId))
+    throw new ServiceError("FORBIDDEN", "Not allowed.");
+  const mine = and(
+    eq(subscriptions.personId, actor.id),
+    eq(subscriptions.workspaceId, i.workspaceId),
+    eq(subscriptions.kind, "updates"),
+    open,
+  );
+  const [existing] = await db.select().from(subscriptions).where(mine).limit(1);
+  if (!existing) throw new ServiceError("NOT_FOUND", "You're not getting updates right now. Send /start first.");
+  if (existing.everyMin === i.everyMin) return existing;
+  return mutate(
+    db,
+    actor,
+    { action: "subscription.update", entity: "subscription", entityId: existing.id, workspaceId: i.workspaceId },
+    async (tx) => {
+      const [row] = await tx
+        .update(subscriptions)
+        .set({ everyMin: i.everyMin })
+        .where(eq(subscriptions.id, existing.id))
+        .returning();
+      if (!row) throw new ServiceError("NOT_FOUND", "You're not getting updates right now. Send /start first.");
+      return { before: { everyMin: existing.everyMin }, after: { everyMin: row.everyMin }, result: row };
     },
   );
 }
@@ -106,8 +172,55 @@ export function dayOver(list: PublicSpot[]): boolean {
   return list.every((s) => s.answers.every((l) => l.kind === "none"));
 }
 
-export const DAY_OVER_TEXT =
-  "The shuttle has finished for today, so no more updates today. They start again when it runs tomorrow. /unsubscribe stops them.";
+export const DAY_OVER_LEAD = "🌙 The shuttle has finished for today — the vans are tucked in for the night.";
+export const DAY_OVER_TEXT = `${DAY_OVER_LEAD} Updates start again when it runs tomorrow. /unsubscribe stops them.`;
+
+/** the "on its way to your stop" GIF comes at most this often per subscriber */
+const ON_THE_WAY_GIF_EVERY_MS = 60 * 60_000;
+
+/**
+ * Pure. The GIF moment of an update, if any (SPEC §6c; sparing, no schema: everything is derived):
+ * - `break`: the first update that mentions a break, i.e. one that started after the subscription's last update;
+ *   the next 15-min tick of the same break has no GIF;
+ * - `on-the-way`: a departure push (`departed`: a shuttle just left a stop) to a one-stop subscriber whose stop
+ *   is where that shuttle is heading. runUpdates adds "at most once an hour" from the outbox (`sentGifSince`).
+ * The welcome and the goodnight GIFs are decided where those messages are made.
+ */
+export function updateGif(input: {
+  shuttles: ShuttleNow[];
+  focusSpotId: string | null;
+  lastSentAt: number;
+  departed: boolean;
+}): Gif | null {
+  const { shuttles, focusSpotId, lastSentAt, departed } = input;
+  if (
+    departed &&
+    focusSpotId &&
+    shuttles.some((s) => s.state.kind === "moving" && s.state.toSpotId === focusSpotId && s.state.since > lastSentAt)
+  )
+    return "on-the-way";
+  if (shuttles.some((s) => s.state.kind === "break" && s.state.since > lastSentAt)) return "break";
+  return null;
+}
+
+/**
+ * An update to this subscription with that GIF was queued after `since` (the outbox keeps a day or so). By the
+ * job's run_after (= the job's `now`), not the row's wall-clock created_at, so the rule follows the job's clock.
+ */
+async function sentGifSince(db: Db, subscriptionId: string, gif: Gif, since: Date): Promise<boolean> {
+  const [row] = await db
+    .select({ id: outbox.id })
+    .from(outbox)
+    .where(
+      and(
+        like(outbox.dedupeKey, `update:${subscriptionId}:%`),
+        gt(outbox.runAfter, since),
+        sql`${outbox.payload} ->> 'animation' = ${gifUrl(gif)}`,
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
 
 /**
  * What each shuttle on a public service running now is doing (update-text.ShuttleNow): waiting at a stop, on its
@@ -146,7 +259,7 @@ export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus,
     const brk = breaks.get(r.vehicle.id);
     const fresh = !!s?.lastPingAt && now.getTime() - s.lastPingAt.getTime() <= STALE_MS;
     let state: ShuttleNow["state"];
-    if (brk) state = { kind: "break", until: breakEnd(brk)?.getTime() ?? null };
+    if (brk) state = { kind: "break", until: breakEnd(brk)?.getTime() ?? null, since: brk.startsAt.getTime() };
     else if (!s || !fresh) state = { kind: "no_signal" };
     else if (s.offRoute) state = { kind: "off_route" };
     else if (s.phase === "at_spot" && s.spotId) state = { kind: "waiting", spotId: s.spotId, since: s.since.getTime() };
@@ -186,9 +299,13 @@ export async function currentUpdate(
  * The updates job (every minute), over every open `updates` subscription (blocked-bot people skipped):
  * - the day's shuttles are over at its stop(s) and it got an update today → one "finished for today" message
  *   (day_ended_on = today); it stays on, so updates start again when the shuttle runs the next day;
- * - else, its last update ≥ 15 min old, or a shuttle left a stop since it (the update promised "as soon as it
- *   starts moving"), and a shuttle running there → what the shuttle is doing now (update-text.storyText), with a
- *   "Stop updates" button. last_sent_at moves only when something is sent, and only the run that moves it sends.
+ * - else, its last update ≥ every_min (15 or 30) old, or, on the 15-min rhythm, a shuttle left a stop since it
+ *   (the update promised "as soon as it starts moving"), and a shuttle running there → what the shuttle is doing
+ *   now (update-text.storyText), with a "Stop updates" button. The 30-min rhythm is the calm one: no instant
+ *   departure push, and its updates make no such promise. last_sent_at moves only when something is sent, and
+ *   only the run that moves it sends.
+ * GIF moments (updateGif): the goodnight on "finished for today", the first update of a break, and "on its way to
+ * your stop" for a one-stop subscriber at most once an hour.
  */
 export async function runUpdates(
   db: Db,
@@ -207,7 +324,6 @@ export async function runUpdates(
         input.workspaceId ? eq(subscriptions.workspaceId, input.workspaceId) : undefined,
       ),
     );
-  const dueBy = now.getTime() - UPDATE_EVERY_MS + SLACK_MS;
   const statuses = new Map<string, ReturnType<typeof publicStatus>>();
   const fleets = new Map<string, Promise<ShuttleNow[]>>();
   let sent = 0;
@@ -223,13 +339,24 @@ export async function runUpdates(
     if (!fleets.has(sub.workspaceId)) fleets.set(sub.workspaceId, shuttlesNow(db, sub.workspaceId, st, now));
     const shuttles = await (fleets.get(sub.workspaceId) as Promise<ShuttleNow[]>);
     const last = sub.lastSentAt?.getTime() ?? 0;
-    const due = last <= dueBy || departedSince(shuttles, last);
+    // the instant "it just left" push belongs to the 15-min rhythm; 30 min is the calm one
+    const instant = sub.everyMin === 15;
+    const departed = instant && departedSince(shuttles, last);
+    const due = last <= now.getTime() - sub.everyMin * 60_000 + SLACK_MS || departed;
     const html = over
       ? DAY_OVER_TEXT
       : due
-        ? storyText({ shuttles, spots: st.spots, focusSpotId: sub.spotId, now: now.getTime() })
+        ? storyText({ shuttles, spots: st.spots, focusSpotId: sub.spotId, now: now.getTime(), promise: instant })
         : null;
     if (!html) continue;
+    let gif: Gif | null = over
+      ? "goodnight"
+      : updateGif({ shuttles, focusSpotId: sub.spotId, lastSentAt: last, departed });
+    if (
+      gif === "on-the-way" &&
+      (await sentGifSince(db, sub.id, gif, new Date(now.getTime() - ON_THE_WAY_GIF_EVERY_MS)))
+    )
+      gif = null;
     const ok = await db.transaction(async (tx) => {
       const rows = await tx
         .update(subscriptions)
@@ -250,16 +377,19 @@ export async function runUpdates(
           html,
           kind: "update",
           personId: person.id,
+          ...(gif ? { animation: gifUrl(gif) } : {}),
           ...(over
             ? {}
             : {
                 buttons: [
                   [{ text: "Stop updates", callbackData: encodeCallback({ action: "nunsub", args: [sub.id] }) }],
+                  [rhythmButton(sub.everyMin)],
                 ],
               }),
         },
         workspaceId: sub.workspaceId,
         dedupeKey: `update:${sub.id}:${over ? `end:${today}` : now.getTime()}`,
+        runAfter: now,
       });
       return true;
     });

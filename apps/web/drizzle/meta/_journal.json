@@ -64,6 +64,13 @@
       "when": 1791892743228,
       "tag": "0008_public_info",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792127423227,
+      "tag": "0009_subscription_every_min",
+      "breakpoints": true
     }
   ]
 }

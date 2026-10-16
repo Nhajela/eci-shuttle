@@ -8,7 +8,7 @@ import { isSpotName } from "../catalog/spots";
 import { listAllWorkspaces, workspaceBySlug } from "../catalog/workspaces";
 import { isServiceError, systemActor, userMessage } from "../kernel";
 import { onInvite, onNotice, onSetGroup, onSilence, onStatus, onToday } from "./admin";
-import { onShuttle, onStop, onSubscribe, onUnsubscribe } from "./attendee";
+import { onEvery, onShuttle, onStop, onSubscribe, onUnsubscribe } from "./attendee";
 import { handleCallback } from "./callbacks";
 import { onLocation, onPair } from "./live";
 import { onNeed } from "./need";
@@ -18,10 +18,11 @@ import type { BotContext, BotReply, TgUpdate } from "./types";
 const BOT = systemActor("bot", "telegram");
 const NONE: BotReply = { send: [] };
 const HELP =
-  "Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
+  "🚐 Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
   "/subscribe sends you where the shuttle is every 15 min; /unsubscribe stops it.\n" +
-  "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you when it's here.\n" +
-  "/stop (or just stop) turns off your alerts, updates, notices and shuttle request.\n" +
+  "/every30 makes that every 30 min instead; /every15 brings the quicker rhythm back.\n" +
+  "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you the moment it's here.\n" +
+  "/stop (or just stop) turns off your alerts, updates, notices and shuttle request. All quiet.\n" +
   "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";
 const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html, kind: "reply" }] });
 
@@ -32,7 +33,7 @@ const say = (chatId: number, html: string): BotReply => ({ send: [{ chatId, html
  * - "/start <payload>" → start.onStart; "/login" → start.onLogin.
  * - "/shuttle" or a spot's short name / name typed alone ("riva", case-insensitive) → attendee handlers.
  * - "/status", "/today", "/notice", "/silence", "/setgroup" → admin handlers (need a membership; otherwise a polite no).
- * - "/stop" → attendee.onStop. "/pair <code>" in a private chat → live.onPair.
+ * - "/stop" → attendee.onStop. "/every30" / "/every15" in a private chat → attendee.onEvery. "/pair <code>" in a private chat → live.onPair.
  * - "stop" / "unsubscribe" typed without the slash in a private chat → onStop / onUnsubscribe (the welcome says so).
  * - a location message or any edited_message → live.onLocation (first, without the person upsert).
  * - callback_query → callbacks.handleCallback.
@@ -157,6 +158,11 @@ export async function handleUpdate(db: Db, update: TgUpdate, now: Date): Promise
         return isPrivate ? await onSubscribe(ctx, rest) : say(chatId, "Send /subscribe to me in a private chat.");
       case "unsubscribe":
         return await onUnsubscribe(ctx);
+      case "every30":
+      case "every15":
+        return isPrivate
+          ? await onEvery(ctx, command === "every30" ? 30 : 15)
+          : say(chatId, `Send /${command} to me in a private chat.`);
       case "stop":
         return await onStop(ctx);
       case "pair":

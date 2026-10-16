@@ -4,6 +4,7 @@
  * Telegram. In tests and dev without TELEGRAM_BOT_TOKEN nothing is sent: the message is only logged (dev outbox).
  * In production a missing token is a permanent failure, never a fake send.
  * Pacing (≤ 25/s, ≤ 1/s per chat) is the worker queue job's; this module reports 429 retry_after back to it.
+ * A payload with `animation` (a GIF moment) goes as sendAnimation with the html as caption; see sendText.
  */
 import type { Db } from "@/db";
 import { telegramMessages } from "@/db/schema";
@@ -73,6 +74,37 @@ function failure(e: unknown): DeliveryResult {
   return e.code >= 500 ? { ok: false, retry: true, error } : { ok: false, retry: false, error };
 }
 
+/** Telegram's caption limit for sendAnimation */
+const CAPTION_MAX = 1024;
+
+/**
+ * The message itself: sendAnimation (GIF + caption) when `animation` is set and the html fits a caption, else
+ * sendMessage. A sendAnimation refused by Telegram (bad URL, 400 …) falls back to sendMessage so the words always
+ * arrive; 403 (blocked) and 429 (slow down) are reported as they are, and a network error retries the job.
+ */
+async function sendText(p: TelegramPayload, fetchImpl: typeof fetch): Promise<number> {
+  const reply_markup = keyboard(p.buttons);
+  if (p.animation && p.html.length <= CAPTION_MAX) {
+    try {
+      const m = await callTelegram<{ message_id: number }>(
+        "sendAnimation",
+        { chat_id: p.chatId, animation: p.animation, caption: p.html, parse_mode: "HTML", reply_markup },
+        fetchImpl,
+      );
+      return m.message_id;
+    } catch (e) {
+      if (!(e instanceof TelegramError) || e.code === 403 || e.code === 429) throw e;
+      console.error(`telegram: sendAnimation ${p.animation} failed, sending text only:`, e.message);
+    }
+  }
+  const m = await callTelegram<{ message_id: number }>(
+    "sendMessage",
+    { chat_id: p.chatId, text: p.html, parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup },
+    fetchImpl,
+  );
+  return m.message_id;
+}
+
 async function send(
   db: Db,
   p: TelegramPayload,
@@ -94,18 +126,7 @@ async function send(
   if (!dev()) {
     try {
       if (noToken()) throw new Error(NO_TOKEN);
-      const m = await callTelegram<{ message_id: number }>(
-        "sendMessage",
-        {
-          chat_id: p.chatId,
-          text: p.html,
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-          reply_markup: keyboard(p.buttons),
-        },
-        fetchImpl,
-      );
-      messageId = m.message_id;
+      messageId = await sendText(p, fetchImpl);
     } catch (e) {
       err = e;
     }

@@ -15,6 +15,11 @@ export type TelegramPayload = {
   kind: string;
   /** rows of buttons */
   buttons?: TelegramButton[][];
+  /**
+   * A GIF (URL under origin()) sent with sendAnimation and `html` as its caption; a caption over 1024 chars or a
+   * failed sendAnimation falls back to a plain sendMessage (deliver.ts). Owner-approved additive change.
+   */
+  animation?: string;
   /** pin the sent message in the chat (group notices) */
   pin?: boolean;
   /** instead of sending: unpin this message id */

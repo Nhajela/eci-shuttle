@@ -4,7 +4,11 @@
  * - the timetable is only a hint, and only where it can't mislead: a departure still ahead for a shuttle waiting
  *   at that stop, or the next ones after a break / while we can't see it. Never a planned time for a moving
  *   shuttle (one off its schedule would make people miss it), never a time already gone, never "late";
- * - "I'll message you as soon as it starts moving" is kept by runUpdates (departedSince).
+ * - "I'll message you as soon as it starts moving" is kept by runUpdates (departedSince); the 30-min rhythm
+ *   doesn't make it (`promise: false`).
+ * The voice is warm and a little playful (one emoji up front, a chai break, the scenic route), and the lead
+ * sentence is picked from a small pool by the minute of `now` (`pick`), so updates don't read like a machine
+ * yet the same minute always gives the same words (deterministic, testable). The facts never vary.
  */
 import { type AnswerLine, istHHMM, type PublicSpot } from "@eci-shuttle/shared";
 import { escapeHtml as esc } from "@/lib/telegram/html";
@@ -17,8 +21,8 @@ export type ShuttleState =
   /** between stops (fromSpotId = the stop it left, since = when) */
   | { kind: "moving"; toSpotId: string; fromSpotId: string | null; since: number; stopped: boolean }
   | { kind: "off_route" }
-  /** a driver's break; until null = open-ended */
-  | { kind: "break"; until: number | null }
+  /** a driver's break, since it started; until null = open-ended */
+  | { kind: "break"; until: number | null; since: number }
   /** no fresh position */
   | { kind: "no_signal" };
 
@@ -41,6 +45,30 @@ const WIDE_RANGE_MIN = 5;
 const roundMin = (ms: number) => Math.round(ms / MIN) * MIN;
 const minutesText = (n: number) => `${n} min`;
 
+/** One of `pool`, by the minute of `now` plus `salt` (the shuttle's index): stable within a minute, varied over the day. */
+const pick = <T>(pool: readonly T[], now: number, salt = 0): T =>
+  pool[(Math.floor(now / MIN) + salt) % pool.length] as T;
+
+const WAITING_VERB = ["is waiting at", "is parked at", "is hanging out at"] as const;
+const HERE_LEAD = (who: string, at: string) =>
+  [`${who} is at ${at} now.`, `${who} is right here at ${at}.`, `${who} is at ${at}, right where you are.`] as const;
+const MOVING_VERB = ["is on its way to", "is rolling towards", "is heading to"] as const;
+const PAUSED_WHY = ["(traffic or a quick stop)", "(Goa traffic, most likely 🐄)"] as const;
+const MOVE_PROMISE = [
+  "I'll message you as soon as it starts moving.",
+  "I'll ping you the moment it starts moving.",
+  "The second it rolls, you'll hear from me.",
+] as const;
+const ROAD_PROMISE = [
+  "I'll message you as soon as it's on the road again.",
+  "You'll hear from me the moment it's rolling again.",
+] as const;
+const NO_SIGNAL = (who: string) =>
+  [
+    `📡 I can't see where ${who} is right now.`,
+    `📡 ${who[0]?.toUpperCase()}${who.slice(1)} is out of sight for a moment.`,
+  ] as const;
+
 /** A shuttle left a stop after `t` (the update promised "as soon as it starts moving"). */
 export function departedSince(shuttles: ShuttleNow[], t: number): boolean {
   return shuttles.some((s) => s.state.kind === "moving" && s.state.fromSpotId !== null && s.state.since > t);
@@ -55,6 +83,8 @@ export function storyText(input: {
   spots: PublicSpot[];
   focusSpotId: string | null;
   now: number;
+  /** promise a message as soon as the shuttle moves (the 15-min rhythm keeps it; 30 min doesn't). Default true */
+  promise?: boolean;
 }): string | null {
   const { spots, focusSpotId, now } = input;
   const focus = focusSpotId ? spots.filter((s) => s.spotId === focusSpotId) : spots;
@@ -69,24 +99,32 @@ export function storyText(input: {
         .filter((s) => s.answers.some(running))
         .map((s) => renderAnswer(s.name, s.answers.filter(running)))
         .join("\n\n");
-    return lines("📡 I can't see where the shuttle is right now.", timetableHint([...served], now, "around"));
+    return lines(pick(NO_SIGNAL("the shuttle"), now), timetableHint([...served], now, "around"));
   }
 
-  const ctx: Ctx = { spots, focus, focusSpotId, now, named: shuttles.length > 1 };
-  return shuttles.map((s) => paragraph(ctx, s)).join("\n\n");
+  const ctx: Ctx = { spots, focus, focusSpotId, now, named: shuttles.length > 1, promise: input.promise ?? true };
+  return shuttles.map((s, i) => paragraph(ctx, s, i)).join("\n\n");
 
   function timetableHint(serviceIds: string[], after: number, word: "at" | "around"): string | null {
     return hint(focus, serviceIds, after, word);
   }
 }
 
-type Ctx = { spots: PublicSpot[]; focus: PublicSpot[]; focusSpotId: string | null; now: number; named: boolean };
+type Ctx = {
+  spots: PublicSpot[];
+  focus: PublicSpot[];
+  focusSpotId: string | null;
+  now: number;
+  named: boolean;
+  promise: boolean;
+};
 
 const lines = (...xs: (string | null | false)[]) => xs.filter(Boolean).join("\n");
 
-function paragraph(ctx: Ctx, s: ShuttleNow): string {
+function paragraph(ctx: Ctx, s: ShuttleNow, salt: number): string {
   const { now } = ctx;
   const who = ctx.named ? esc(s.name) : "The shuttle";
+  const say = <T>(pool: readonly T[]) => pick(pool, now, salt);
   const name = (id: string | null) => (id && ctx.spots.find((x) => x.spotId === id)?.shortName) || "the next stop";
   const lineFor = (spotId: string): AnswerLine | undefined =>
     ctx.spots
@@ -100,7 +138,7 @@ function paragraph(ctx: Ctx, s: ShuttleNow): string {
       // a subscriber at that very stop: "is at Riva now"; everyone else: "is waiting at Circle"
       const here = ctx.focusSpotId === st.spotId;
       const head = (tail: string) =>
-        here ? `🚐 <b>${who} is at ${at} now.</b>` : `🚐 <b>${who} is waiting at ${at}${tail}`;
+        here ? `🚐 <b>${say(HERE_LEAD(who, at))}</b>` : `🚐 <b>${who} ${say(WAITING_VERB)} ${at}${tail}`;
       const k = s.routeSpotIds.indexOf(st.spotId);
       const next = k >= 0 ? (s.routeSpotIds[k + 1] ?? null) : null;
       const legMs = k >= 0 ? (s.legS[k] ?? 0) * 1000 : 0;
@@ -111,19 +149,17 @@ function paragraph(ctx: Ctx, s: ShuttleNow): string {
         let plan: string | null = null;
         if (due !== undefined && due >= now) {
           const reach =
-            next && legMs
-              ? `, which gets it to ${esc(name(next))} around <b>${istHHMM(roundMin(due + legMs))}</b>`
-              : "";
+            next && legMs ? `, landing in ${esc(name(next))} around <b>${istHHMM(roundMin(due + legMs))}</b>` : "";
           plan = `As per the schedule it leaves at <b>${istHHMM(due)}</b>${reach}.`;
-        } else if (due !== undefined) plan = "It should leave soon.";
-        return lines(head(".</b>"), plan, "I'll message you as soon as it starts moving.");
+        } else if (due !== undefined) plan = "It should be off any minute now.";
+        return lines(head(".</b>"), plan, ctx.promise && say(MOVE_PROMISE));
       }
       // a loop: no promise on when it leaves, only how far the next stop is once it does
       const legMin = Math.round(legMs / MIN);
       return lines(
         head("</b> for passengers."),
-        next && legMin ? `Once it leaves, it's about ${minutesText(legMin)} to ${esc(name(next))}.` : null,
-        "I'll message you as soon as it starts moving.",
+        next && legMin ? `Once it leaves, ${esc(name(next))} is about ${minutesText(legMin)} away.` : null,
+        ctx.promise && say(MOVE_PROMISE),
       );
     }
     case "moving": {
@@ -131,32 +167,32 @@ function paragraph(ctx: Ctx, s: ShuttleNow): string {
       const to = esc(name(st.toSpotId));
       if (st.stopped)
         return lines(
-          `🚐 <b>${who} has paused on the way to ${to}</b> (traffic or a stop).`,
+          `🚐 <b>${who} has paused on the way to ${to}</b> ${say(PAUSED_WHY)}.`,
           l?.minutes != null ? `Once it's moving again, it's about <b>${minutesText(l.minutes)}</b> away.` : null,
         );
       const eta = l?.minutes != null ? ` and should be there in about ${etaText(l, now)}` : "";
       const focusLine = ctx.focusSpotId && ctx.focusSpotId !== st.toSpotId ? lineFor(ctx.focusSpotId) : undefined;
       return lines(
-        `🚐 <b>${who} is on its way to ${to}</b>${eta}.`,
+        `🚐 <b>${who} ${say(MOVING_VERB)} ${to}</b>${eta}.`,
         focusLine?.minutes != null &&
           `Then ${esc(name(ctx.focusSpotId))} in about <b>${minutesText(focusLine.minutes)}</b>.`,
       );
     }
     case "off_route":
-      return lines(`🚐 ${who} is taking a different road right now.`, hint(ctx.focus, [s.serviceId], now, "around"));
+      return lines(`🚐 ${who} is taking the scenic route right now. 🌴`, hint(ctx.focus, [s.serviceId], now, "around"));
     case "break": {
       const back = st.until !== null && st.until > now ? st.until : null;
       return lines(
         back
-          ? `☕ <b>${who} is on a short break</b> and should be back around ${istHHMM(back)}.`
-          : `☕ <b>${who} is on a short break.</b>`,
+          ? `☕ <b>${who} is on a short chai break</b> and should be back around ${istHHMM(back)}.`
+          : `☕ <b>${who} is on a short chai break.</b>`,
         hint(ctx.focus, [s.serviceId], back ?? now, "at", "When it's running it comes"),
-        "I'll message you as soon as it's on the road again.",
+        ctx.promise && say(ROAD_PROMISE),
       );
     }
     case "no_signal":
       return lines(
-        `📡 I can't see where ${ctx.named ? esc(s.name) : "the shuttle"} is right now.`,
+        say(NO_SIGNAL(ctx.named ? esc(s.name) : "the shuttle")),
         hint(ctx.focus, [s.serviceId], now, "around"),
       );
   }

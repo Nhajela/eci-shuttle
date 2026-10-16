@@ -263,11 +263,11 @@ export async function runArrivalAlerts(
       .sort((a, b) => (a.minutes ?? 0) - (b.minutes ?? 0))[0];
     if (!hit || hit.minutes == null) continue;
 
-    const who = `The ${esc(hit.serviceName)} shuttle`;
+    const who = `🚐 The ${esc(hit.serviceName)} shuttle`;
     const html =
       hit.minutes === 0
-        ? `${who} is at <b>${esc(spotName)}</b> now.`
-        : `${who} is ${hit.approx ? "about " : ""}<b>${hit.minutes} min</b> from <b>${esc(spotName)}</b>.`;
+        ? `${who} is at <b>${esc(spotName)}</b> now — hop on!`
+        : `${who} is ${hit.approx ? "about " : ""}<b>${hit.minutes} min</b> from <b>${esc(spotName)}</b>. Time to wander over.`;
     if (await close({ firedAt: now }, html, `arrival:${sub.id}`)) fired++;
   }
   return { fired, expired };
