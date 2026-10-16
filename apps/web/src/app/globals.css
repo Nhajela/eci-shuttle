@@ -310,28 +310,40 @@
 .eci-stop-pin {
   font-family: var(--font-heading);
   font-weight: 700;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
   color: var(--ink);
   background: var(--paper);
   border: 2px solid var(--teal);
   border-radius: 999px;
-  padding: 6px 10px;
-  box-shadow: 0 6px 16px -6px rgba(20, 27, 52, 0.45);
+  padding: 7px 12px;
+  box-shadow: 0 8px 18px -6px rgba(20, 27, 52, 0.5);
   white-space: nowrap;
 }
+/* the pin stands on a post, so it reads as a place on the ground rather than a floating label */
+.eci-stop-stem {
+  width: 2px;
+  height: 14px;
+  background: var(--teal);
+  opacity: 0.9;
+}
 .eci-stop-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
   background: var(--teal);
   border: 2px solid var(--paper);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--teal) 30%, transparent);
 }
 .eci-stop.is-here .eci-stop-pin {
   border-color: var(--marigold);
 }
+.eci-stop.is-here .eci-stop-stem {
+  background: var(--marigold);
+}
 .eci-stop.is-here .eci-stop-dot {
   background: var(--marigold);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--marigold) 30%, transparent);
   animation: stop-pulse 1.6s ease-out infinite;
 }
 .eci-van-label {

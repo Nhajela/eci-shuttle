@@ -1,16 +1,21 @@
 "use client";
 /**
- * The public 3D map (SPEC §6): OpenFreeMap vector tiles (keyless) through MapLibre, pitched, with building
- * extrusions, the route as a glowing line whose dashes flow in the direction of travel, custom stop pins and the
- * 3D vans (van-layer.ts). Browser only: import through next/dynamic with ssr: false (public-map.tsx), which also
- * owns polling, the follow toggle and the full-screen state. If WebGL or the tiles fail, `onFail` fires and the
- * parent shows nothing broken.
+ * The public 3D map (SPEC §6): OpenFreeMap vector tiles (keyless) through MapLibre, pitched, repainted into the
+ * page's golden-hour world (world.ts: sky, fog, light, teal sea, warm buildings), the route as a glowing line whose
+ * dashes flow in the direction of travel, stop pins over ground pads, low-poly palms along the corridor
+ * (palm-layer.ts) and the 3D vans (van-layer.ts), which grow as you zoom in (van-scale.ts). Browser only: import
+ * through next/dynamic with ssr: false (public-map.tsx), which also owns polling, the follow toggle and the
+ * full-screen state. If WebGL or the tiles fail, `onFail` fires and the parent shows nothing broken.
  */
 import "maplibre-gl/dist/maplibre-gl.css";
 import { LngLatBounds, Marker, Map as MlMap, setWorkerUrl } from "maplibre-gl";
 import { useEffect, useRef } from "react";
 import type { PublicMap } from "@/services/public/positions";
+import { PalmLayer } from "./palm-layer";
+import { palmSites } from "./palms";
 import { type VanFix, VanLayer } from "./van-layer";
+import { vanLabelOffsetPx, vanScreenPx } from "./van-scale";
+import { applyWorld } from "./world";
 
 // maplibre 6 looks for its worker next to its own bundle, which a bundled app does not have: serve the file as a
 // static asset of this app instead (self-contained; maplibre-gl-shared.mjs is empty)
@@ -21,7 +26,9 @@ const DARK_STYLE = "https://tiles.openfreemap.org/styles/fiord";
 const MANDREM: [number, number] = [73.7165, 15.66];
 const GLIDE_MS = 4000;
 const LOAD_TIMEOUT_MS = 20_000;
-const PITCH = 58;
+const PITCH = 60;
+const MAX_PITCH = 78;
+const MAX_ZOOM = 20;
 /** the dashes march one step every DASH_MS; the sequence is one cycle of a 4-unit dash sliding forward */
 const DASH_MS = 70;
 const DASH_SEQUENCE = [
@@ -44,7 +51,12 @@ const DASH_SEQUENCE = [
 type Live = {
   map: MlMap;
   vans: VanLayer;
+  palms: PalmLayer;
+  /** the routes the palms were planted for (replanted only when they change) */
+  palmKey: string;
   labels: Map<string, Marker>;
+  /** the label offset in use, so it is only reset when the zoom moves it */
+  labelPx: number;
   stops: Map<string, Marker>;
   raf: number;
   dashStep: number;
@@ -89,6 +101,18 @@ function routeGeoJson(data: PublicMap, dark: boolean): GeoJSON.FeatureCollection
   };
 }
 
+/** the ground pads under the stop pins: a teal disc, marigold while a shuttle is there */
+function stopsGeoJson(data: PublicMap): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: data.spots.map((s) => ({
+      type: "Feature",
+      properties: { here: data.vehicles.some((v) => v.atSpotId === s.id) },
+      geometry: { type: "Point", coordinates: [s.lng, s.lat] },
+    })),
+  };
+}
+
 function boundsOf(data: PublicMap): LngLatBounds | null {
   const pts = [...data.spots, ...data.routes.flatMap((r) => r.path)];
   if (!pts.length) return null;
@@ -103,9 +127,11 @@ function stopElement(name: string): HTMLElement {
   const pin = document.createElement("span");
   pin.className = "eci-stop-pin";
   pin.textContent = name;
+  const stem = document.createElement("span");
+  stem.className = "eci-stop-stem";
   const dot = document.createElement("span");
   dot.className = "eci-stop-dot";
-  el.append(pin, dot);
+  el.append(pin, stem, dot);
   return el;
 }
 
@@ -163,9 +189,9 @@ export function LiveMap({
         zoom: 13.5,
         pitch: 0,
         bearing: 0,
-        maxPitch: 72,
+        maxPitch: MAX_PITCH,
         minZoom: 11,
-        maxZoom: 18.5,
+        maxZoom: MAX_ZOOM,
         attributionControl: { compact: true },
         cooperativeGestures: touch,
         pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
@@ -176,13 +202,21 @@ export function LiveMap({
       latest.current.onFail?.();
       return;
     }
-    const vans = new VanLayer({ glideMs: GLIDE_MS, animate: !reducedMotion });
+    const vans = new VanLayer({ glideMs: GLIDE_MS, animate: !reducedMotion, dark });
+    const palms = new PalmLayer({ animate: !reducedMotion, dark });
     if (process.env.NODE_ENV !== "production")
-      Object.assign(window as unknown as Record<string, unknown>, { __eciMap: map, __eciVans: vans });
+      Object.assign(window as unknown as Record<string, unknown>, {
+        __eciMap: map,
+        __eciVans: vans,
+        __eciPalms: palms,
+      });
     const state: Live = {
       map,
       vans,
+      palms,
+      palmKey: "",
       labels: new Map(),
+      labelPx: 0,
       stops: new Map(),
       raf: 0,
       dashStep: 0,
@@ -218,28 +252,8 @@ export function LiveMap({
       state.loaded = true;
       clearTimeout(timeout);
       const d = latest.current.data;
+      applyWorld(map, dark);
       const firstSymbol = map.getStyle().layers.find((l) => l.type === "symbol")?.id;
-      if (!map.getLayer("building-3d") && map.getSource("openmaptiles")) {
-        map.addLayer(
-          {
-            id: "building-3d",
-            type: "fill-extrusion",
-            source: "openmaptiles",
-            "source-layer": "building",
-            minzoom: 14,
-            paint: {
-              "fill-extrusion-color": dark ? "#3a4663" : "#e9e4d8",
-              "fill-extrusion-height": ["coalesce", ["get", "render_height"], 6],
-              "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
-              "fill-extrusion-opacity": 0.85,
-            },
-          },
-          firstSymbol,
-        );
-      } else if (map.getLayer("building-3d")) {
-        map.setPaintProperty("building-3d", "fill-extrusion-color", dark ? "#3a4663" : "#e9e4d8");
-        map.setPaintProperty("building-3d", "fill-extrusion-opacity", 0.85);
-      }
       map.addSource("eci-route", { type: "geojson", data: routeGeoJson(d, dark) });
       map.addLayer(
         {
@@ -247,7 +261,12 @@ export function LiveMap({
           type: "line",
           source: "eci-route",
           layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": ["get", "colour"], "line-width": 16, "line-opacity": 0.18, "line-blur": 6 },
+          paint: {
+            "line-color": ["get", "colour"],
+            "line-width": ["interpolate", ["exponential", 1.4], ["zoom"], 14, 14, 18, 22, 20, 44],
+            "line-opacity": 0.18,
+            "line-blur": 6,
+          },
         },
         firstSymbol,
       );
@@ -257,7 +276,11 @@ export function LiveMap({
           type: "line",
           source: "eci-route",
           layout: { "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": ["get", "colour"], "line-width": 5, "line-opacity": 0.9 },
+          paint: {
+            "line-color": ["get", "colour"],
+            "line-width": ["interpolate", ["exponential", 1.4], ["zoom"], 14, 4.5, 18, 7, 20, 14],
+            "line-opacity": 0.9,
+          },
         },
         firstSymbol,
       );
@@ -269,15 +292,36 @@ export function LiveMap({
           layout: { "line-cap": "round", "line-join": "round" },
           paint: {
             "line-color": dark ? "#f6c982" : "#fbf0dc",
-            "line-width": 2.5,
+            "line-width": ["interpolate", ["exponential", 1.4], ["zoom"], 14, 2.2, 18, 3.5, 20, 7],
             "line-opacity": 0.95,
             "line-dasharray": DASH_SEQUENCE[0],
           },
         },
         firstSymbol,
       );
+      map.addSource("eci-stops", { type: "geojson", data: stopsGeoJson(d) });
+      map.addLayer(
+        {
+          id: "eci-stop-pad",
+          type: "circle",
+          source: "eci-stops",
+          paint: {
+            "circle-pitch-alignment": "map",
+            "circle-pitch-scale": "map",
+            "circle-radius": ["interpolate", ["exponential", 1.6], ["zoom"], 13, 5, 16, 14, 20, 90],
+            "circle-color": ["case", ["get", "here"], "#e39a2e", dark ? "#5fb0b5" : "#286c71"],
+            "circle-opacity": 0.28,
+            "circle-stroke-width": 2,
+            "circle-stroke-color": ["case", ["get", "here"], "#e39a2e", dark ? "#5fb0b5" : "#286c71"],
+            "circle-stroke-opacity": 0.85,
+          },
+        },
+        firstSymbol,
+      );
+      map.addLayer(palms);
       map.addLayer(vans);
       syncStops(state, d);
+      syncPalms(state, d);
       vans.setRoutes(d.routes);
       vans.update(vanFixes(d), performance.now());
 
@@ -350,7 +394,11 @@ export function LiveMap({
     const src = s.map.getSource("eci-route");
     if (src && "setData" in src)
       (src as { setData: (d: GeoJSON.FeatureCollection) => void }).setData(routeGeoJson(data, dark));
+    const pads = s.map.getSource("eci-stops");
+    if (pads && "setData" in pads)
+      (pads as { setData: (d: GeoJSON.FeatureCollection) => void }).setData(stopsGeoJson(data));
     syncStops(s, data);
+    syncPalms(s, data);
     s.vans.setRoutes(data.routes);
     s.vans.update(vanFixes(data), performance.now());
     syncLabels(s, data);
@@ -403,13 +451,21 @@ function syncStops(s: Live, data: PublicMap) {
     }
 }
 
+/** Plants the palms for these routes; the same routes keep their trees. */
+function syncPalms(s: Live, data: PublicMap) {
+  const key = data.routes.map((r) => `${r.id}:${r.path.length}`).join("|");
+  if (key === s.palmKey) return;
+  s.palmKey = key;
+  s.palms.setSites(palmSites(data.routes, data.spots));
+}
+
 function syncLabels(s: Live, data: PublicMap) {
   const seen = new Set<string>();
   for (const v of data.vehicles) {
     seen.add(v.id);
     let m = s.labels.get(v.id);
     if (!m) {
-      m = new Marker({ element: labelElement(), anchor: "bottom", offset: [0, -30] });
+      m = new Marker({ element: labelElement(), anchor: "bottom", offset: [0, -s.labelPx] });
       m.setLngLat([v.lng, v.lat]).addTo(s.map);
       s.labels.set(v.id, m);
     }
@@ -435,12 +491,17 @@ function startLoop(s: Live, reducedMotion: boolean) {
       s.map.setPaintProperty("eci-route-dash", "line-dasharray", DASH_SEQUENCE[s.dashStep]);
     }
     if (moving) s.map.triggerRepaint();
-    // labels follow the rendered vans; the camera follows the first one when asked
+    // labels follow the rendered vans and sit above the roof whatever the zoom; the camera follows the first
+    // one when asked
+    const labelPx = vanLabelOffsetPx(vanScreenPx(s.map.getZoom()));
+    const lift = labelPx !== s.labelPx;
+    s.labelPx = labelPx;
     let first = true;
     for (const [id, m] of s.labels) {
       const p = s.vans.poses.get(id);
       if (!p) continue;
       m.setLngLat([p.lng, p.lat]);
+      if (lift) m.setOffset([0, -labelPx]);
       if (first && moving && s.follow) s.map.jumpTo({ center: [p.lng, p.lat] });
       first = false;
     }
