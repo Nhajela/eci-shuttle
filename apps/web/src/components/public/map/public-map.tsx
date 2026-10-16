@@ -55,7 +55,8 @@ export function PublicMapCard({
   const reducedMotion = useMedia("(prefers-reduced-motion: reduce)");
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [follow, setFollow] = useState(false);
+  // following the shuttle is the default; moving the map by hand stops it, the button brings it back
+  const [follow, setFollow] = useState(true);
   const [expanded, setExpanded] = useState(false);
   // start the map only once the browser is idle, after the answer has painted
   const [mount, setMount] = useState(false);
@@ -110,6 +111,7 @@ export function PublicMapCard({
           reducedMotion={reducedMotion}
           follow={follow}
           expanded={expanded}
+          onUserMove={() => setFollow(false)}
           onReady={() => setReady(true)}
           onFail={() => setFailed(true)}
           className={cn("absolute inset-0 transition-opacity duration-700", ready ? "opacity-100" : "opacity-0")}

@@ -61,6 +61,8 @@ export type LiveMapProps = {
   follow: boolean;
   /** the box changed size (full screen) */
   expanded: boolean;
+  /** the person dragged or zoomed the map themselves (the card then stops following) */
+  onUserMove?: () => void;
   onReady?: () => void;
   onFail?: () => void;
   className?: string;
@@ -125,11 +127,21 @@ function vanFixes(data: PublicMap): VanFix[] {
   }));
 }
 
-export function LiveMap({ data, dark, reducedMotion, follow, expanded, onReady, onFail, className }: LiveMapProps) {
+export function LiveMap({
+  data,
+  dark,
+  reducedMotion,
+  follow,
+  expanded,
+  onUserMove,
+  onReady,
+  onFail,
+  className,
+}: LiveMapProps) {
   const box = useRef<HTMLDivElement>(null);
   const live = useRef<Live | null>(null);
-  const latest = useRef({ data, follow, onReady, onFail });
-  latest.current = { data, follow, onReady, onFail };
+  const latest = useRef({ data, follow, onUserMove, onReady, onFail });
+  latest.current = { data, follow, onUserMove, onReady, onFail };
 
   // the map is built once per theme / motion preference; data flows in through the effect below
   useEffect(() => {
@@ -194,6 +206,13 @@ export function LiveMap({ data, dark, reducedMotion, follow, expanded, onReady, 
       else if (/webgl|context/i.test(String(e.error?.message ?? ""))) fail();
     });
     map.on("webglcontextlost", fail);
+    // a person moving the map (not the intro or the follow camera: those carry no originalEvent) stops following
+    const byHand = (e: { originalEvent?: unknown }) => {
+      if (e.originalEvent) latest.current.onUserMove?.();
+    };
+    map.on("dragstart", byHand);
+    map.on("zoomstart", byHand);
+    map.on("rotatestart", byHand);
 
     map.once("load", () => {
       state.loaded = true;
@@ -272,9 +291,11 @@ export function LiveMap({ data, dark, reducedMotion, follow, expanded, onReady, 
           : null;
         const [a, c] = d.spots;
         const heading = a && c ? bearing(a, c) : 0;
-        const center = cam?.center ?? MANDREM;
+        // following (the default): land on the first shuttle, close up; else the whole route
+        const van = latest.current.follow ? d.vehicles[0] : undefined;
+        const center = van ? ([van.lng, van.lat] as [number, number]) : (cam?.center ?? MANDREM);
         // pitched, the route foreshortens: a touch closer than the flat fit
-        const zoom = (cam?.zoom ?? 14.5) + 0.7;
+        const zoom = van ? Math.max(16, (cam?.zoom ?? 14.5) + 0.7) : (cam?.zoom ?? 14.5) + 0.7;
         if (reducedMotion) map.jumpTo({ center, pitch: PITCH, bearing: heading, zoom });
         else {
           map.jumpTo({ center, pitch: 0, bearing: 0, zoom: zoom - 1.2 });
