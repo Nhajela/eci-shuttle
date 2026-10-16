@@ -183,7 +183,19 @@ The main surface is one simple public web page with three parts, top to bottom:
    ("next scheduled: 9:40 · live tracking off"), and never pretends to be live.
 3. **The schedule**: today's departures from the chosen stop, with past ones dimmed and the next one highlighted.
 
-No login, no map on first view (could add later behind "Show on map"). Polls every 10s, response cached `s-maxage=5`.
+No login. Polls every 10s, response cached `s-maxage=5`.
+
+4. **The live map** (under the answer, never instead of it): a pitched 3D map (MapLibre on OpenFreeMap vector tiles,
+   no key) with the route as a glowing line flowing in the direction of travel, the stops as pins and each live
+   shuttle as a little 3D van gliding between fixes, with "follow" and full-screen toggles. It loads lazily after the
+   answer has rendered and, if WebGL or the tiles fail, shows nothing broken. A painted scene sits behind the page;
+   `prefers-reduced-motion` gets a still one.
+   - Data: `GET /api/positions?w=<slug>` (same caching as `/api/status`): stops, route paths and vehicles.
+   - **Privacy rule:** a vehicle is on the public map only while it is on an active shift (`service_vehicles`
+     covering now) of a public service running today, is active, was resolved by ingest to that service, is at a
+     stop or en route, and has a fix at most 2 min old. Off duty, between shifts, offline, stale or retired vehicles
+     never appear: a driver going home is nobody's business. A vehicle on a driver's break shows with a ☕ and no ETA.
+     Never lateness, as everywhere else on the page.
 
 Later, optional: `/shuttle` in a Telegram bot that answers with the same line, and a pinned group message.
 - ETA: project the position onto the route polyline, remaining distance ÷ median speed from past trips.

@@ -26,6 +26,8 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=::
 WORKDIR /app
 COPY --from=build --chown=node:node /app/apps/web/.next/standalone ./
 COPY --from=build --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
+# static assets (illustrations): the standalone output does not include public/
+COPY --from=build --chown=node:node /app/apps/web/public ./apps/web/public
 COPY --from=build --chown=node:node /app/apps/worker/dist/worker.cjs ./worker.cjs
 COPY --from=build --chown=node:node /app/apps/worker/dist/migrate.cjs ./migrate.cjs
 COPY --from=build --chown=node:node /app/apps/web/drizzle ./drizzle

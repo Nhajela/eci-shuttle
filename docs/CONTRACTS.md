@@ -111,6 +111,7 @@ Inline buttons: `bot/callbacks.encodeCallback` (≤ 64 bytes, actions listed in 
 |---|---|---|
 | `/` , `/w/<slug>` | web-public | public page (live / test workspace) |
 | `GET /api/status?w=<slug>` | web-public | `PublicStatus`, `Cache-Control: s-maxage=5` |
+| `GET /api/positions?w=<slug>` | web-public | `PublicMap` (services/public/positions): public-map positions, stops, routes; `s-maxage=5` |
 | `/admin/<page>?w=<slug>` | admin-* | pages: live, phones, vehicles, people, workspaces, spots, routes, schedule, notices, insights, activity; `/admin` → `/admin/live` |
 | `/login`, `/login/magic?code=` | web-auth | Telegram login, magic link "Continue as …" |
 | `/login/denied` | web-auth | logged in, but no membership or the role is too low |
