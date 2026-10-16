@@ -9,11 +9,7 @@ import { MercatorCoordinate } from "maplibre-gl";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { type Pose, type RoutePath, retarget, routePath, sample, type Track } from "./motion";
-
-const VAN_LENGTH_M = 5.6;
-/** how long the van should look on screen, in CSS px, whatever the zoom (never smaller than life size) */
-const VAN_PX = 66;
-const EARTH_CIRCUMFERENCE_M = 2 * Math.PI * 6378137;
+import { vanScreenScale } from "./van-scale";
 
 const WHITE = 0xf4f3ee;
 const GLASS = 0x1c3340;
@@ -150,14 +146,28 @@ type Van = {
   speed: number;
 };
 
-/** Lights live in model space (y up, nose on -z): a warm sun from the south-east, a cool fill, sky from above. */
-function lit(scene: THREE.Scene) {
-  scene.add(new THREE.HemisphereLight(0xfff6e6, 0x6b7f8c, 1.1));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.4);
-  sun.position.set(4, 8, 5);
+/**
+ * Lights live in model space (x east, y up, z south): golden-hour sun low in the west over the sea (matching the
+ * map's own light), a cool sky fill from the east, warm sky / cool ground ambient. Dark: a cool moon from the
+ * same side, dimmer, with a little warmth left from the shore lights.
+ */
+export function lit(scene: THREE.Scene, dark = false) {
+  if (dark) {
+    scene.add(new THREE.HemisphereLight(0xb9c6ea, 0x3a4458, 0.9));
+    const moon = new THREE.DirectionalLight(0xd6def8, 1.5);
+    moon.position.set(-6, 6, 3);
+    scene.add(moon);
+    const shore = new THREE.DirectionalLight(0xffd3a0, 0.45);
+    shore.position.set(5, 3, -4);
+    scene.add(shore);
+    return;
+  }
+  scene.add(new THREE.HemisphereLight(0xfff1dc, 0x6f8591, 1.15));
+  const sun = new THREE.DirectionalLight(0xffdcae, 2.6);
+  sun.position.set(-6, 5, 3);
   scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xcfe6ff, 0.8);
-  fill.position.set(-5, 4, -4);
+  const fill = new THREE.DirectionalLight(0xcfe6ff, 0.7);
+  fill.position.set(5, 4, -4);
   scene.add(fill);
 }
 
@@ -189,14 +199,16 @@ export class VanLayer implements CustomLayerInterface {
   /** last rendered pose per van, for whoever follows it */
   readonly poses = new Map<string, Pose>();
   animate = true;
+  dark = false;
   /** diagnostics (dev tooling reads these) */
   renders = 0;
   private canvasW = 0;
   private canvasH = 0;
 
-  constructor(opts: { glideMs?: number; animate?: boolean } = {}) {
+  constructor(opts: { glideMs?: number; animate?: boolean; dark?: boolean } = {}) {
     this.glideMs = opts.glideMs ?? 4000;
     this.animate = opts.animate ?? true;
+    this.dark = opts.dark ?? false;
   }
 
   onAdd(map: MlMap, gl: WebGL2RenderingContext) {
@@ -248,7 +260,7 @@ export class VanLayer implements CustomLayerInterface {
       if (!van) {
         const { group, wheels } = parts.build(f.colour);
         const scene = new THREE.Scene();
-        lit(scene);
+        lit(scene, this.dark);
         scene.add(group);
         van = { scene, group, wheels, track: retarget(undefined, f, nowMs, 0, path), speed: 0 };
         this.vans.set(f.id, van);
@@ -303,8 +315,8 @@ export class VanLayer implements CustomLayerInterface {
       this.poses.set(id, pose);
       const mc = MercatorCoordinate.fromLngLat([pose.lng, pose.lat], 0);
       const unit = mc.meterInMercatorCoordinateUnits();
-      const metersPerPx = (Math.cos((pose.lat * Math.PI) / 180) * EARTH_CIRCUMFERENCE_M) / (512 * 2 ** zoom);
-      const scale = Math.max(1, (VAN_PX * metersPerPx) / VAN_LENGTH_M) * unit;
+      // exaggerated when zoomed out so it stays findable, growing as you zoom in, life size when right in
+      const scale = vanScreenScale(zoom, pose.lat) * unit;
       const gliding = nowMs < van.track.startMs + van.track.durationMs;
       const bob = this.animate && gliding ? Math.sin(nowMs / 260) * 0.05 : 0;
       // model: x east, y up, z south (after the X rotation); nose on -z = north at heading 0
