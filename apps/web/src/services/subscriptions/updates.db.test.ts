@@ -87,7 +87,10 @@ describe("runUpdates", () => {
       chatId: person.telegramId,
       kind: "update",
       personId: person.id,
-      buttons: [[{ text: "Stop updates", callbackData: `nunsub:${sub.id}` }]],
+      buttons: [
+        [{ text: "Stop updates", callbackData: `nunsub:${sub.id}` }],
+        [{ text: expect.stringMatching(/30 min/), callbackData: "every:30" }],
+      ],
     });
     expect((job.payload as { html: string }).html).toContain("<b>Riva</b>\nShuttle: here in <b>6 min</b>");
     // a second run in the same minute sends nothing more
@@ -272,6 +275,12 @@ describe("update frequency (every 15 or 30 min)", () => {
     expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     expect(await runUpdates(db(), later(29), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect((await sent(ws.id))[0].payload).toMatchObject({
+      buttons: [
+        [{ callbackData: `nunsub:${sub.id}` }],
+        [{ text: expect.stringMatching(/15 min/), callbackData: "every:15" }],
+      ],
+    });
     expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
 
     const fast = await setUpdateEvery(db(), actor, { workspaceId: ws.id, everyMin: 15 }, later(46));

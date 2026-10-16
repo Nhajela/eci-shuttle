@@ -7,7 +7,7 @@ import { auditLog, memberships, people, workspaces } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { ServiceError } from "../kernel";
 import { onAdminCallback, onNotice, onSilence, onStatus, onToday } from "./admin";
-import { onAttendeeCallback, onShuttle, onStop, onUnsubscribe } from "./attendee";
+import { onAttendeeCallback, onEvery, onShuttle, onStop, onUnsubscribe } from "./attendee";
 import { handleUpdate } from "./handle";
 import { onLocation, onPair } from "./live";
 import { onNeed } from "./need";
@@ -26,6 +26,7 @@ vi.mock("./attendee", () => ({
   onShuttle: vi.fn(),
   onStop: vi.fn(),
   onUnsubscribe: vi.fn(),
+  onEvery: vi.fn(),
   onAttendeeCallback: vi.fn(),
 }));
 vi.mock("./live", () => ({ onPair: vi.fn(), onLocation: vi.fn() }));
@@ -49,6 +50,7 @@ beforeEach(async () => {
     onShuttle,
     onStop,
     onUnsubscribe,
+    onEvery,
     onPair,
     onLocation,
     onNeed,
@@ -108,6 +110,19 @@ describe("handleUpdate", () => {
     // a group command addressed to the bot by name
     await handleUpdate(db(), inGroup(from, "/status@eci_shuttle_bot"), NOW);
     expect(onStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("/every30 and /every15 set the update rhythm in private (help lists them); in a group they ask for a private chat", async () => {
+    const from = user();
+    await handleUpdate(db(), dm(from, "/every30"), NOW);
+    expect(vi.mocked(onEvery).mock.calls[0][1]).toBe(30);
+    await handleUpdate(db(), dm(from, "/every15@eci_shuttle_bot"), NOW);
+    expect(vi.mocked(onEvery).mock.calls[1][1]).toBe(15);
+    const r = await handleUpdate(db(), inGroup(from, "/every30"), NOW);
+    expect(r.send[0].html).toMatch(/private chat/);
+    expect(onEvery).toHaveBeenCalledTimes(2);
+    const help = await handleUpdate(db(), dm(from, "hello?"), NOW);
+    expect(help.send[0].html).toMatch(/\/every30/);
   });
 
   it("/need in private goes to onNeed (with its words); in a group it asks for a private chat", async () => {

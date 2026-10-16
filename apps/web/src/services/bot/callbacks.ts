@@ -16,6 +16,7 @@ export const CallbackAction = z.enum([
   "nsub", // nsub:<spotId|all>           notices for a spot / all
   "nunsub", // nunsub:<subscriptionId|all>
   "usub", // usub:<spotId|all>           /subscribe: updates every 15 min for a spot / all
+  "every", // every:<15|30>               updates every 15 or 30 min
   "need", // need:<fromSpotId>            /need: I'm here → asks where to
   "needto", // needto:<fromSpotId>:<first 8 of toSpotId>  /need: the request
   "needx", // needx:<requestId>           cancel a /need request
@@ -66,6 +67,7 @@ const ATTENDEE_ACTIONS = new Set<CallbackAction>([
   "nsub",
   "nunsub",
   "usub",
+  "every",
   "need",
   "needto",
   "needx",

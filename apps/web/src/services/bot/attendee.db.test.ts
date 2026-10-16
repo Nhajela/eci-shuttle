@@ -9,6 +9,7 @@ import { publicStatus, spotAnswer } from "../public/status";
 import { mySubscriptions } from "../subscriptions/subscriptions";
 import {
   onAttendeeCallback,
+  onEvery,
   onShuttle,
   onSpot,
   onStop,
@@ -221,7 +222,7 @@ describe("/subscribe", () => {
       NOW,
     );
     expect(sub).toMatchObject({ kind: "updates", spotId: riva.id });
-    expect(buttonData(r)).toEqual([`nunsub:${sub.id}`]);
+    expect(buttonData(r)).toEqual([`nunsub:${sub.id}`, "every:30"]);
   });
 
   it("'/subscribe riva' subscribes straight away; all stops too", async () => {
@@ -255,7 +256,7 @@ describe("welcome (plain /start)", () => {
     expect(r.send[0].html).toContain("<b>The Circle</b>");
     const subs = await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW);
     expect(subs.map((x) => [x.kind, x.spotId])).toEqual([["updates", null]]);
-    expect(buttonData(r)).toEqual([`nunsub:${subs[0].id}`]);
+    expect(buttonData(r)).toEqual([`nunsub:${subs[0].id}`, "every:30"]);
   });
 
   it("a second /start keeps the one subscription", async () => {
@@ -282,6 +283,52 @@ describe("welcome (plain /start)", () => {
     const r = await onWelcome(ctx);
     expect(r.send[0].html).toBe("No shuttles are running today.");
     expect(await mySubscriptions(db(), me(ctx), { workspaceId: ctx.workspace.id }, NOW)).toEqual([]);
+  });
+});
+
+describe("update rhythm: every 15 or 30 min", () => {
+  const query = { id: "q1", from: { id: 1 }, data: "" } as never;
+  const mine = (ctx: BotContext) =>
+    mySubscriptions(db(), attendee(ctx.person, ctx.workspace.id), { workspaceId: ctx.workspace.id }, NOW);
+
+  it("without updates on, /every30 says to /start first", async () => {
+    const { ctx } = await setup();
+    expect((await onEvery(ctx, 30)).send[0].html).toMatch(/\/start/);
+    expect(await mine(ctx)).toEqual([]);
+  });
+
+  it("the welcome and /subscribe offer the slower rhythm; the button switches it and confirms in one line", async () => {
+    const { ctx } = await setup();
+    const w = await onWelcome(ctx);
+    const [sub] = await mine(ctx);
+    expect(buttonData(w)).toEqual([`nunsub:${sub.id}`, "every:30"]);
+    expect(w.send[0].html).toContain("every 15 minutes");
+
+    const slow = await onAttendeeCallback(ctx, { action: "every", args: ["30"] }, query);
+    expect(slow.answerCallback).toMatchObject({ callbackQueryId: "q1" });
+    expect(slow.send).toHaveLength(1);
+    expect(slow.send[0].html).toMatch(/30 min/);
+    expect(slow.send[0].html.split("\n")).toHaveLength(1);
+    expect(buttonData(slow)).toEqual(["every:15"]);
+    expect((await mine(ctx))[0]).toMatchObject({ id: sub.id, everyMin: 30 });
+
+    // re-subscribing to one stop keeps the rhythm and says so
+    const r = await onSubscribe(ctx, "riva");
+    expect(r.send[0].html).toContain("every 30 min");
+    expect(buttonData(r)).toEqual([expect.stringMatching(/^nunsub:/), "every:15"]);
+
+    const fast = await onEvery(ctx, 15);
+    expect(fast.send[0].html).toMatch(/15 min/);
+    expect(buttonData(fast)).toEqual(["every:30"]);
+    expect((await mine(ctx))[0].everyMin).toBe(15);
+  });
+
+  it("a bad value on the button is refused as an alert, not a crash", async () => {
+    const { ctx } = await setup();
+    await onWelcome(ctx);
+    const r = await onAttendeeCallback(ctx, { action: "every", args: ["20"] }, query);
+    expect(r.send).toEqual([]);
+    expect(r.answerCallback).toMatchObject({ showAlert: true });
   });
 });
 

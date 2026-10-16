@@ -38,7 +38,7 @@ describe("handleCallback", () => {
   it("sends attendee buttons to the attendee side and the rest to admin", async () => {
     vi.mocked(onAttendeeCallback).mockResolvedValue(A);
     vi.mocked(onAdminCallback).mockResolvedValue(B);
-    for (const a of ["spot", "arrive", "nsub", "nunsub"]) {
+    for (const a of ["spot", "arrive", "nsub", "nunsub", "every"]) {
       expect(await handleCallback(ctx, q(`${a}:x`))).toBe(A);
       expect(onAttendeeCallback).toHaveBeenLastCalledWith(ctx, { action: a, args: ["x"] }, q(`${a}:x`));
     }

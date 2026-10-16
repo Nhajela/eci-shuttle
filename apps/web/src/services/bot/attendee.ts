@@ -10,7 +10,16 @@ import { findInWorkspace, isServiceError, type TelegramButton, userMessage } fro
 import { publicStatus } from "../public/status";
 import { myPickup } from "../subscriptions/need";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
-import { currentUpdate, DAY_OVER_TEXT, dayOver, subscribeUpdates, unsubscribeUpdates } from "../subscriptions/updates";
+import {
+  currentUpdate,
+  DAY_OVER_TEXT,
+  dayOver,
+  rhythmButton,
+  setUpdateEvery,
+  subscribeUpdates,
+  type UpdateEveryMin,
+  unsubscribeUpdates,
+} from "../subscriptions/updates";
 import { type Callback, type CallbackAction, encodeCallback } from "./callbacks";
 import { onNeedButton } from "./need";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
@@ -120,11 +129,34 @@ async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotRe
   const st = await status(ctx);
   const list = spotId ? st.spots.filter((s) => s.spotId === spotId) : st.spots;
   const where = spotId ? `<b>${esc(list[0]?.name ?? "that stop")}</b>` : "every stop";
+  const every = `every ${sub.everyMin} min`;
   const now = await currentUpdate(ctx.db, ctx.workspace.id, st, spotId, ctx.now);
   const intro = dayOver(list)
-    ? `${DAY_OVER_TEXT.split(" /unsubscribe")[0]} You'll get an update for ${where} every 15 min then.`
-    : `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} every 15 min while the shuttle runs.`;
-  return say(ctx, `${intro} /unsubscribe stops them.`, [[btn("Stop updates", "nunsub", sub.id)]]);
+    ? `${DAY_OVER_TEXT.split(" /unsubscribe")[0]} You'll get an update for ${where} ${every} then.`
+    : `${now ? `${now}\n\n` : ""}I'll send you an update for ${where} ${every} while the shuttle runs.`;
+  return say(ctx, `${intro} /unsubscribe stops them.`, [
+    [btn("Stop updates", "nunsub", sub.id)],
+    [rhythmButton(sub.everyMin)],
+  ]);
+}
+
+/**
+ * `/every30` / `/every15` and the 🐢 / 🐇 button: the rhythm of the updates, confirmed in one line with the button
+ * for the other one. No updates on → told to /start first (a ServiceError becomes the reply).
+ */
+export async function onEvery(ctx: BotContext, everyMin: UpdateEveryMin): Promise<BotReply> {
+  const actor = attendeeActor(ctx.person, ctx.workspace.id);
+  try {
+    const sub = await setUpdateEvery(ctx.db, actor, { workspaceId: ctx.workspace.id, everyMin }, ctx.now);
+    const line =
+      sub.everyMin === 30
+        ? "🐢 Slower it is: an update every 30 min while the shuttle runs."
+        : "🐇 Back to every 15 min while the shuttle runs.";
+    return say(ctx, line, [[rhythmButton(sub.everyMin)]]);
+  } catch (e) {
+    if (isServiceError(e)) return say(ctx, userMessage(e));
+    throw e;
+  }
 }
 
 export const WELCOME_TEXT =
@@ -143,7 +175,10 @@ export async function onWelcome(ctx: BotContext): Promise<BotReply> {
   const after = dayOver(st.spots)
     ? "The shuttle has finished for today. Updates start again when it runs tomorrow."
     : now;
-  return say(ctx, after ? `${WELCOME_TEXT}\n\n${after}` : WELCOME_TEXT, [[btn("Stop updates", "nunsub", sub.id)]]);
+  return say(ctx, after ? `${WELCOME_TEXT}\n\n${after}` : WELCOME_TEXT, [
+    [btn("Stop updates", "nunsub", sub.id)],
+    [rhythmButton(sub.everyMin)],
+  ]);
 }
 
 /** `/unsubscribe`: end the 15-min updates (alerts and notices stay; /stop ends everything). */
@@ -207,6 +242,18 @@ export async function onAttendeeCallback(ctx: BotContext, cb: Callback, query: T
       }
       case "usub":
         return { ...(await subscribed(ctx, arg === "all" ? null : arg)), answerCallback: ack("Subscribed") };
+      case "every": {
+        const everyMin = arg === "30" ? 30 : arg === "15" ? 15 : null;
+        if (everyMin === null) return { send: [], answerCallback: ack("This button has expired", true) };
+        const actor = attendeeActor(ctx.person, ctx.workspace.id);
+        // straight to the service here (not onEvery) so a refusal shows as an alert like the other buttons
+        const sub = await setUpdateEvery(ctx.db, actor, { workspaceId, everyMin }, ctx.now);
+        const line =
+          sub.everyMin === 30
+            ? "🐢 Slower it is: an update every 30 min while the shuttle runs."
+            : "🐇 Back to every 15 min while the shuttle runs.";
+        return { ...say(ctx, line, [[rhythmButton(sub.everyMin)]]), answerCallback: ack() };
+      }
       case "nunsub": {
         const n = await unsubscribe(ctx.db, actor, { workspaceId, subscriptionId: arg }, ctx.now);
         return { send: [], answerCallback: ack(n ? "Turned off." : "That was already off.") };

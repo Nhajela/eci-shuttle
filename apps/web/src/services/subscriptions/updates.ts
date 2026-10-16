@@ -11,7 +11,7 @@ import { people, routes, services, serviceVehicles, spots, subscriptions, vehicl
 import type { Subscription } from "@/db/types";
 import { encodeCallback } from "../bot/callbacks";
 import { activeBreaks, breakEnd } from "../catalog/breaks";
-import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError } from "../kernel";
+import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError, type TelegramButton } from "../kernel";
 import { publicStatus } from "../public/status";
 import { departedSince, type ShuttleNow, storyText } from "./update-text";
 
@@ -76,6 +76,13 @@ export async function subscribeUpdates(
       return { before: null, after: row, result: row };
     },
   );
+}
+
+/** The button that switches to the other rhythm: 🐢 slower for a 15-min subscriber, 🐇 faster for a 30-min one. */
+export function rhythmButton(everyMin: number): TelegramButton {
+  return everyMin === 30
+    ? { text: "🐇 Every 15 min", callbackData: encodeCallback({ action: "every", args: ["15"] }) }
+    : { text: "🐢 Every 30 min", callbackData: encodeCallback({ action: "every", args: ["30"] }) };
 }
 
 export const SetUpdateEveryInput = z.object({
@@ -306,6 +313,7 @@ export async function runUpdates(
             : {
                 buttons: [
                   [{ text: "Stop updates", callbackData: encodeCallback({ action: "nunsub", args: [sub.id] }) }],
+                  [rhythmButton(sub.everyMin)],
                 ],
               }),
         },
