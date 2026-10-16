@@ -170,6 +170,11 @@ job-nightly); `.vitest/` ignored (api-device); `arrive` leadMin documented (bot-
 schedule overlap rule, `loadEstimates` hour param documented in CONTRACTS.md; local haversines / IST helpers /
 test stand-ins swapped for the merged real functions.
 
+Applied with owner approval (delight-bot, 2026-10-16):
+- `kernel/outbox.TelegramPayload.animation?: string` (bot-core): a GIF URL under `origin()`; `bot/deliver` sends
+  it with `sendAnimation` and the html as caption, falling back to `sendMessage` when the caption is over 1024
+  chars or Telegram refuses the animation, so no message is ever lost.
+
 Open (after wave 2b): see "Remaining gaps" above, plus `$onUpdate` on `updatedAt()` (svc-people) and
 `cancelDirective` accepting vehicle-level directives (admin-phones), both unconfirmed, and:
 - In-process state, fine for one container: device API rate limit (api-device), webhook update dedupe

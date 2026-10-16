@@ -215,6 +215,76 @@ describe("sendNow", () => {
   });
 });
 
+describe("sendNow with an animation (GIF moments)", () => {
+  const GIF = "http://localhost:3000/gifs/welcome.gif";
+  const buttons = [[{ text: "Stop updates", callbackData: "nunsub:1" }]];
+
+  it("sends sendAnimation with the html as caption, same buttons, and logs it", async () => {
+    const chatId = nextChat();
+    const t = fakeTelegram(() => ({ message_id: 7 }));
+    const r = await sendNow(db(), { chatId, html: "<b>Hi</b>", kind: "update", buttons, animation: GIF }, t.fetchImpl);
+    expect(r).toEqual({ ok: true });
+    expect(t.calls.map((c) => c.method)).toEqual(["sendAnimation"]);
+    expect(t.calls[0]?.body).toMatchObject({
+      chat_id: chatId,
+      animation: GIF,
+      caption: "<b>Hi</b>",
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [[{ text: "Stop updates", callback_data: "nunsub:1" }]] },
+    });
+    expect(await logFor(chatId)).toMatchObject([{ kind: "update", text: "<b>Hi</b>", ok: true, messageId: 7 }]);
+  });
+
+  it("a caption over 1024 chars goes as a plain message instead", async () => {
+    const chatId = nextChat();
+    const t = fakeTelegram();
+    const html = "x".repeat(1025);
+    await expect(sendNow(db(), { chatId, html, kind: "update", animation: GIF }, t.fetchImpl)).resolves.toEqual({
+      ok: true,
+    });
+    expect(t.calls.map((c) => c.method)).toEqual(["sendMessage"]);
+    expect(t.calls[0]?.body).toMatchObject({ text: html });
+  });
+
+  it("when sendAnimation fails (bad URL, 400) the text still goes out as a plain message; no update is lost", async () => {
+    const chatId = nextChat();
+    const t = fakeTelegram((m) =>
+      m === "sendAnimation"
+        ? { error_code: 400, description: "Bad Request: wrong file identifier" }
+        : { message_id: 9 },
+    );
+    const r = await sendNow(db(), { chatId, html: "text", kind: "update", buttons, animation: GIF }, t.fetchImpl);
+    expect(r).toEqual({ ok: true });
+    expect(t.calls.map((c) => c.method)).toEqual(["sendAnimation", "sendMessage"]);
+    expect(t.calls[1]?.body).toMatchObject({ chat_id: chatId, text: "text", parse_mode: "HTML" });
+    expect(await logFor(chatId)).toMatchObject([{ ok: true, messageId: 9 }]);
+  });
+
+  it("a blocked bot (403) or a 429 on the animation is reported as such, not retried as text", async () => {
+    const person = await makePerson(db());
+    const chatId = nextChat();
+    const t = fakeTelegram(() => ({ error_code: 403, description: "Forbidden: bot was blocked by the user" }));
+    const r = await sendNow(
+      db(),
+      { chatId, html: "x", kind: "update", animation: GIF, personId: person!.id },
+      t.fetchImpl,
+    );
+    expect(r).toMatchObject({ ok: false, retry: false });
+    expect(t.calls.map((c) => c.method)).toEqual(["sendAnimation"]);
+    const t2 = fakeTelegram(() => ({ error_code: 429, description: "Too Many", parameters: { retry_after: 2 } }));
+    const r2 = await sendNow(db(), { chatId: nextChat(), html: "x", kind: "update", animation: GIF }, t2.fetchImpl);
+    expect(r2).toMatchObject({ ok: false, retry: true, retryAfterMs: 2_000 });
+    expect(t2.calls.map((c) => c.method)).toEqual(["sendAnimation"]);
+  });
+
+  it("a network error on the animation retries the whole job (nothing was sent)", async () => {
+    const t = fakeTelegram(() => new TypeError("fetch failed"));
+    const r = await sendNow(db(), { chatId: nextChat(), html: "x", kind: "update", animation: GIF }, t.fetchImpl);
+    expect(r).toMatchObject({ ok: false, retry: true });
+    expect(t.calls.map((c) => c.method)).toEqual(["sendAnimation"]);
+  });
+});
+
 describe("performReply", () => {
   it("answers the callback, edits the message, then sends each payload in order", async () => {
     const chatId = nextChat();
