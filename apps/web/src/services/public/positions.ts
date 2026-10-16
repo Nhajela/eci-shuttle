@@ -37,6 +37,8 @@ export const PublicMapRoute = z.object({
   path: z.array(LatLngZ),
   spotPathIdx: z.array(z.number().int()),
   lengthM: z.number().nonnegative(),
+  /** learned typical seconds per leg (spotIds[i] → [i+1]); 0 = not learned yet */
+  legS: z.array(z.number().nonnegative()),
 });
 export type PublicMapRoute = z.infer<typeof PublicMapRoute>;
 
@@ -124,6 +126,7 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
     path: r.path,
     spotPathIdx: r.spotPathIdx,
     lengthM: Math.round(pathLengthM(r.path)),
+    legS: r.spotIds.slice(1).map((_, i) => r.typicalLegS[i] ?? 0),
   }));
 
   const onBreak = await activeBreaks(db, workspaceId, now);

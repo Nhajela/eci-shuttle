@@ -57,6 +57,7 @@ const route: PublicMapRoute = {
   ],
   spotPathIdx: [0, 1, 2],
   lengthM: 6000,
+  legS: [0, 0],
 };
 const van = (over: Partial<PublicVehicle>): PublicVehicle => ({
   id: "v1",
@@ -132,5 +133,21 @@ describe("pageStory: the big answer says what the shuttle is doing, like the bot
       pageStory({ ...base, line: live({ kind: "timetable" }), spot: riva, spots, vehicles: [van({})] }),
     ).toBeNull();
     expect(pageStory({ ...base, line: live(), spot: riva, spots, vehicles: [] })).toBeNull();
+  });
+});
+
+describe("pageStory: ride time", () => {
+  it("uses the learned leg time when the route has one (450 s ≈ 8 min), the 25 km/h baseline otherwise", () => {
+    const spots = [spot(RIVA, "Riva"), spot(CIRCLE, "Circle")];
+    const learned = { ...route, legS: [450, 450] };
+    const s = pageStory({
+      ...base,
+      routes: [learned],
+      line: live(),
+      spot: spots[0] as PublicSpot,
+      spots,
+      vehicles: [van({})],
+    });
+    expect(s?.context).toBe("Waiting for passengers · about 8 min from here once it leaves · last seen 5s ago");
   });
 });

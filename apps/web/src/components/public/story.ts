@@ -2,7 +2,7 @@
  * What the shuttle is doing, for the big answer on the page: the same truth-first rules as the bot's updates
  * (services/subscriptions/update-text.ts). A shuttle waiting at the other stop is shown THERE ("at Circle"), with
  * the timetable only as a safe hint (a departure still ahead; past it, "should be off any minute", never a time
- * already gone) or, on a loop, the ride time once it leaves — not a guessed "about 7 min". One heading to the other
+ * already gone) or, on a loop, the ride time once it leaves (learned leg times, else 25 km/h) — not a guessed "about 7 min". One heading to the other
  * stop first keeps its time and says so. Everything else keeps the usual answer (null). Never "late". Pure.
  */
 import { type AnswerLine, istHHMM, type PublicSpot } from "@eci-shuttle/shared";
@@ -90,6 +90,9 @@ function rideTimeMs(route: PublicMapRoute | undefined, fromId: string, toId: str
   const k = route.spotIds.indexOf(fromId);
   const j = k >= 0 ? route.spotIds.indexOf(toId, k + 1) : -1;
   if (k < 0 || j < 0) return null;
+  // learned leg times when every leg on the way has one
+  const legs = route.legS.slice(k, j);
+  if (legs.length === j - k && legs.every((x) => x > 0)) return legs.reduce((t, x) => t + x, 0) * 1000;
   const { cumM } = routePath(route.path);
   const a = cumM[route.spotPathIdx[k] as number];
   const b = cumM[route.spotPathIdx[j] as number];

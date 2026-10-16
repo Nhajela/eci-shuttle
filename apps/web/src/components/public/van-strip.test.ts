@@ -13,6 +13,7 @@ const loop: PublicMap["routes"][number] = {
   path: [],
   spotPathIdx: [],
   lengthM: 2000,
+  legS: [],
 };
 const van = (over: Partial<PublicVehicle>): PublicVehicle => ({
   id: "v",
