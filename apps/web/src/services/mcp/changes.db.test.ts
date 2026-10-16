@@ -448,6 +448,7 @@ describe("applyChange", () => {
     await apply({ kind: "phone.label", deviceId: phone2.id, label: "Spare Nokia" });
     await apply({ kind: "phone.assign", deviceId: phone2.id, vehicleId: van.id });
     await apply({ kind: "phone.silence", deviceId: phone2.id, until: "2026-12-12T07:30:00Z" });
+    await apply({ kind: "phone.resume", deviceId: phone2.id });
     await apply({ kind: "phone.force_active", deviceId: s.phone.id, until: "2026-12-12T07:30:00Z", intervalS: null });
     await apply({ kind: "phone.nudge", deviceId: s.phone.id });
     await apply({ kind: "phone.kill", deviceId: s.phone.id });
@@ -475,7 +476,7 @@ describe("applyChange", () => {
       .from(auditLog)
       .where(eq(auditLog.proposalId, "P-TESTTEST"))
       .orderBy(auditLog.id);
-    expect(rows).toHaveLength(24);
+    expect(rows).toHaveLength(25);
     expect(new Set(rows.map((r) => r.action))).toEqual(
       new Set([
         "spot.create",
@@ -493,6 +494,7 @@ describe("applyChange", () => {
         "phone.label",
         "phone.assign",
         "phone.silence",
+        "phone.resume",
         "phone.force_active",
         "phone.nudge",
         "phone.kill",

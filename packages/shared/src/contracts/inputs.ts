@@ -205,6 +205,8 @@ export const PhoneForceActiveFields = z.object({
   intervalS: z.number().int().min(5).max(600).nullable().default(null),
 });
 export const PhoneNudgeFields = z.object({ deviceId: Id });
+/** lift the phone's own pause (silence) now; it tracks again in its windows */
+export const PhoneResumeFields = z.object({ deviceId: Id });
 export const PhoneKillFields = z.object({ deviceId: Id });
 export const PhoneRevokeFields = z.object({ deviceId: Id });
 export const PhoneMoveWorkspaceFields = z.object({ deviceId: Id, toWorkspaceId: Id });

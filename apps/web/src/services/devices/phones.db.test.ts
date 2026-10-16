@@ -30,6 +30,7 @@ import {
   listPhones,
   movePhoneToWorkspace,
   nudgePhone,
+  resumePhone,
   revokePhone,
   silencePhone,
   trackedDevices,
@@ -219,6 +220,52 @@ describe("directives", () => {
     const s2 = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
     expect((await row(f.id)).cancelledAt).toBeInstanceOf(Date);
     expect((await row(s2.id)).cancelledAt).toBeNull();
+  });
+
+  it("the newest instruction wins: a second silence replaces the first (and a second force the first)", async () => {
+    const { ws, actor, phone } = await setup("ops");
+    const row = async (id: string) => (await db().select().from(directives).where(eq(directives.id, id)))[0];
+    const s1 = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later(2 * HOUR) });
+    const s2 = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+    expect((await row(s1.id)).cancelledAt).toBeInstanceOf(Date);
+    expect((await row(s2.id)).cancelledAt).toBeNull();
+    const f1 = await forceActive(db(), actor, {
+      workspaceId: ws.id,
+      deviceId: phone.id,
+      until: later(),
+      intervalS: 10,
+    });
+    const f2 = await forceActive(db(), actor, {
+      workspaceId: ws.id,
+      deviceId: phone.id,
+      until: later(),
+      intervalS: 30,
+    });
+    expect((await row(f1.id)).cancelledAt).toBeInstanceOf(Date);
+    expect((await row(f2.id)).cancelledAt).toBeNull();
+  });
+
+  it("resumePhone lifts the phone's open silences now (audited, phone bumped); nothing open is a no-op", async () => {
+    const { ws, actor, phone } = await setup("ops");
+    const s = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+    const f = await forceActive(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later(), intervalS: 10 });
+    const s2 = await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+    const before = (await device(phone.id)).configVersion;
+    expect(await resumePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).toBe(1);
+    const [row] = await db().select().from(directives).where(eq(directives.id, s2.id));
+    expect(row.cancelledAt).toBeInstanceOf(Date);
+    expect((await device(phone.id)).configVersion).toBe(before + 1);
+    const resumed = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, phone.id), eq(auditLog.action, "phone.resume")));
+    expect(resumed).toHaveLength(1);
+    expect(await resumePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).toBe(0);
+    expect(s.id).not.toBe(f.id);
+    const { actor: viewer } = await makeAdmin(db(), ws.id, "viewer");
+    await expect(resumePhone(db(), viewer, { workspaceId: ws.id, deviceId: phone.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 
   it("force active on a phone whose vehicle is silenced is INVALID", async () => {

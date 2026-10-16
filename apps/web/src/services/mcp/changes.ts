@@ -52,6 +52,7 @@ import {
   labelPhone,
   movePhoneToWorkspace,
   nudgePhone,
+  resumePhone,
   revokePhone,
   silencePhone,
 } from "../devices/phones";
@@ -78,6 +79,7 @@ export const CHANGE_ROLE: Record<McpChangeKind, Role> = {
   "phone.label": "ops",
   "phone.assign": "ops",
   "phone.silence": "ops",
+  "phone.resume": "ops",
   "phone.force_active": "ops",
   "phone.nudge": "ops",
   "phone.kill": "admin",
@@ -341,6 +343,8 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
     }
     case "phone.silence":
       return `Silence ${(await phone(db, ws, c.deviceId)).full} until ${when(c.until)}`;
+    case "phone.resume":
+      return `Lift the pause on ${(await phone(db, ws, c.deviceId)).full} now: it tracks again in its shift`;
     case "phone.force_active":
       return `Keep ${(await phone(db, ws, c.deviceId)).full} tracking until ${when(c.until)}${c.intervalS ? `, a fix every ${c.intervalS} s` : ""}`;
     case "phone.nudge":
@@ -612,6 +616,8 @@ export async function applyChange(
       return assignPhone(db, actor, input(c, ws));
     case "phone.silence":
       return silencePhone(db, actor, input(c, ws));
+    case "phone.resume":
+      return resumePhone(db, actor, input(c, ws));
     case "phone.force_active":
       return forceActive(db, actor, input(c, ws));
     case "phone.nudge":

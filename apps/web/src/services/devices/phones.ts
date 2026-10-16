@@ -16,6 +16,7 @@ import {
   PhoneLabelFields,
   PhoneMoveWorkspaceFields,
   PhoneNudgeFields,
+  PhoneResumeFields,
   PhoneRevokeFields,
   PhoneSilenceFields,
   resolveMode,
@@ -49,6 +50,7 @@ export const AssignPhoneInput = withWorkspace(PhoneAssignFields);
 export const SilencePhoneInput = withWorkspace(PhoneSilenceFields);
 export const ForceActiveInput = withWorkspace(PhoneForceActiveFields);
 export const NudgePhoneInput = withWorkspace(PhoneNudgeFields);
+export const ResumePhoneInput = withWorkspace(PhoneResumeFields);
 export const KillPhoneInput = withWorkspace(PhoneKillFields);
 export const RevokePhoneInput = withWorkspace(PhoneRevokeFields);
 export const MovePhoneInput = withWorkspace(PhoneMoveWorkspaceFields);
@@ -168,11 +170,11 @@ async function addDirective(
         });
       }
     }
-    // the newest instruction wins: end the phone's open opposite directive
+    // the newest instruction wins: end the phone's open silence or force, whichever (a new silence replaces the last)
     const cancelled = await tx
       .update(directives)
       .set({ cancelledAt: startsAt, version: sql`${directives.version} + 1` })
-      .where(and(eq(directives.deviceId, deviceId), open(kind === "force_active" ? "silence_until" : "force_active")))
+      .where(and(eq(directives.deviceId, deviceId), or(open("silence_until"), open("force_active"))))
       .returning({ id: directives.id });
     const [d] = await tx
       .insert(directives)
@@ -220,6 +222,44 @@ export async function cancelDirective(
     await bumpConfigs(tx, target, "directive.cancel");
     return { before, after, result: undefined };
   });
+}
+
+/**
+ * ops. Lifts the phone's own pause now: its open silence_until directives end, so it tracks again in its windows
+ * (a vehicle-wide silence is cancelDirective's). Returns how many were open; none = nothing to do, nothing audited.
+ */
+export async function resumePhone(db: Db, actor: Actor, input: z.input<typeof ResumePhoneInput>): Promise<number> {
+  const { workspaceId, deviceId } = parseInput(ResumePhoneInput, input);
+  requireRole(actor, workspaceId, "ops");
+  const now = new Date();
+  const openSilence = and(
+    eq(directives.deviceId, deviceId),
+    eq(directives.kind, "silence_until"),
+    isNull(directives.cancelledAt),
+    gt(directives.endsAt, now),
+  );
+  await livePhone(db, workspaceId, deviceId);
+  const [any] = await db.select({ id: directives.id }).from(directives).where(openSilence).limit(1);
+  if (!any) return 0;
+  return mutate(
+    db,
+    actor,
+    { action: "phone.resume", entity: "device", entityId: deviceId, workspaceId },
+    async (tx) => {
+      const rows = await tx
+        .update(directives)
+        .set({ cancelledAt: now, version: sql`${directives.version} + 1` })
+        .where(openSilence)
+        .returning({ id: directives.id });
+      await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.resume");
+      const ids = rows.map((r) => r.id);
+      return {
+        before: { openSilences: ids },
+        after: { openSilences: [], cancelledDirectiveIds: ids },
+        result: ids.length,
+      };
+    },
+  );
 }
 
 /** Push "sync now" without changing config (queues a push; audited phone.nudge). */

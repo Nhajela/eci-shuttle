@@ -129,6 +129,7 @@ const VERBS: Record<string, (row: AuditRow) => string> = {
   "phone.revoke": () => "revoked a phone",
   "phone.nudge": () => "nudged a phone",
   "phone.silence": () => "silenced alerts for a phone",
+  "phone.resume": () => "lifted a phone's pause",
   "phone.force_active": () => "forced a phone active",
   "phone.label": (r) => (named(r) ? `renamed a phone to${named(r)}` : "renamed a phone"),
   "phone.assign": () => "assigned a phone to a vehicle",

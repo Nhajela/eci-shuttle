@@ -164,6 +164,8 @@ Merged `--no-ff` onto `main`: fx/mcp-ota, fx/health, fx/missed-deps, fx/ota-fail
 
 ## Contract change requests
 
+Applied 16 Oct (owner-approved): `PhoneResumeFields` + MCP change kind `phone.resume` (lift a phone's silence now); a new silence/force now replaces the phone's previous silence or force (devices/phones.addDirective).
+
 Applied at integration: barrel exports (geo-wait, sched-windows, sched-mode); `listAllWorkspaces` (job-windows,
 job-nightly); `.vitest/` ignored (api-device); `arrive` leadMin documented (bot-attendee); ownership table,
 `/login/denied`, `shuttle_login`, hex `token_hash`, `sho_` prefix, `PublicToken`, subscription audit actions,
