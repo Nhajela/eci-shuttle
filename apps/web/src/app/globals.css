@@ -210,3 +210,156 @@
     color: #141b34;
   }
 }
+
+/* =========================================================
+   Attendee page: the painted scene, the frosted cards, the map
+   ========================================================= */
+.frosted {
+  background: color-mix(in oklab, var(--paper) 86%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  box-shadow:
+    0 1px 0 color-mix(in oklab, var(--paper) 60%, transparent) inset,
+    0 10px 30px -12px rgba(20, 27, 52, 0.25);
+}
+
+/* the scene's parallax layers drift very slowly; the first one (sky) stays put */
+@keyframes scene-drift {
+  0% {
+    transform: translate3d(-0.6%, 0, 0) scale(1.03);
+  }
+  100% {
+    transform: translate3d(0.6%, 0, 0) scale(1.03);
+  }
+}
+.scene-layer {
+  animation: scene-drift 30s ease-in-out infinite alternate;
+  will-change: transform;
+}
+.scene-layer:first-child {
+  animation: none;
+}
+
+@keyframes scene-van-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-0.4deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(0.3deg);
+  }
+}
+.scene-van {
+  animation: scene-van-bob 2.4s ease-in-out infinite;
+}
+
+@keyframes van-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+.van-bob {
+  animation: van-bob 0.9s ease-in-out infinite;
+}
+
+@keyframes here-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.here-pop {
+  animation: here-pop 0.6s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+
+@keyframes stop-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--marigold) 70%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 14px transparent;
+  }
+}
+
+/* what the map shows while its tiles are still on the way */
+.map-sky {
+  background:
+    radial-gradient(70% 50% at 50% 100%, color-mix(in oklab, var(--mint) 70%, transparent) 0%, transparent 70%),
+    linear-gradient(180deg, var(--teal-tint) 0%, var(--sand) 100%);
+}
+
+/* stop pins and van labels are MapLibre HTML markers */
+.eci-stop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.eci-stop-pin {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2px solid var(--teal);
+  border-radius: 999px;
+  padding: 6px 10px;
+  box-shadow: 0 6px 16px -6px rgba(20, 27, 52, 0.45);
+  white-space: nowrap;
+}
+.eci-stop-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--teal);
+  border: 2px solid var(--paper);
+}
+.eci-stop.is-here .eci-stop-pin {
+  border-color: var(--marigold);
+}
+.eci-stop.is-here .eci-stop-dot {
+  background: var(--marigold);
+  animation: stop-pulse 1.6s ease-out infinite;
+}
+.eci-van-label {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--paper);
+  background: var(--ink);
+  border-radius: 999px;
+  padding: 5px 9px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 14px -6px rgba(20, 27, 52, 0.6);
+}
+.eci-van-label.is-break {
+  background: var(--marigold-deep);
+}
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-layer,
+  .scene-van,
+  .van-bob,
+  .here-pop,
+  .eci-stop.is-here .eci-stop-dot {
+    animation: none;
+  }
+}
