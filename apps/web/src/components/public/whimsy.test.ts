@@ -45,10 +45,11 @@ describe("mood: the little line of whimsy next to the answer", () => {
     expect(mood(live(0, { phaseText: "here now" }), 0, 10)).toEqual({ emoji: "🚐", text: "Shuttle's here! Hop on." });
   });
 
-  it("gets excited as it gets close, and suggests a chai when there is time", () => {
+  it("gets excited as it gets close, and says there's no rush when there is time (never 'chai': that reads as a break)", () => {
     expect(mood(live(1), 0, 10).text).toMatch(/almost/i);
     expect(mood(live(4), 0, 10).text).toMatch(/rolling|on its way/i);
-    expect(mood(live(12), 0, 10).text).toMatch(/chai/i);
+    expect(mood(live(12), 0, 10).text).toMatch(/no rush/i);
+    expect(mood(live(12), 0, 10).text).not.toMatch(/chai|break/i);
   });
 
   it("never mentions lateness, however long the wait", () => {

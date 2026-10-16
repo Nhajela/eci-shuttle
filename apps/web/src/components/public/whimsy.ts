@@ -32,7 +32,7 @@ export function mood(line: AnswerLine, ageS: number, hour: number): Mood {
     if (line.minutes === 0) return { emoji: "🚐", text: "Shuttle's here! Hop on." };
     if (line.minutes <= 2) return { emoji: "👀", text: "Almost there. Grab your things." };
     if (line.minutes <= 6) return { emoji: "🌴", text: "Rolling your way." };
-    return { emoji: "☕", text: "Time for a quick chai." };
+    return { emoji: "🐚", text: "On its way. No rush, enjoy the breeze." };
   }
   if (line.kind === "live" || line.kind === "timetable") {
     if (line.phaseText === ON_BREAK) return { emoji: "☕", text: "Driver's on a chai break. Back soon." };
