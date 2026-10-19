@@ -24,7 +24,7 @@ over MCP.
 | Public services (loop, daily until 1 Nov) | One loop "Shuttle", 08:00–22:00 (16 Oct) |
 | Ops tracking hours | 09:00–21:00 daily. Phones track and admin sees positions between shifts; the public only sees service hours |
 | Shuttle 1 | Shift 08:00–16:00 daily. Karan, Android (Samsung A15), our app (16 Oct) |
-| Shuttle 2 | Shift 14:00–22:00 daily. Suresh, Android (Xiaomi), our app, on OTA `01a1336a…`; needs Xiaomi battery saver "No restrictions" + Autostart (16 Oct) |
+| Shuttle 2 | Shift 14:00–22:00 daily. Alpesh, iPhone, Telegram live location via `/pair` ("Alpesh iPhone (Telegram)"); Suresh's Xiaomi revoked (19 Oct). Traccar Client is the planned backup if Telegram shows gaps |
 | Admins | @HiiNaman (admin in eci-main and test). Viewers can be added in People by Telegram username |
 | Test workspace | `test`: Riva + a placeholder Circle, Naman's phone (Nothing A015) in "Test shuttle", public page at `/w/test` |
 

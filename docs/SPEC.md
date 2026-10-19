@@ -178,9 +178,14 @@ The main surface is one simple public web page with three parts, top to bottom:
    Any notices show above it.
 2. **The answer**: one big line, "Shuttle will be here in **6 min**". When several services serve
    the chosen spot, there's one line per service ("To Circle: 6 min · Party shuttle: 22:00"). Underneath it, a small line
-   of context ("leaving Circle now · last seen 12s ago"). When there's no live data (>2 min stale, or
-   outside service hours), it shows the timetable answer instead, says so plainly
-   ("next scheduled: 9:40 · live tracking off"), and never pretends to be live.
+   of context ("leaving Circle now · last seen 12s ago"). When there's no live data, it says what we know and
+   never pretends to be live. How well we can see a shuttle comes from its last fix (`services/public/sight.ts`):
+   - up to 5 min: still live (a short network drop), with "last seen 4 min ago";
+   - last seen inside a stop 5–15 min ago: "last seen at Riva at 19:12 · may still be there";
+   - out of sight up to 30 min: "Can't see it right now · last seen on its way to Circle at 18:58";
+   - silent over 30 min: hidden, as if not running (no ETA, and not counted for "about every N min").
+   With no shuttle in sight, the page points to ride share on the Telegram group or the volunteers at reception.
+   Outside service hours, or with no shuttle on shift, it shows the timetable answer ("next scheduled: 9:40").
 3. **The schedule**: today's departures from the chosen stop, with past ones dimmed and the next one highlighted.
 
 No login. Polls every 10s, response cached `s-maxage=5`.
@@ -267,15 +272,18 @@ preview can't log anyone in. A signed session cookie lasts 60 days. Only admin n
 - Each workspace has its own alert list, so test alerts never reach the real ops team.
 
 **For attendees:**
-- **`/start` (the core experience)**: in a private chat it subscribes the person to where the shuttle is, every
-  15 min, for every stop, straight away: "🌴 Welcome aboard the shuttle bot! From now on you'll get updates every
-  15 minutes about where the shuttle is. Just send 'stop' or 'unsubscribe' whenever you want to stop. Too chatty?
-  Tap 🐢 below for every 30 min instead." Plain "stop" / "unsubscribe" (no slash) work like `/stop` /
+- **`/start` (the core experience)**: in a private chat it subscribes the person to where the shuttle is, for
+  every stop, straight away: "🌴 Welcome aboard the shuttle bot! From now on I'll tell you where the shuttle is
+  whenever it leaves a stop, with a check-in every 30 minutes. Just send 'stop' or 'unsubscribe' whenever you want
+  to stop. Too chatty? Tap 🐢 below for calmer updates." Plain "stop" / "unsubscribe" (no slash) work like `/stop` /
   `/unsubscribe` in a private chat. In a group, `/start` shows the spot buttons.
-- **Rhythm**: every 15 min (default) or every 30 min, per subscription (`subscriptions.every_min`), switched with
-  the 🐢 Every 30 min / 🐇 Every 15 min button on every update, the welcome and `/subscribe`, or `/every30` /
-  `/every15`; confirmed in one line. The 30-min rhythm is the calm one: no instant "it just left" push, and its
-  updates don't promise one.
+- **When updates come** (useful, not just frequent): when the story changes — a shuttle goes out of sight or comes
+  back, a break starts or ends, it reaches the subscriber's own stop, a shuttle joins or leaves the shift — and,
+  on the default rhythm (`every_min` 15, 🐇 "Every move"), each time a shuttle leaves a stop. With nothing new, a
+  check-in every 30 min; never while nothing is in sight (said once: no "can't see it" every 15 min). The calm
+  rhythm (`every_min` 30, 🐢 "Calmer: every 30 min") has no instant "it just left" push and doesn't promise one.
+  Switched with the button on every update, the welcome and `/subscribe`, or `/every30` / `/every15`. The story
+  sent last rides in the outbox dedupe key (`update:<sub>:<ms>:<storyKey>`).
 - **Voice**: warm and a little playful, never at the cost of the facts: one emoji up front, a "chai break", the
   "scenic route", 🐄 Goa traffic; the lead sentence varies from a small pool by the minute (deterministic), the
   facts (times, minutes, stop names) never do. Short: one glance on a phone. Still never "late".
@@ -283,14 +291,18 @@ preview can't log anyone in. A signed session cookie lasts 60 days. Only admin n
   welcome; the first update of a driver's break (not every tick of it); "on its way to your stop", for a
   subscriber to one stop, at most once an hour; and the once-a-day "finished for today" goodnight. Files are
   served from the app's `/gifs/*.gif` on the one origin; if Telegram refuses the file the text still goes out.
-- **What an update says** (truth first, calm always): what the shuttle is doing now — waiting at a stop, on its
-  way (minutes, or a range when the estimate is wide), paused on the road, on a driver's break, or out of sight.
-  The timetable is only a hint where it can't mislead: a departure still ahead for a shuttle waiting at that stop
-  ("As per the schedule it leaves at 13:45, which gets it to Riva around 13:53"), or the next departures after a
-  break / while we can't see it. Never a planned time for a moving shuttle, never a time already gone, never
-  "late". A loop gives no departure promise, only the travel time once it leaves. An update also goes out as soon
-  as a shuttle leaves a stop ("I'll message you as soon as it starts moving"), and the 15 min count from there
-  (15-min rhythm only). After the day's last shuttle: one "🌙 … finished for today" goodnight, then quiet.
+- **What an update says** (truth first, calm always, and useful): what the shuttle is doing now — waiting at a
+  stop, on its way (minutes, or a range when the estimate is wide), paused on the road, on a driver's break — with
+  "Last seen 3 min ago" after a short drop. When we can't see it (the same ladder as the page): "I saw the shuttle
+  parked at Riva at 19:12. It might still be there…", "I've lost sight of the shuttle. I last saw it on its way to
+  Circle at 18:58…", or, with every shuttle silent for 30 min, "I can't see a shuttle on the road right now", each
+  with where to turn: ride share on the Telegram group, or the volunteers at Riva / Circle reception. A hidden
+  shuttle is left out while another one runs. The timetable is only a hint where it can't mislead: a departure
+  still ahead for a shuttle waiting at that stop ("As per the schedule it leaves at 13:45, which gets it to Riva
+  around 13:53"), or the next departures after a break. Never a planned time for a moving shuttle, never a time
+  already gone, never "late". A loop gives no departure promise, only the travel time once it leaves. After the
+  day's last shuttle: one "🌙 … finished for today" goodnight, then quiet. A `/need` request made while no
+  shuttle is in sight says so and points to the same help.
 - `/shuttle` (or just "riva" / "circle") → the same answer as the page ("Here in 6 min · live"), with spot buttons.
 - **"Tell me when it's close"**: a one-shot alert: "Message me when the shuttle is 5 min from Riva".
   The ETA engine fires it once, then it expires (after at most 2h).
