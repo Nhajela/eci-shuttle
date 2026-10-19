@@ -248,9 +248,10 @@ describe("runUpdates: what the shuttle is doing", () => {
   it("on a break or out of sight: says so calmly instead of a stale position", async () => {
     const { ws, riva, bus, actor, put } = await onDutyWorld();
     await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
-    await put({ phase: "at_spot", spotId: riva.id, since: later(-30), lastPingAt: later(-20) });
+    await put({ phase: "offline", spotId: riva.id, since: later(-18), lastPingAt: later(-20) });
     expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
-    expect(await htmlOf(ws.id)).toMatch(/I can't see where the shuttle is right now|out of sight for a moment/);
+    expect(await htmlOf(ws.id)).toContain("I can't see a shuttle on the road right now.");
+    expect(await htmlOf(ws.id)).toContain("ride share section of the Telegram group");
 
     await db()
       .insert(vehicleBreaks)

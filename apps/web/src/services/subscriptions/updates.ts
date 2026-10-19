@@ -23,6 +23,7 @@ import { encodeCallback } from "../bot/callbacks";
 import { type Gif, gifUrl } from "../bot/gifs";
 import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError, type TelegramButton } from "../kernel";
+import { FRESH_MS, sight } from "../public/sight";
 import { publicStatus } from "../public/status";
 import { departedSince, type ShuttleNow, storyText } from "./update-text";
 
@@ -30,8 +31,6 @@ export const UPDATE_EVERY_MS = 15 * 60_000;
 /** the rhythms a person can pick (schema CHECK subscriptions_every_min); 15 is the default */
 export const UPDATE_EVERY_MIN = [15, 30] as const;
 export type UpdateEveryMin = (typeof UPDATE_EVERY_MIN)[number];
-/** a position older than this is not "where the shuttle is" (same as the public answer) */
-const STALE_MS = 2 * 60_000;
 /** the worker runs every minute: a few seconds early still counts as due */
 const SLACK_MS = 30_000;
 
@@ -224,8 +223,9 @@ async function sentGifSince(db: Db, subscriptionId: string, gif: Gif, since: Dat
 
 /**
  * What each shuttle on a public service running now is doing (update-text.ShuttleNow): waiting at a stop, on its
- * way (or paused: the public answer says "stopped on the way"), off its route, on a driver's break, or out of sight
- * (no position in the last 2 min). No actor: like public/status, it only reads what attendees may know.
+ * way (or paused: the public answer says "stopped on the way"), off its route, on a driver's break, or, by how long
+ * we haven't seen it (public/sight.ts): parked at a stop, out of sight, or hidden. A short drop (≤ 5 min) keeps its
+ * last phase. No actor: like public/status, it only reads what attendees may know.
  */
 export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus, now: Date): Promise<ShuttleNow[]> {
   const serviceIds = [...new Set(st.spots.flatMap((s) => s.answers.map((l) => l.serviceId)))];
@@ -257,21 +257,27 @@ export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus,
     if ((s?.serviceId && s.serviceId !== r.serviceId) || seen.has(r.vehicle.id)) continue;
     seen.add(r.vehicle.id);
     const brk = breaks.get(r.vehicle.id);
-    const fresh = !!s?.lastPingAt && now.getTime() - s.lastPingAt.getTime() <= STALE_MS;
+    const v = sight(s, now.getTime());
+    const live = v.kind === "live" ? v.state : null;
+    const seenAgoMs = v.kind === "live" && v.ageMs > FRESH_MS ? v.ageMs : undefined;
     let state: ShuttleNow["state"];
     if (brk) state = { kind: "break", until: breakEnd(brk)?.getTime() ?? null, since: brk.startsAt.getTime() };
-    else if (!s || !fresh) state = { kind: "no_signal" };
-    else if (s.offRoute) state = { kind: "off_route" };
-    else if (s.phase === "at_spot" && s.spotId) state = { kind: "waiting", spotId: s.spotId, since: s.since.getTime() };
-    else if (s.phase === "en_route" && s.nextSpotId)
+    else if (v.kind === "hidden") state = { kind: "hidden", last: v.last };
+    else if (v.kind === "parked") state = { kind: "parked", spotId: v.spotId, last: v.last };
+    else if (!live) state = { kind: "no_signal", last: v.kind === "lost" ? v.last : null };
+    else if (live.offRoute) state = { kind: "off_route" };
+    else if (live.phase === "at_spot" && live.spotId)
+      state = { kind: "waiting", spotId: live.spotId, since: live.since.getTime(), seenAgoMs };
+    else if (live.phase === "en_route" && live.nextSpotId)
       state = {
         kind: "moving",
-        toSpotId: s.nextSpotId,
-        fromSpotId: s.spotId,
-        since: s.since.getTime(),
+        toSpotId: live.nextSpotId,
+        fromSpotId: live.spotId,
+        since: live.since.getTime(),
         stopped: paused(r.vehicle.name),
+        seenAgoMs,
       };
-    else state = { kind: "no_signal" };
+    else state = { kind: "no_signal", last: null };
     out.push({
       name: r.vehicle.name,
       serviceId: r.serviceId,

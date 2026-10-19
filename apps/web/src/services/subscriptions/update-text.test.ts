@@ -56,7 +56,6 @@ const MOVE_PROMISE =
   /(I'll message you as soon as it starts moving|I'll ping you the moment it starts moving|The second it rolls, you'll hear from me)\./;
 const ROAD_PROMISE =
   /(I'll message you as soon as it's on the road again|You'll hear from me the moment it's rolling again)\./;
-const NO_SIGNAL = /📡 (I can't see where the shuttle is right now|The shuttle is out of sight for a moment)\./;
 const CIRCLE_TIMES = ["13:05", "13:45", "14:25", "15:05"];
 
 const shuttle = (state: ShuttleNow["state"], name = "Shuttle 1"): ShuttleNow => ({
@@ -270,19 +269,12 @@ describe("storyText: not running now", () => {
     expect(text).toMatch(ROAD_PROMISE);
   });
 
-  it("no signal: says live tracking is off, then the schedule", () => {
-    const spots = [spot(RIVA, "Riva", [off], RIVA_TIMES), spot(CIRCLE, "Circle", [off], CIRCLE_TIMES)];
-    const text = storyText({ shuttles: [shuttle({ kind: "no_signal" })], spots, focusSpotId: RIVA, now: NOW + 1 });
-    expect(text).toMatch(NO_SIGNAL);
-    expect(text).toContain("\nAs per the schedule, the next one leaves Riva around <b>14:00</b>.");
-  });
-
   it("nothing running at the subscriber's stops → null (the job stays quiet)", () => {
     const done = line({ serviceId: SVC, kind: "none", minutes: null, phaseText: "no more shuttles today" });
     const first = line({ serviceId: SVC, kind: "timetable", minutes: null, phaseText: "first shuttle today" });
     expect(
       storyText({
-        shuttles: [shuttle({ kind: "no_signal" })],
+        shuttles: [shuttle({ kind: "no_signal", last: null })],
         spots: [spot(RIVA, "Riva", [done]), spot(CIRCLE, "Circle", [first])],
         focusSpotId: null,
         now: NOW,
@@ -293,6 +285,105 @@ describe("storyText: not running now", () => {
   it("no shuttle known but a live answer: falls back to the stop answers", () => {
     const text = storyText({ shuttles: [], spots: [spot(RIVA, "Riva", [live(6)])], focusSpotId: null, now: NOW });
     expect(text).toBe("<b>Riva long name</b>\nShuttle: here in <b>6 min</b> (5–9) · live");
+  });
+});
+
+describe("storyText: when we can't see the shuttle", () => {
+  const T = at("13:18");
+  const leftRiva = { at: at("13:10"), atSpotId: null, fromSpotId: RIVA, toSpotId: CIRCLE };
+  const spots = () => [spot(RIVA, "Riva", [off], [], 38), spot(CIRCLE, "Circle", [off], [], 38)];
+  const HELP =
+    "If you need to get going: try the ride share section of the Telegram group, or ask the volunteers at Riva or Circle reception.";
+
+  it("a short drop (≤ 5 min) keeps what it was doing, and says how old that is", () => {
+    const text = storyText({
+      shuttles: [
+        shuttle({
+          kind: "moving",
+          toSpotId: CIRCLE,
+          fromSpotId: RIVA,
+          since: T - min(4),
+          stopped: false,
+          seenAgoMs: min(3),
+        }),
+      ],
+      spots: [spot(RIVA, "Riva", [live(20)]), spot(CIRCLE, "Circle", [live(4)])],
+      focusSpotId: null,
+      now: T,
+    }) as string;
+    expect(text).toMatch(MOVING("Circle"));
+    expect(text).toContain("\nLast seen 3 min ago.");
+  });
+
+  it("lost: says so once, where it was last seen, and where to turn; no timetable guesses", () => {
+    const text = storyText({
+      shuttles: [shuttle({ kind: "no_signal", last: leftRiva })],
+      spots: spots(),
+      focusSpotId: null,
+      now: T,
+    });
+    expect(text).toBe(
+      "📡 <b>I've lost sight of the shuttle.</b> I last saw it on its way to Circle at 13:10. " +
+        "It's probably still running, but I can't give you times right now.\n" +
+        `${HELP}\nI'll tell you as soon as I can see it again.`,
+    );
+  });
+
+  it("parked: last seen at a stop, it might still be there", () => {
+    const last = { at: at("13:05"), atSpotId: RIVA, fromSpotId: null, toSpotId: null };
+    const text = storyText({
+      shuttles: [shuttle({ kind: "parked", spotId: RIVA, last })],
+      spots: spots(),
+      focusSpotId: RIVA,
+      now: T,
+    });
+    expect(text).toBe(
+      "🚐 <b>I saw the shuttle parked at Riva at 13:05.</b> It might still be there. I'm not sure, but it's worth checking.\n" +
+        "If it's gone, the volunteers at Riva reception can help, or try the ride share section of the Telegram group.",
+    );
+  });
+
+  it("hidden (silent 30 min): left out while another shuttle runs", () => {
+    const text = storyText({
+      shuttles: [
+        shuttle({ kind: "moving", toSpotId: CIRCLE, fromSpotId: RIVA, since: T, stopped: false }),
+        shuttle({ kind: "hidden", last: leftRiva }, "Shuttle 2"),
+      ],
+      spots: [spot(RIVA, "Riva", [live(20)]), spot(CIRCLE, "Circle", [live(4)])],
+      focusSpotId: null,
+      now: T,
+    }) as string;
+    expect(text).toMatch(MOVING("Circle"));
+    expect(text).not.toContain("Shuttle 2");
+    expect(text.split("\n\n")).toHaveLength(1);
+  });
+
+  it("every shuttle hidden: no shuttle we can see, the last one seen today, and where to turn", () => {
+    const text = storyText({
+      shuttles: [shuttle({ kind: "hidden", last: leftRiva }), shuttle({ kind: "hidden", last: null }, "Shuttle 2")],
+      spots: spots(),
+      focusSpotId: null,
+      now: at("16:05"),
+    });
+    expect(text).toBe(
+      "📡 <b>I can't see a shuttle on the road right now.</b> The last one I saw was on its way to Circle at 13:10. " +
+        "One may still be running, but I can't tell you when it'll come.\n" +
+        `${HELP}\nI'll message you the moment I see a shuttle again.`,
+    );
+  });
+
+  it("one lost beside one running: a short line for the lost one, no advice (there's a shuttle)", () => {
+    const text = storyText({
+      shuttles: [
+        shuttle({ kind: "moving", toSpotId: CIRCLE, fromSpotId: RIVA, since: T, stopped: false }),
+        shuttle({ kind: "no_signal", last: leftRiva }, "Shuttle 2"),
+      ],
+      spots: [spot(RIVA, "Riva", [live(20)]), spot(CIRCLE, "Circle", [live(4)])],
+      focusSpotId: null,
+      now: T,
+    }) as string;
+    expect(text).toContain("📡 I've lost sight of Shuttle 2. I last saw it on its way to Circle at 13:10.");
+    expect(text).not.toContain("ride share");
   });
 });
 
