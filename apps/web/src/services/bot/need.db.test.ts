@@ -137,6 +137,24 @@ describe("/need", () => {
     expect(to.send[0].html).toBe("Hmm, no other stop has a shuttle right now. 😴");
   });
 
+  it("no shuttle in sight: the request still goes in, but says so honestly and where to turn", async () => {
+    const { ctx, riva, circle, st } = await setup();
+    const blind = line({ kind: "timetable", minutes: null, phaseText: "can't see it right now", vehicleName: null });
+    vi.mocked(publicStatus).mockResolvedValue({ ...st, spots: st.spots.map((s) => ({ ...s, answers: [blind] })) });
+    const r = await onNeed(ctx, "riva circle");
+    expect(r.send[0].html).toContain("🙌 Got it: a shuttle from Riva to Circle.");
+    expect(r.send[0].html).toContain("I can't see a shuttle on the road right now");
+    expect(r.send[0].html).toContain(
+      "the ride share section of the Telegram group, or ask the volunteers at Riva reception",
+    );
+    expect(await open(ctx)).toHaveLength(1);
+    expect(circle).toBeTruthy();
+    // with a shuttle in sight, no such warning
+    vi.mocked(publicStatus).mockResolvedValue(st);
+    expect((await onNeed(ctx, "riva circle")).send[0].html).not.toContain("ride share");
+    expect(riva).toBeTruthy();
+  });
+
   it("/stop cancels the request and says so", async () => {
     const { ctx } = await setup();
     await onNeed(ctx, "riva circle");

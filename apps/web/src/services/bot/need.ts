@@ -54,10 +54,18 @@ async function requested(ctx: BotContext, fromSpotId: string, toSpotId: string):
     ctx.now,
   );
   const name = async (id: string) => (await findInWorkspace(ctx.db, spots, ctx.workspace.id, id))?.shortName ?? "";
+  const from = esc(await name(fromSpotId));
+  // no live answer at their stop: we can't see a shuttle, so don't let them wait on a promise alone
+  const st = await publicStatus(ctx.db, ctx.workspace.id, ctx.now);
+  const inSight = st.spots.find((s) => s.spotId === fromSpotId)?.answers.some((l) => l.kind === "live") ?? false;
   const html =
-    `🙌 Got it: a shuttle from ${esc(await name(fromSpotId))} to ${esc(await name(toSpotId))}. The shuttle team knows. ` +
+    `🙌 Got it: a shuttle from ${from} to ${esc(await name(toSpotId))}. The shuttle team knows. ` +
     "I'll message you the moment it's here." +
-    (replaced ? " This replaces your earlier request." : "");
+    (replaced ? " This replaces your earlier request." : "") +
+    (inSight
+      ? ""
+      : "\n\n📡 I can't see a shuttle on the road right now, so I can't say when one will come. If you need to get " +
+        `going: try the ride share section of the Telegram group, or ask the volunteers at ${from} reception.`);
   return say(ctx, html, [[btn("Cancel request", "needx", request.id)]]);
 }
 
