@@ -282,3 +282,35 @@ function hint(
   const every = focus.flatMap((s) => s.schedule.loops).find((l) => serviceIds.includes(l.serviceId))?.everyMin;
   return every ? `${loopLead} about every ${every} min.` : null;
 }
+
+/** a shuttle's state as far as "did anything change" goes (storyKey) */
+const UNSEEN = "unseen";
+
+/**
+ * What an update is about, per shuttle on shift: "seen" (waiting or moving anywhere: a departure is its own push),
+ * "here" (waiting at the subscriber's own stop), "break", or "unseen" (parked, lost or hidden: one outage is told
+ * once). The updates job sends when this changes, plus a check-in when nothing has for a while. No colons: it
+ * rides in the outbox dedupe key.
+ */
+export function storyKey(shuttles: ShuttleNow[], focusSpotId: string | null): string {
+  const of = (st: ShuttleState) => {
+    switch (st.kind) {
+      case "waiting":
+        return st.spotId === focusSpotId ? "here" : "seen";
+      case "moving":
+      case "off_route":
+        return "seen";
+      case "break":
+        return "break";
+      default:
+        return UNSEEN;
+    }
+  };
+  return shuttles
+    .map((s) => `${encodeURIComponent(s.name)}=${of(s.state)}`)
+    .sort()
+    .join(",");
+}
+
+/** Nothing in sight (or no shuttle on shift): after saying so once, check-ins would only repeat it. */
+export const allUnseen = (key: string) => key === "" || key.split(",").every((k) => k.endsWith(`=${UNSEEN}`));

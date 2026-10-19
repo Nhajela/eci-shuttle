@@ -4,7 +4,7 @@
  * Subscribing is audited (subscription.create); sending is worker bookkeeping (last_sent_at), not audited.
  */
 import { istDate, type PublicSpot, type PublicStatus } from "@eci-shuttle/shared";
-import { and, eq, gt, inArray, isNull, like, lte, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, like, lte, type SQL, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import {
@@ -25,7 +25,7 @@ import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError, type TelegramButton } from "../kernel";
 import { FRESH_MS, sight } from "../public/sight";
 import { publicStatus } from "../public/status";
-import { departedSince, type ShuttleNow, storyText } from "./update-text";
+import { allUnseen, departedSince, type ShuttleNow, storyKey, storyText } from "./update-text";
 
 export const UPDATE_EVERY_MS = 15 * 60_000;
 /** the rhythms a person can pick (schema CHECK subscriptions_every_min); 15 is the default */
@@ -33,6 +33,8 @@ export const UPDATE_EVERY_MIN = [15, 30] as const;
 export type UpdateEveryMin = (typeof UPDATE_EVERY_MIN)[number];
 /** the worker runs every minute: a few seconds early still counts as due */
 const SLACK_MS = 30_000;
+/** with nothing new, a short check-in this often (never while nothing is in sight: that was said once) */
+export const CHECK_IN_MS = 30 * 60_000;
 
 const open = and(isNull(subscriptions.firedAt), isNull(subscriptions.cancelledAt)) as SQL;
 
@@ -222,6 +224,21 @@ async function sentGifSince(db: Db, subscriptionId: string, gif: Gif, since: Dat
 }
 
 /**
+ * The storyKey of this subscription's last update (in its outbox dedupe key: `update:<sub>:<ms>:<key>`), or null
+ * when there is none (the outbox keeps a day or so; older rows carry no key).
+ */
+async function lastStoryKey(db: Db, subscriptionId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ key: outbox.dedupeKey })
+    .from(outbox)
+    .where(and(like(outbox.dedupeKey, `update:${subscriptionId}:%`), sql`${outbox.dedupeKey} not like '%:end:%'`))
+    .orderBy(desc(outbox.runAfter))
+    .limit(1);
+  const parts = row?.key?.split(":") ?? [];
+  return parts.length >= 4 ? parts.slice(3).join(":") : null;
+}
+
+/**
  * What each shuttle on a public service running now is doing (update-text.ShuttleNow): waiting at a stop, on its
  * way (or paused: the public answer says "stopped on the way"), off its route, on a driver's break, or, by how long
  * we haven't seen it (public/sight.ts): parked at a stop, out of sight, or hidden. A short drop (≤ 5 min) keeps its
@@ -305,11 +322,14 @@ export async function currentUpdate(
  * The updates job (every minute), over every open `updates` subscription (blocked-bot people skipped):
  * - the day's shuttles are over at its stop(s) and it got an update today → one "finished for today" message
  *   (day_ended_on = today); it stays on, so updates start again when the shuttle runs the next day;
- * - else, its last update ≥ every_min (15 or 30) old, or, on the 15-min rhythm, a shuttle left a stop since it
- *   (the update promised "as soon as it starts moving"), and a shuttle running there → what the shuttle is doing
- *   now (update-text.storyText), with a "Stop updates" button. The 30-min rhythm is the calm one: no instant
- *   departure push, and its updates make no such promise. last_sent_at moves only when something is sent, and
- *   only the run that moves it sends.
+ * - else, while a shuttle runs there, what the shuttle is doing now (update-text.storyText, with a "Stop updates"
+ *   button) when there is news: its storyKey changed since the last update (out of sight, back in view, a break
+ *   starts or ends, it reaches the subscriber's own stop, a shuttle joins or leaves the shift), or, on the 15-min
+ *   rhythm, a shuttle left a stop (the update promised "as soon as it starts moving"). With no news, a check-in
+ *   every 30 min, except while nothing is in sight (said once already). The 30-min rhythm is the calm one: no
+ *   instant departure push, and its updates make no such promise. Without per-shuttle states (no vehicle on
+ *   shift) it falls back to every every_min. last_sent_at moves only when something is sent, and only the run
+ *   that moves it sends; the storyKey sent rides in the outbox dedupe key.
  * GIF moments (updateGif): the goodnight on "finished for today", the first update of a break, and "on its way to
  * your stop" for a one-stop subscriber at most once an hour.
  */
@@ -348,7 +368,23 @@ export async function runUpdates(
     // the instant "it just left" push belongs to the 15-min rhythm; 30 min is the calm one
     const instant = sub.everyMin === 15;
     const departed = instant && departedSince(shuttles, last);
-    const due = last <= now.getTime() - sub.everyMin * 60_000 + SLACK_MS || departed;
+    const key = shuttles.length ? storyKey(shuttles, sub.spotId) : null;
+    let due: boolean;
+    if (key === null) due = last <= now.getTime() - sub.everyMin * 60_000 + SLACK_MS || departed;
+    else {
+      // no earlier key (just subscribed: the reply showed where it was) → as if every shuttle was in sight
+      const before =
+        (await lastStoryKey(db, sub.id)) ??
+        storyKey(
+          shuttles.map((s) => ({
+            ...s,
+            state: { kind: "moving", toSpotId: "", fromSpotId: null, since: 0, stopped: false },
+          })),
+          sub.spotId,
+        );
+      const checkIn = last <= now.getTime() - CHECK_IN_MS + SLACK_MS && !allUnseen(key);
+      due = before !== key || departed || checkIn;
+    }
     const html = over
       ? DAY_OVER_TEXT
       : due
@@ -394,7 +430,7 @@ export async function runUpdates(
               }),
         },
         workspaceId: sub.workspaceId,
-        dedupeKey: `update:${sub.id}:${over ? `end:${today}` : now.getTime()}`,
+        dedupeKey: `update:${sub.id}:${over ? `end:${today}` : `${now.getTime()}${key === null ? "" : `:${key}`}`}`,
         runAfter: now,
       });
       return true;

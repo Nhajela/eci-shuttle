@@ -222,7 +222,10 @@ describe("runUpdates: what the shuttle is doing", () => {
     const { ws, riva, actor, put } = await onDutyWorld();
     await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
     await put({ phase: "at_spot", spotId: riva.id, since: later(10), lastPingAt: later(15) });
-    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    // nothing changed since they subscribed: no repeat at 15 min, a check-in at 30
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    await put({ phase: "at_spot", spotId: riva.id, since: later(10), lastPingAt: later(30) });
+    expect(await runUpdates(db(), later(30), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
     const html = await htmlOf(ws.id);
     expect(html).toMatch(/<b>The shuttle (is waiting at|is parked at|is hanging out at) Riva<\/b> for passengers\./);
     expect(html).toContain("Once it leaves, Circle is about 8 min away.");
@@ -240,9 +243,10 @@ describe("runUpdates: what the shuttle is doing", () => {
       /<b>The shuttle (is on its way to|is rolling towards|is heading to) Circle<\/b> and should be there in about/,
     );
     expect(await runUpdates(db(), later(8), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
-    // and the 15 min count again from that message
-    expect(await runUpdates(db(), later(20), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
-    expect(await runUpdates(db(), later(21), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    // nothing new after that: the next check-in is 30 min after that message
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(5), lastPingAt: later(36) });
+    expect(await runUpdates(db(), later(21), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(36), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
   });
 
   it("on a break or out of sight: says so calmly instead of a stale position", async () => {
@@ -260,8 +264,42 @@ describe("runUpdates: what the shuttle is doing", () => {
     expect(await htmlOf(ws.id, 1)).toContain("<b>The shuttle is on a short chai break.</b>");
     // the first update of a break brings the GIF; the next tick of the same break doesn't
     expect(await payloadOf(ws.id, 1)).toMatchObject({ animation: "http://localhost:3000/gifs/break.gif" });
-    expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    // the same break 15 min later is no news; the check-in 30 min on has no GIF
+    expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect(await runUpdates(db(), later(60), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
     expect(await payloadOf(ws.id, 2)).not.toHaveProperty("animation");
+  });
+
+  it("out of sight: said once, then quiet (no check-ins) until it's back", async () => {
+    const { ws, riva, circle, actor, put } = await onDutyWorld();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: null }, NOW);
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(-5), lastPingAt: later(0) });
+    expect(await runUpdates(db(), later(1), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    // a 4-min drop is not news
+    expect(await runUpdates(db(), later(4), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    await put({ phase: "offline", since: later(2) });
+    expect(await runUpdates(db(), later(7), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await htmlOf(ws.id)).toContain("I've lost sight of the shuttle.");
+    for (const t of [22, 37, 52, 67, 82, 97, 112])
+      expect(await runUpdates(db(), later(t), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    // back in view
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(113), lastPingAt: later(113) });
+    expect(await runUpdates(db(), later(113), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await htmlOf(ws.id, 1)).toMatch(/is on its way to|is rolling towards|is heading to/);
+  });
+
+  it("arriving at the subscriber's own stop is news; at another stop it isn't", async () => {
+    const { ws, riva, circle, actor, put } = await onDutyWorld();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: circle.id }, NOW);
+    await put({ phase: "at_spot", spotId: riva.id, since: later(-2), lastPingAt: later(1) });
+    expect(await runUpdates(db(), later(1), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(2), lastPingAt: later(3) });
+    expect(await runUpdates(db(), later(3), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    await put({ phase: "at_spot", spotId: circle.id, since: later(10), lastPingAt: later(10) });
+    expect(await runUpdates(db(), later(10), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    expect(await htmlOf(ws.id, 1)).toMatch(
+      /is at Circle now|is right here at Circle|is at Circle, right where you are/,
+    );
   });
 
   it("'on its way to your stop' brings a GIF for a one-stop subscriber, at most once an hour; never for all stops", async () => {

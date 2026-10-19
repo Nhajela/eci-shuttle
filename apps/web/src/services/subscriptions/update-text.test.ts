@@ -1,7 +1,7 @@
 import type { AnswerLine, PublicSpot, ScheduleRow } from "@eci-shuttle/shared";
 import { line } from "@tests/factories/bot-attendee";
 import { describe, expect, it } from "vitest";
-import { departedSince, type ShuttleNow, storyText } from "./update-text";
+import { allUnseen, departedSince, type ShuttleNow, storyKey, storyText } from "./update-text";
 
 const SVC = "00000000-0000-4000-8000-000000000000";
 const RIVA = "11111111-1111-4111-8111-111111111111";
@@ -412,5 +412,39 @@ describe("departedSince", () => {
     const noFrom = shuttle({ kind: "moving", toSpotId: RIVA, fromSpotId: null, since: NOW, stopped: false });
     expect(departedSince([noFrom], NOW - 1)).toBe(false);
     expect(departedSince([shuttle({ kind: "waiting", spotId: RIVA, since: NOW })], NOW - 1)).toBe(false);
+  });
+});
+
+describe("storyKey: what an update is about, so the job can tell whether anything changed", () => {
+  const moving = shuttle({ kind: "moving", toSpotId: RIVA, fromSpotId: CIRCLE, since: NOW, stopped: false });
+  const waitingRiva = shuttle({ kind: "waiting", spotId: RIVA, since: NOW });
+  const lost = (last = null) => shuttle({ kind: "no_signal", last });
+
+  it("in sight, wherever it is, is one state for an every-stop subscriber; at your own stop is its own", () => {
+    expect(storyKey([moving], null)).toBe(storyKey([waitingRiva], null));
+    expect(storyKey([waitingRiva], RIVA)).not.toBe(storyKey([moving], RIVA));
+    expect(storyKey([waitingRiva], CIRCLE)).toBe(storyKey([moving], CIRCLE));
+  });
+
+  it("parked, lost and hidden are one 'out of sight' state: an outage is told once", () => {
+    const last = { at: NOW, atSpotId: RIVA, fromSpotId: null, toSpotId: null };
+    const k = storyKey([lost()], null);
+    expect(storyKey([shuttle({ kind: "parked", spotId: RIVA, last })], null)).toBe(k);
+    expect(storyKey([shuttle({ kind: "hidden", last: null })], null)).toBe(k);
+    expect(storyKey([moving], null)).not.toBe(k);
+  });
+
+  it("a break, and which shuttles are on shift, are changes", () => {
+    expect(storyKey([shuttle({ kind: "break", until: null, since: NOW })], null)).not.toBe(storyKey([moving], null));
+    expect(storyKey([moving, lost()], null)).not.toBe(storyKey([moving], null));
+  });
+
+  it("never contains a colon (it rides in the outbox dedupe key)", () => {
+    expect(storyKey([shuttle({ kind: "no_signal", last: null }, "Bus: 1")], null)).not.toContain(":");
+  });
+
+  it("allUnseen: nothing in sight", () => {
+    expect(allUnseen(storyKey([lost(), shuttle({ kind: "hidden", last: null }, "B")], null))).toBe(true);
+    expect(allUnseen(storyKey([lost(), moving], null))).toBe(false);
   });
 });
