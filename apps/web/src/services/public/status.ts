@@ -42,8 +42,8 @@ import type { LegStat, Notice, Route, Service, Spot, VehicleState } from "@/db/t
 import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { activeNotices } from "../notices/notices";
+import { FRESH_MS, type LastSeen, lastSeenText, sight } from "./sight";
 
-const STALE_MS = 2 * 60_000;
 const MATCH_WINDOW_MS = 25 * 60_000;
 const MIN_SAMPLES = 5;
 const BASELINE_MPS = 25 / 3.6;
@@ -51,6 +51,10 @@ const BASELINE_DWELL_S = 180;
 const DAY = 86_400_000;
 /** A loop whose every shuttle is on a driver's break (never says why it is late: there is no "late"). */
 export const ON_BREAK = "on a short break";
+/** Every shuttle on the service is out of sight (sight.ts lost / hidden); "· last seen …" may follow. */
+export const CANT_SEE = "can't see it right now";
+/** The freshest shuttle was last seen inside a stop 5–15 min ago: "last seen at Riva at 19:12 · may still be there". */
+export const MAY_STILL_BE_THERE = "may still be there";
 
 const addDays = (date: string, n: number) => istDate(istToEpoch(date, "00:00") + n * DAY);
 const weekday = (date: string) => ((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7) + 1;
@@ -84,10 +88,14 @@ type Running = {
 /**
  * The whole public status of a workspace at `now`. Spots = those on a public service running today, in route
  * order. Per spot, one AnswerLine per public service serving it:
- * - live: a vehicle on that service with a ping ≤ 2 min old → etaToSpot minutes, p20–p80 range, approx when
- *   basis is "estimate", phaseText ("leaving Circle now", "at Riva", "on the way"), lastSeenS.
+ * - live: a vehicle on that service seen in the last 5 min (sight.ts; a short network drop keeps its last phase)
+ *   → etaToSpot minutes, p20–p80 range, approx when basis is "estimate", phaseText ("leaving Circle now",
+ *   "at Riva", "on the way"), lastSeenS.
  * - timetable: no live data → next planned departure from that spot today (learned typical time for the
- *   slot when known), phaseText "live tracking off".
+ *   slot when known). phaseText says what we know of its shuttles: last seen at a stop 5–15 min ago ("last seen
+ *   at Riva at 19:12 · may still be there"), out of sight ("can't see it right now · last seen …"), or "live
+ *   tracking off" when none is assigned. A shuttle silent for 30 min is hidden: it no longer counts for "about
+ *   every N min".
  * - none: nothing more today ("no more shuttles today").
  * Notices: everywhere / spot / service / schedule placements active at now (notices.activeNotices), pinned first
  * by sort, then urgent first, then newest. Schedule rows: today's departures from the spot, past/next flags;
@@ -269,6 +277,7 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
           times,
           everyMin,
           live.byService.get(svcId) ?? [],
+          blindText(live.unseen.get(svcId) ?? [], (id) => spotById.get(id)?.shortName ?? "a stop", nowMs),
           // only when no shuttle on it is left working
           live.assigned.get(svcId) ? null : (live.breaks.get(svcId) ?? null),
           typical,
@@ -325,14 +334,31 @@ function cycleMin(r: Running, vehicleCount: number): number {
 }
 
 type Live = { vehicle: { id: string; name: string }; state: VehicleState; stopped: boolean };
+/** A shuttle on shift that we can't see now (sight.ts parked / lost / hidden). */
+type Unseen = { parked: boolean; last: LastSeen | null };
+
+/**
+ * What a line says when none of its shuttles is live: the freshest last-seen wins. Last seen inside a stop
+ * (parked) → "last seen at Riva at 19:12 · may still be there"; otherwise "can't see it right now", with where it
+ * was last seen when that was today. null when the service has no shuttle on shift.
+ */
+function blindText(unseen: Unseen[], name: (spotId: string) => string, nowMs: number): string | null {
+  if (!unseen.length) return null;
+  const latest = [...unseen].sort((a, b) => (b.last?.at ?? 0) - (a.last?.at ?? 0))[0] as Unseen;
+  const where = latest.last && lastSeenText(latest.last, name, nowMs);
+  if (latest.parked && where) return `last seen ${where} · ${MAY_STILL_BE_THERE}`;
+  return where ? `${CANT_SEE} · last seen ${where}` : CANT_SEE;
+}
 
 async function liveVehicles(db: Db, workspaceId: string, running: Running[], nowMs: number) {
   const byService = new Map<string, Live[]>();
+  /** per service, its shuttles on shift that we can't see now */
+  const unseen = new Map<string, Unseen[]>();
   const assigned = new Map<string, number>();
   /** per service, the end of each of its vehicles' breaks (null = open-ended) */
   const breaks = new Map<string, (number | null)[]>();
   const ids = running.map((r) => r.svc.id);
-  if (!ids.length) return { byService, assigned, breaks };
+  if (!ids.length) return { byService, unseen, assigned, breaks };
   const now = new Date(nowMs);
   const onBreak = await activeBreaks(db, workspaceId, now);
   const rows = await db
@@ -359,18 +385,30 @@ async function liveVehicles(db: Db, workspaceId: string, running: Running[], now
       breaks.set(r.serviceId, [...(breaks.get(r.serviceId) ?? []), breakEnd(brk)?.getTime() ?? null]);
       continue;
     }
+    const v = sight(s, nowMs);
+    const blind = (u: Unseen) => unseen.set(r.serviceId, [...(unseen.get(r.serviceId) ?? []), u]);
+    // silent for 30 min: not running as far as attendees can tell, so not one of the shuttles sharing the loop
+    if (v.kind === "hidden") {
+      blind({ parked: false, last: v.last });
+      continue;
+    }
     assigned.set(r.serviceId, (assigned.get(r.serviceId) ?? 0) + 1);
-    const fresh = s?.lastPingAt && nowMs - s.lastPingAt.getTime() <= STALE_MS;
-    if (!s || !fresh || s.serviceId !== r.serviceId || (s.phase !== "at_spot" && s.phase !== "en_route")) continue;
+    if (v.kind !== "live") {
+      blind({ parked: v.kind === "parked", last: v.last });
+      continue;
+    }
+    const st = v.state;
+    if (st.serviceId !== r.serviceId) continue;
     const list = byService.get(r.serviceId) ?? [];
     list.push({
       vehicle: r.vehicle,
-      state: s,
-      stopped: s.phase === "en_route" && (await isStopped(db, s.vehicleId, nowMs)),
+      state: st,
+      // "stopped on the way" needs fresh pings; a short drop isn't a stop
+      stopped: st.phase === "en_route" && v.ageMs <= FRESH_MS && (await isStopped(db, st.vehicleId, nowMs)),
     });
     byService.set(r.serviceId, list);
   }
-  return { byService, assigned, breaks };
+  return { byService, unseen, assigned, breaks };
 }
 
 /** En route but not moving: ≥ 3 pings in the last 3 min, spanning ≥ 2 min, all at walking pace or less. */
@@ -424,6 +462,8 @@ function answerFor(
   times: number[],
   everyMin: number | null,
   live: Live[],
+  /** blindText for its shuttles on shift that we can't see, or null */
+  blind: string | null,
   /** set only when every vehicle on the service is on a break: when each break ends (null = open-ended) */
   breaks: (number | null)[] | null,
   typical: Map<string, number>,
@@ -534,7 +574,7 @@ function answerFor(
       };
     }
     if (nowMs < end)
-      return { ...base, kind: "timetable", phaseText: `about every ${everyMin} min · live tracking off` };
+      return { ...base, kind: "timetable", phaseText: blind ?? `about every ${everyMin} min · live tracking off` };
     return base;
   }
   // pick on the learned typical time: a 10:00 that usually leaves 10:04 is still next at 10:02.
@@ -548,7 +588,7 @@ function answerFor(
     kind: "timetable",
     nextAt: iso(nextAt),
     nextAtLabel: istHHMM(nextAt),
-    phaseText: times[0] === next ? "first shuttle today" : "live tracking off",
+    phaseText: times[0] === next ? "first shuttle today" : (blind ?? "live tracking off"),
   };
 }
 

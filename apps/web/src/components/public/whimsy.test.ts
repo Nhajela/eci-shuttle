@@ -57,9 +57,22 @@ describe("mood: the little line of whimsy next to the answer", () => {
   });
 
   it("treats a stale live line like a timetable line", () => {
-    const m = mood(live(2, { lastSeenS: 200, nextAtLabel: "10:20" }), 0, 10);
+    const m = mood(live(2, { lastSeenS: 400, nextAtLabel: "10:20" }), 0, 10);
     expect(m.text).not.toMatch(/almost/i);
     expect(m.text).toMatch(/timetable/i);
+  });
+
+  it("can't see the shuttle: points to ride share and the volunteers at reception", () => {
+    const m = mood({ ...base, phaseText: "can't see it right now · last seen on its way to Circle at 09:20" }, 0, 10);
+    expect(m.text).toMatch(/ride share/i);
+    expect(m.text).toMatch(/reception/i);
+    expect(m.text).not.toMatch(/timetable/i);
+  });
+
+  it("last seen at a stop: worth a look, and who can help if it's gone", () => {
+    const m = mood({ ...base, phaseText: "last seen at Riva at 19:12 · may still be there" }, 0, 10);
+    expect(m.text).toMatch(/worth a look/i);
+    expect(m.text).toMatch(/reception/i);
   });
 
   it("says the driver is on a chai break", () => {

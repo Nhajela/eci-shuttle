@@ -8,7 +8,13 @@ export type Mood = { emoji: string; text: string };
 
 /** status.ts ON_BREAK */
 const ON_BREAK = "on a short break";
-const STALE_S = 120;
+/** status.ts CANT_SEE / MAY_STILL_BE_THERE */
+const CANT_SEE = "can't see it right now";
+const MAY_STILL_BE_THERE = "may still be there";
+/** services/public/sight.ts LIVE_MS */
+const STALE_S = 300;
+/** where to turn when we can't see the shuttle: truthful, and useful */
+export const HELP = "ride share on the Telegram group, or the volunteers at reception";
 
 export type DayPart = "night" | "morning" | "day" | "evening";
 
@@ -22,7 +28,8 @@ export function dayPart(hour: number): DayPart {
 
 /**
  * `ageS` = how old the answer is (added to last seen, like answerParts); `hour` = IST hour now.
- * A live line older than 2 min reads as a timetable line, so the whimsy never outruns the facts.
+ * A live line older than 5 min reads as a timetable line, so the whimsy never outruns the facts. A shuttle we
+ * can't see gets no whimsy: where to turn instead.
  */
 export function mood(line: AnswerLine, ageS: number, hour: number): Mood {
   const part = dayPart(hour);
@@ -36,6 +43,9 @@ export function mood(line: AnswerLine, ageS: number, hour: number): Mood {
   }
   if (line.kind === "live" || line.kind === "timetable") {
     if (line.phaseText === ON_BREAK) return { emoji: "☕", text: "Driver's on a chai break. Back soon." };
+    if (line.phaseText.endsWith(MAY_STILL_BE_THERE))
+      return { emoji: "👀", text: `It might still be there, worth a look. If it's gone: ${HELP}.` };
+    if (line.phaseText.startsWith(CANT_SEE)) return { emoji: "📡", text: `Can't wait? Try ${HELP}.` };
     if (line.phaseText === "first shuttle today")
       return { emoji: part === "night" ? "🌙" : "☀️", text: "Still waking up. First shuttle is on the way." };
     if (line.nextAtLabel) return { emoji: "🗓️", text: "Running on the timetable for now." };

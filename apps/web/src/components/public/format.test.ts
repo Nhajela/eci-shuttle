@@ -103,27 +103,55 @@ describe("live with no minutes (the only vehicle is off route) never says 'No mo
   });
 });
 
-describe("stale live data (>2 min since last seen) never pretends to be live", () => {
-  it("no minutes once lastSeenS + ageS > 120", () => {
-    const p = answerParts(line(), true, 200);
+describe("stale live data (>5 min since last seen) never pretends to be live", () => {
+  it("no minutes once lastSeenS + ageS > 300", () => {
+    const p = answerParts(line(), true, 400);
     expect(p.value).not.toMatch(/min/);
     expect(p).toEqual({ label: "Shuttle", value: "Running now", range: null, small: true });
   });
 
   it("falls back to the next scheduled time when known", () => {
-    expect(answerParts(line({ nextAtLabel: "09:40" }), true, 200)).toEqual({
+    expect(answerParts(line({ nextAtLabel: "09:40" }), true, 400)).toEqual({
       label: "Next scheduled",
       value: "09:40",
       range: null,
     });
   });
 
-  it("still live at exactly 120s", () => {
-    expect(answerParts(line(), true, 108).value).toBe("6 min");
+  it("still live at exactly 300s: a short network drop isn't 'out of sight'", () => {
+    expect(answerParts(line(), true, 288).value).toBe("6 min");
+    expect(contextText(line(), 228)).toBe("leaving Riva now · last seen 4 min ago");
   });
 
-  it("context says live tracking is off", () => {
-    expect(contextText(line(), 200)).toBe("last seen 4 min ago");
+  it("context says when it was last seen", () => {
+    expect(contextText(line(), 400)).toBe("last seen 7 min ago");
+  });
+});
+
+describe("a shuttle we can't see (sight.ts lost / parked / hidden)", () => {
+  const blind = (phaseText: string) =>
+    line({ kind: "timetable", minutes: null, rangeLo: null, rangeHi: null, lastSeenS: null, phaseText });
+
+  it("says so plainly, with where it was last seen underneath", () => {
+    const l = blind("can't see it right now · last seen on its way to Circle at 09:20");
+    expect(answerParts(l, true)).toEqual({
+      label: "Shuttle",
+      value: "Can't see it right now",
+      range: null,
+      small: true,
+    });
+    expect(contextText(l, 0)).toBe("last seen on its way to Circle at 09:20");
+    expect(contextText(blind("can't see it right now"), 0)).toBe("");
+  });
+
+  it("last seen at a stop: it may still be there", () => {
+    const l = blind("last seen at Riva at 19:12 · may still be there");
+    expect(answerParts(l, true).value).toBe("Can't see it right now");
+    expect(contextText(l, 0)).toBe("last seen at Riva at 19:12 · may still be there");
+  });
+
+  it("with a timetable, the next scheduled time stays the big answer", () => {
+    expect(answerParts({ ...blind("can't see it right now"), nextAtLabel: "10:00" }, true).value).toBe("10:00");
   });
 });
 

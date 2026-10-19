@@ -226,11 +226,14 @@ describe("e2e: a simulated phone drives Riva → Circle", () => {
       .from(pings)
       .where(and(eq(pings.deviceId, deviceId), eq(pings.recordedAt, new Date(strayAt))));
     expect(stray).toHaveLength(0);
+    // its last position counts for 5 min (a short drop isn't "out of sight"), then it's seen as parked at Circle
     vi.setSystemTime(at("09:10"));
-    expect((await answer("Circle")).kind).toBe("timetable");
+    expect((await answer("Circle")).kind).toBe("live");
+    vi.setSystemTime(at("09:13"));
+    expect(await answer("Circle")).toMatchObject({ kind: "timetable", phaseText: expect.stringMatching(/Circle/) });
 
     // the driver presses Resume: audited with the device as actor, and live again on the next pings
-    vi.setSystemTime(at("09:11"));
+    vi.setSystemTime(at("09:14"));
     const resumed = await phone.sync([], { resume: true });
     expect(resumed.killed).toBe(false);
     expect(resolveMode(resumed, Date.now()).mode).toBe("active");
@@ -239,7 +242,7 @@ describe("e2e: a simulated phone drives Riva → Circle", () => {
       .from(auditLog)
       .where(and(eq(auditLog.entityId, deviceId), eq(auditLog.action, "device.resume")));
     expect(audit).toMatchObject({ actorKind: "device", actorId: deviceId });
-    await phone.drive(at("09:11") + FIX_MS, at("09:12"), () => CIRCLE);
+    await phone.drive(at("09:14") + FIX_MS, at("09:15"), () => CIRCLE);
     expect(await answer("Circle")).toMatchObject({ kind: "live", phaseText: "here now" });
   });
 

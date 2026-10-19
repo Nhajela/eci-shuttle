@@ -10,15 +10,21 @@ export type AnswerParts = { label: string; value: string; range: string | null; 
 /** status.ts ON_BREAK: every shuttle on the service is on a driver's break. */
 const ON_BREAK = "on a short break";
 
-/** Past this, a live answer is no longer live (SPEC §6.2). */
-const STALE_S = 120;
+/** status.ts CANT_SEE / MAY_STILL_BE_THERE: every shuttle on the service is out of sight (services/public/sight.ts). */
+const CANT_SEE = "can't see it right now";
+const MAY_STILL_BE_THERE = "may still be there";
+const blind = (line: AnswerLine) =>
+  line.kind === "timetable" && (line.phaseText.startsWith(CANT_SEE) || line.phaseText.endsWith(MAY_STILL_BE_THERE));
+
+/** Past this, a live answer is no longer live (services/public/sight.ts LIVE_MS: a short drop stays live). */
+const STALE_S = 300;
 
 const isStale = (line: AnswerLine, ageS: number) =>
   line.kind === "live" && line.lastSeenS !== null && line.lastSeenS + ageS > STALE_S;
 
 /**
  * The big line. `single` = the only service at this spot, so it reads as a sentence.
- * `ageS` = how old the answer is; a live line older than 2 min falls back to the timetable.
+ * `ageS` = how old the answer is; a live line older than 5 min falls back to the timetable.
  */
 export function answerParts(line: AnswerLine, single: boolean, ageS = 0): AnswerParts {
   const label = single ? null : line.serviceName;
@@ -42,6 +48,7 @@ export function answerParts(line: AnswerLine, single: boolean, ageS = 0): Answer
       : { label: label ?? "Shuttle", value: "On a short break", range: null, small: true };
   if (line.kind === "timetable" && line.nextAtLabel)
     return { label: label ?? "Next scheduled", value: line.nextAtLabel, range: null };
+  if (blind(line)) return { label: label ?? "Shuttle", value: "Can't see it right now", range: null, small: true };
   // a loop service inside its hours has no fixed next time: it is running, not finished
   if (line.kind === "timetable") return { label: label ?? "Shuttle", value: "Running now", range: null, small: true };
   return { label: line.serviceName, value: "No more today", range: null };
@@ -61,7 +68,7 @@ export function contextText(line: AnswerLine, ageS: number): string {
 const quiet = (phase: string) =>
   phase
     .split(" · ")
-    .filter((p) => !/^(live tracking off|about every \d+ min)$/i.test(p.trim()))
+    .filter((p) => !/^(live tracking off|about every \d+ min|can't see it right now)$/i.test(p.trim()))
     .join(" · ");
 
 export function ageSeconds(generatedAt: string, now: Date): number {

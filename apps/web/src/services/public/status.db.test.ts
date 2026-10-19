@@ -294,19 +294,93 @@ describe("publicStatus: live answers", () => {
     expect(JSON.stringify(await publicStatus(db(), w.id, NOW))).not.toContain("Bus 1");
   });
 
-  it("a ping older than 2 minutes is not live: the timetable answer shows instead", async () => {
+  it("a short network drop (≤ 5 min) stays live, saying how old the position is", async () => {
     const { w, riva, circle, svc } = await world();
     await bus(w.id, svc.id, "Bus 1", {
-      phase: "en_route",
+      phase: "offline",
+      spotId: riva.id,
       nextSpotId: circle.id,
       alongM: 100,
-      lastPingAt: new Date(NOW.getTime() - 121_000),
+      lastPingAt: new Date(NOW.getTime() - 240_000),
     });
     etaToSpot.mockReturnValue({ seconds: 60, minutes: 1, lo: 1, hi: 1, basis: "learned", legsChained: 1 });
+    expect((await answerAt(w.id, circle.id))?.answers[0]).toMatchObject({
+      kind: "live",
+      minutes: 1,
+      lastSeenS: 240,
+      vehicleName: "Bus 1",
+    });
+  });
+
+  it("marked offline inside a stop 3 min ago: still here now, from where the geofence last had it", async () => {
+    const { w, riva, svc } = await world();
+    await bus(w.id, svc.id, "Bus 1", {
+      phase: "offline",
+      lastPingAt: new Date(NOW.getTime() - 180_000),
+      geofence: { ...INITIAL_GEOFENCE_STATE, insideSpotId: riva.id, enteredAt: at("09:20").getTime() },
+    });
+    expect((await answerAt(w.id, riva.id))?.answers[0]).toMatchObject({ kind: "live", minutes: 0 });
+  });
+
+  it("last seen inside a stop 5–15 min ago: where and when, and that it may still be there; no ETA", async () => {
+    const { w, riva, svc } = await world();
+    await bus(w.id, svc.id, "Bus 1", {
+      phase: "offline",
+      lastPingAt: at("09:18"),
+      geofence: { ...INITIAL_GEOFENCE_STATE, insideSpotId: riva.id, enteredAt: at("09:10").getTime() },
+    });
     expect((await answerAt(w.id, riva.id))?.answers[0]).toMatchObject({
       kind: "timetable",
-      phaseText: "live tracking off",
+      minutes: null,
+      phaseText: "last seen at Riva at 09:18 · may still be there",
     });
+  });
+
+  it("out of sight 5–30 min: can't see it, and where it was last seen", async () => {
+    const { w, riva, circle, svc } = await world();
+    await bus(w.id, svc.id, "Bus 1", {
+      phase: "offline",
+      spotId: riva.id,
+      nextSpotId: circle.id,
+      lastPingAt: at("09:20"),
+    });
+    expect((await answerAt(w.id, riva.id))?.answers[0]).toMatchObject({
+      kind: "timetable",
+      phaseText: "can't see it right now · last seen on its way to Circle at 09:20",
+    });
+  });
+
+  it("silent over 30 min: hidden, so it no longer counts towards how often the loop comes", async () => {
+    const { w, riva, circle, route } = await world();
+    const [svc] = await db()
+      .insert(services)
+      .values({
+        workspaceId: w.id,
+        name: "Shuttle",
+        kind: "regular",
+        routeId: route.id,
+        validFrom: "2026-10-01",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "08:30",
+        endTime: "19:00",
+        pattern: { kind: "loop" },
+      })
+      .returning();
+    await bus(w.id, svc.id, "Bus 1", {
+      phase: "offline",
+      lastPingAt: at("08:50"),
+      spotId: riva.id,
+      nextSpotId: circle.id,
+    });
+    await bus(w.id, svc.id, "Bus 2", { phase: "offline", lastPingAt: at("08:40") });
+    const spot = await answerAt(w.id, riva.id);
+    expect(spot?.answers.find((a) => a.serviceId === svc.id)).toMatchObject({
+      kind: "timetable",
+      phaseText: "can't see it right now · last seen on its way to Circle at 08:50",
+    });
+    // a lap of 36 min, not shared with the silent shuttles
+    expect(spot?.schedule.loops).toEqual([{ serviceId: svc.id, serviceName: "Shuttle", everyMin: 36 }]);
   });
 
   it("a vehicle moved to a party run drops out of the regular line's answers for those hours", async () => {
