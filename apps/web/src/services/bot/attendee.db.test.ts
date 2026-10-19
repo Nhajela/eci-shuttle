@@ -210,12 +210,12 @@ describe("/subscribe", () => {
   it("asks which stop (or all), then subscribes with the answer now and a stop button", async () => {
     const { ctx, riva } = await setup();
     const ask = await onSubscribe(ctx, null);
-    expect(ask.send[0].html).toContain("every 15 min");
+    expect(ask.send[0].html).toContain("whenever it moves");
     expect(buttonData(ask)).toEqual([`usub:${riva.id}`, expect.stringMatching(/^usub:/), "usub:all"]);
 
     const r = await onAttendeeCallback(ctx, { action: "usub", args: [riva.id] }, query);
     expect(r.send[0].html).toContain("<b>Riva Beach</b>");
-    expect(r.send[0].html).toContain("every 15 min");
+    expect(r.send[0].html).toContain("whenever the shuttle leaves a stop, with a check-in every 30 min");
     const [sub] = await mySubscriptions(
       db(),
       attendee(ctx.person, ctx.workspace.id),
@@ -229,7 +229,7 @@ describe("/subscribe", () => {
   it("'/subscribe riva' subscribes straight away; all stops too", async () => {
     const { ctx, riva } = await setup();
     const r = await onSubscribe(ctx, "riva");
-    expect(r.send[0].html).toContain("every 15 min");
+    expect(r.send[0].html).toContain("whenever the shuttle leaves a stop");
     const all = await onAttendeeCallback(ctx, { action: "usub", args: ["all"] }, query);
     expect(all.send[0].html).toContain("every stop");
     const subs = await mySubscriptions(
@@ -252,7 +252,7 @@ describe("welcome (plain /start)", () => {
     const r = await onWelcome(ctx);
     expect(r.send).toHaveLength(1);
     expect(r.send[0].html.startsWith(WELCOME)).toBe(true);
-    expect(WELCOME).toMatch(/updates every 15 minutes/);
+    expect(WELCOME).toMatch(/whenever it leaves a stop, with a check-in every 30 minutes/);
     expect(WELCOME).toMatch(/send 'stop' or 'unsubscribe'/);
     expect(r.send[0]).toMatchObject({ animation: "http://localhost:3000/gifs/welcome.gif" });
     expect(r.send[0].html).toContain("<b>Riva Beach</b>");
@@ -306,7 +306,7 @@ describe("update rhythm: every 15 or 30 min", () => {
     const w = await onWelcome(ctx);
     const [sub] = await mine(ctx);
     expect(buttonData(w)).toEqual([`nunsub:${sub.id}`, "every:30"]);
-    expect(w.send[0].html).toContain("every 15 minutes");
+    expect(w.send[0].html).toContain("whenever it leaves a stop");
 
     const slow = await onAttendeeCallback(ctx, { action: "every", args: ["30"] }, query);
     expect(slow.answerCallback).toMatchObject({ callbackQueryId: "q1" });
@@ -318,11 +318,11 @@ describe("update rhythm: every 15 or 30 min", () => {
 
     // re-subscribing to one stop keeps the rhythm and says so
     const r = await onSubscribe(ctx, "riva");
-    expect(r.send[0].html).toContain("every 30 min");
+    expect(r.send[0].html).toContain("every 30 min, and when something changes");
     expect(buttonData(r)).toEqual([expect.stringMatching(/^nunsub:/), "every:15"]);
 
     const fast = await onEvery(ctx, 15);
-    expect(fast.send[0].html).toMatch(/15 min/);
+    expect(fast.send[0].html).toMatch(/every move/);
     expect(buttonData(fast)).toEqual(["every:30"]);
     expect((await mine(ctx))[0].everyMin).toBe(15);
   });

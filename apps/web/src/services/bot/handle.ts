@@ -19,8 +19,8 @@ const BOT = systemActor("bot", "telegram");
 const NONE: BotReply = { send: [] };
 const HELP =
   "🚐 Send /shuttle to see when the next shuttle comes, or just type your stop's name (e.g. riva).\n" +
-  "/subscribe sends you where the shuttle is every 15 min; /unsubscribe stops it.\n" +
-  "/every30 makes that every 30 min instead; /every15 brings the quicker rhythm back.\n" +
+  "/subscribe tells you where the shuttle is whenever it leaves a stop, with a check-in every 30 min; /unsubscribe stops it.\n" +
+  "/every30 makes that calmer (every 30 min, and when something changes); /every15 brings every move back.\n" +
   "/need tells the shuttle team you're waiting for a shuttle, and I'll tell you the moment it's here.\n" +
   "/stop (or just stop) turns off your alerts, updates, notices and shuttle request. All quiet.\n" +
   "Driver without the shuttle app? Send /pair and the 6-digit code from the shuttle team, then share your live location here.";

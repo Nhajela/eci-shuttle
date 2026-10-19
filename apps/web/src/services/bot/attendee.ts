@@ -15,6 +15,7 @@ import {
   DAY_OVER_LEAD,
   dayOver,
   rhythmButton,
+  rhythmText,
   setUpdateEvery,
   subscribeUpdates,
   type UpdateEveryMin,
@@ -121,14 +122,14 @@ export function renderAnswer(spotName: string, lines: AnswerLine[]): string {
   return [`<b>${esc(spotName)}</b>`, ...body].join("\n");
 }
 
-/** `/subscribe [spot]`: which stop (or all) to get an update for every 15 min, or subscribe to that stop now. */
+/** `/subscribe [spot]`: which stop (or all) to get updates for, or subscribe to that stop now. */
 export async function onSubscribe(ctx: BotContext, arg: string | null): Promise<BotReply> {
   const st = await status(ctx);
   const q = arg?.trim().toLowerCase();
   const spot = q ? st.spots.find((s) => s.shortName.toLowerCase() === q || s.name.toLowerCase() === q) : undefined;
   if (spot || q === "all") return subscribed(ctx, spot?.spotId ?? null);
   if (st.spots.length === 0) return say(ctx, NONE_TODAY);
-  return say(ctx, "🚐 I'll send you where the shuttle is every 15 min while it runs. Which stop is yours?", [
+  return say(ctx, "🚐 I'll tell you where the shuttle is whenever it moves, while it runs. Which stop is yours?", [
     ...spotButtons(st.spots, "usub"),
     [btn("All stops", "usub", "all")],
   ]);
@@ -140,11 +141,11 @@ async function subscribed(ctx: BotContext, spotId: string | null): Promise<BotRe
   const st = await status(ctx);
   const list = spotId ? st.spots.filter((s) => s.spotId === spotId) : st.spots;
   const where = spotId ? `<b>${esc(list[0]?.name ?? "that stop")}</b>` : "every stop";
-  const every = `every ${sub.everyMin} min`;
+  const every = rhythmText(sub.everyMin);
   const now = await currentUpdate(ctx.db, ctx.workspace.id, st, spotId, ctx.now);
   const intro = dayOver(list)
-    ? `${DAY_OVER_LEAD} You'll get an update for ${where} ${every} when it runs tomorrow.`
-    : `${now ? `${now}\n\n` : ""}📬 You're on the list: an update for ${where} ${every} while the shuttle runs.`;
+    ? `${DAY_OVER_LEAD} You'll get updates for ${where} ${every.replace(/,$/, "")} when it runs tomorrow.`
+    : `${now ? `${now}\n\n` : ""}📬 You're on the list: updates for ${where} ${every} while the shuttle runs.`;
   return say(ctx, `${intro} /unsubscribe stops them.`, [
     [btn("Stop updates", "nunsub", sub.id)],
     [rhythmButton(sub.everyMin)],
@@ -161,8 +162,8 @@ export async function onEvery(ctx: BotContext, everyMin: UpdateEveryMin): Promis
     const sub = await setUpdateEvery(ctx.db, actor, { workspaceId: ctx.workspace.id, everyMin }, ctx.now);
     const line =
       sub.everyMin === 30
-        ? "🐢 Slower it is: an update every 30 min while the shuttle runs."
-        : "🐇 Back to every 15 min while the shuttle runs.";
+        ? "🐢 Calmer it is: an update every 30 min while the shuttle runs, and when something changes."
+        : "🐇 Back to every move: I'll tell you each time the shuttle leaves a stop.";
     return say(ctx, line, [[rhythmButton(sub.everyMin)]]);
   } catch (e) {
     if (isServiceError(e)) return say(ctx, userMessage(e));
@@ -171,11 +172,12 @@ export async function onEvery(ctx: BotContext, everyMin: UpdateEveryMin): Promis
 }
 
 export const WELCOME_TEXT =
-  "🌴 Welcome aboard the shuttle bot! From now on you'll get updates every 15 minutes about where the shuttle is. " +
-  "Just send 'stop' or 'unsubscribe' whenever you want to stop. Too chatty? Tap 🐢 below for every 30 min instead.";
+  "🌴 Welcome aboard the shuttle bot! From now on I'll tell you where the shuttle is whenever it leaves a stop, " +
+  "with a check-in every 30 minutes. Just send 'stop' or 'unsubscribe' whenever you want to stop. " +
+  "Too chatty? Tap 🐢 below for calmer updates.";
 
 /**
- * Plain `/start` in a private chat, the bot's core experience: subscribe to the 15-min updates for every stop
+ * Plain `/start` in a private chat, the bot's core experience: subscribe to the updates for every stop
  * straight away, then say so (with the welcome GIF), with where the shuttle is now (or that it's finished for
  * today), a stop button and the rhythm button.
  */
@@ -268,8 +270,8 @@ export async function onAttendeeCallback(ctx: BotContext, cb: Callback, query: T
         const sub = await setUpdateEvery(ctx.db, actor, { workspaceId, everyMin }, ctx.now);
         const line =
           sub.everyMin === 30
-            ? "🐢 Slower it is: an update every 30 min while the shuttle runs."
-            : "🐇 Back to every 15 min while the shuttle runs.";
+            ? "🐢 Calmer it is: an update every 30 min while the shuttle runs, and when something changes."
+            : "🐇 Back to every move: I'll tell you each time the shuttle leaves a stop.";
         return { ...say(ctx, line, [[rhythmButton(sub.everyMin)]]), answerCallback: ack() };
       }
       case "nunsub": {

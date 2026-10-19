@@ -358,7 +358,7 @@ describe("update frequency (every 15 or 30 min)", () => {
     expect((await sent(ws.id))[0].payload).toMatchObject({
       buttons: [
         [{ callbackData: `nunsub:${sub.id}` }],
-        [{ text: expect.stringMatching(/15 min/), callbackData: "every:15" }],
+        [{ text: expect.stringMatching(/Every move/), callbackData: "every:15" }],
       ],
     });
     expect(await runUpdates(db(), later(45), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });

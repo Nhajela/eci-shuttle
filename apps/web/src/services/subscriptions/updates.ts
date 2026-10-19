@@ -90,12 +90,18 @@ export async function subscribeUpdates(
   );
 }
 
-/** The button that switches to the other rhythm: 🐢 slower for a 15-min subscriber, 🐇 faster for a 30-min one. */
+/** The button that switches to the other rhythm: 🐢 calmer for a 15-min subscriber, 🐇 every move for a 30-min one. */
 export function rhythmButton(everyMin: number): TelegramButton {
   return everyMin === 30
-    ? { text: "🐇 Every 15 min", callbackData: encodeCallback({ action: "every", args: ["15"] }) }
-    : { text: "🐢 Every 30 min", callbackData: encodeCallback({ action: "every", args: ["30"] }) };
+    ? { text: "🐇 Every move", callbackData: encodeCallback({ action: "every", args: ["15"] }) }
+    : { text: "🐢 Calmer: every 30 min", callbackData: encodeCallback({ action: "every", args: ["30"] }) };
 }
+
+/** How often updates come, for "an update for every stop <rhythmText> while the shuttle runs" (runUpdates). */
+export const rhythmText = (everyMin: number) =>
+  everyMin === 30
+    ? "every 30 min, and when something changes,"
+    : "whenever the shuttle leaves a stop, with a check-in every 30 min,";
 
 export const SetUpdateEveryInput = z.object({
   workspaceId: z.uuid(),
