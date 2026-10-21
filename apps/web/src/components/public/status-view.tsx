@@ -227,7 +227,8 @@ export function StatusView({
           <p className="text-sm leading-snug text-ink-soft">
             This tracker is a few days old and still learning the roads of Mandrem. Shuttles loop roughly every 20–25
             minutes and wait a little at each stop so everyone can hop on. If it says "here now" and you only see cows,
-            tell us via @eci_shuttles_bot on Telegram.
+            tell us via @eci_shuttles_bot on Telegram. Now and then the network drops and a shuttle goes out of sight
+            for a bit: please wait 5–10 minutes for an accurate update of where it is.
           </p>
         </aside>
         <p className="mt-auto text-center text-xs text-ink-mute">Updates every 10 seconds · times in IST</p>

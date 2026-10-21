@@ -182,19 +182,19 @@ describe("publicPositions: what attendees may see", () => {
     expect(JSON.stringify(m)).not.toMatch(/Went home|Not yet|Unassigned|Off duty|Offline|Elsewhere|Retired/);
   });
 
-  it("hides a vehicle whose last fix is over 2 minutes old", async () => {
+  it("hides a vehicle whose last fix is over 5 minutes old", async () => {
     const { w, circle, svc } = await world();
     await bus(w.id, svc.id, "Fresh", {
       phase: "en_route",
       nextSpotId: circle.id,
       alongM: 300,
-      lastPingAt: new Date(NOW.getTime() - 119_000),
+      lastPingAt: new Date(NOW.getTime() - 299_000),
     });
     await bus(w.id, svc.id, "Stale", {
       phase: "en_route",
       nextSpotId: circle.id,
       alongM: 300,
-      lastPingAt: new Date(NOW.getTime() - 121_000),
+      lastPingAt: new Date(NOW.getTime() - 301_000),
     });
     await bus(w.id, svc.id, "Never", { phase: "en_route", nextSpotId: circle.id, lastPingAt: null, lat: null });
     expect(await names(w.id)).toEqual(["Fresh"]);

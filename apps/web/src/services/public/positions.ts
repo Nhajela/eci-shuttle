@@ -1,7 +1,7 @@
 /**
  * svc-public: live positions for the attendee map (SPEC §6). No login; no actor.
  * Privacy: a vehicle shows only while it is on an active shift (service_vehicles now) of a public service running
- * today, is active, was resolved to that service by ingest, is at a stop or en route, and has a fix ≤ 2 min old.
+ * today, is active, was resolved to that service by ingest, is at a stop or en route, and has a fix ≤ 5 min old (sight.ts LIVE_MS, so the map and the text agree).
  * Off duty, between shifts, offline, stale or retired vehicles are never in the answer (a driver going home must
  * not be on the map). Same freshness rule as status.ts; no lateness anywhere.
  */
@@ -13,8 +13,7 @@ import { routes, services, serviceVehicles, spots, vehicleState, vehicles, works
 import { activeBreaks } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { headingAlongPath, legFraction } from "./map-geo";
-
-const STALE_MS = 2 * 60_000;
+import { LIVE_MS } from "./sight";
 
 const Id = z.uuid();
 const LatLngZ = z.object({ lat: z.number(), lng: z.number() });
@@ -153,7 +152,7 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
     const s = r.state;
     if (s.serviceId !== r.serviceId) continue;
     if (s.phase !== "at_spot" && s.phase !== "en_route") continue;
-    if (s.lat === null || s.lng === null || !s.lastPingAt || nowMs - s.lastPingAt.getTime() > STALE_MS) continue;
+    if (s.lat === null || s.lng === null || !s.lastPingAt || nowMs - s.lastPingAt.getTime() > LIVE_MS) continue;
     if (out.some((v) => v.id === r.vehicle.id)) continue; // two overlapping shifts on public services
     const route = routeById.get(svcById.get(r.serviceId)?.routeId ?? "");
     if (!route) continue;
