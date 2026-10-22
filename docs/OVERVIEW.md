@@ -13,7 +13,7 @@ over MCP.
 - **Admin:** https://eci-shuttle.positivesumcompany.com/admin (Telegram login, phone-first).
 - **Bot:** @eci_shuttles_bot (login, alerts with action buttons, `/shuttle`, driver pairing).
 - **MCP:** https://eci-shuttle.positivesumcompany.com/api/mcp (OAuth + DCR; works as a claude.ai connector).
-- **Repo:** github.com/Nhajela/eci-shuttle (private). Every push to `main` deploys.
+- **Repo:** github.com/Nhajela/eci-shuttle (open source, MIT). Every push to `main` deploys.
 
 ## Live setup (eci-main)
 
@@ -23,10 +23,10 @@ over MCP.
 | Route | Riva → Circle → Riva (road path from OSRM), 5 min planned wait at each stop (16 Oct) |
 | Public services (loop, daily until 1 Nov) | One loop "Shuttle", 08:00–22:00 (16 Oct) |
 | Ops tracking hours | 09:00–21:00 daily. Phones track and admin sees positions between shifts; the public only sees service hours |
-| Shuttle 1 | Shift 08:00–16:00 daily. Karan, Android (Samsung A15), our app (16 Oct) |
-| Shuttle 2 | Shift 14:00–22:00 daily. Alpesh, iPhone, Telegram live location via `/pair` ("Alpesh iPhone (Telegram)"); Suresh's Xiaomi revoked (19 Oct). Traccar Client is the planned backup if Telegram shows gaps |
+| Shuttle 1 | Shift 08:00–16:00 daily. Android phone running our driver app |
+| Shuttle 2 | Shift 14:00–22:00 daily. iPhone sharing Telegram live location via `/pair`. Traccar Client is the planned backup if Telegram shows gaps |
 | Admins | @HiiNaman (admin in eci-main and test). Viewers can be added in People by Telegram username |
-| Test workspace | `test`: Riva + a placeholder Circle, Naman's phone (Nothing A015) in "Test shuttle", public page at `/w/test` |
+| Test workspace | `test`: Riva + a placeholder Circle, a test phone in "Test shuttle", public page at `/w/test` |
 
 ## What was built
 
@@ -128,4 +128,4 @@ over MCP.
   - OTA: `npx eas-cli update --channel live --platform android --environment preview --message "…"`, then roll it out
     via MCP `ota.rollout` / `ota.phone`.
 - **Firebase:** project `eci-shuttles`. The FCM V1 key is stored in Expo credentials.
-- **DNS:** Cloudflare A record `eci-shuttle` → 170.187.250.12.
+- **DNS:** Cloudflare A record `eci-shuttle` → the VPS.

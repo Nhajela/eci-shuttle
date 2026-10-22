@@ -1,6 +1,7 @@
 {
   "name": "eci-shuttle",
   "private": true,
+  "license": "MIT",
   "packageManager": "pnpm@10.18.1",
   "scripts": {
     "dev": "pnpm --parallel --filter @eci-shuttle/web --filter @eci-shuttle/worker dev",

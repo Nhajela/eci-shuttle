@@ -17,7 +17,7 @@ Non-goals
 - iOS, Play Store distribution, multi-language driver UI.
 - Turn-by-turn, dispatch, booking seats.
 
-## 2. Repo layout (new private repo `Nhajela/eci-shuttle`, pnpm monorepo)
+## 2. Repo layout (repo `Nhajela/eci-shuttle`, pnpm monorepo)
 
 ```
 apps/web        Next.js 16: device API, admin, attendee page, MCP, Telegram bot webhook
