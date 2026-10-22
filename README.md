@@ -22,6 +22,12 @@ The public side never shows lateness: it says where the shuttle is, calmly. Desi
 [SPEC](docs/SPEC.md) (the design), [OVERVIEW](docs/OVERVIEW.md) (what exists), [CONTRACTS](docs/CONTRACTS.md) (code layout
 and ownership), [RESUME](docs/RESUME.md) (operating notes).
 
+## Drivers' phones
+
+Each vehicle has one phone sharing its location. **Android:** install the driver app (`apps/driver`) and pair it with a
+code or QR. **iPhone:** no app needed, share Telegram live location with the bot (`/pair <code>` first); the Traccar
+Client app also works as a backup.
+
 ## Run it locally
 
 You need Node 22+, pnpm, and Docker (for Postgres).
