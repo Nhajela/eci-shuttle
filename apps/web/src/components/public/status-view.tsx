@@ -16,6 +16,7 @@ import { ageSeconds, answerParts, contextText, pickSpot, scheduleWindow, spotCoo
 import { PublicMapCard } from "./map/public-map";
 import { usePositions } from "./map/use-positions";
 import { Notices } from "./notices";
+import { OpenSourceCard } from "./open-source-card";
 import { browserTargets, latestOnly, watchResume } from "./resume";
 import { StaffMap } from "./staff-map";
 import { pageStory, type Story } from "./story";
@@ -231,6 +232,7 @@ export function StatusView({
             for a bit: please wait 5–10 minutes for an accurate update of where it is.
           </p>
         </aside>
+        <OpenSourceCard />
         <p className="mt-auto text-center text-xs text-ink-mute">Updates every 10 seconds · times in IST</p>
       </div>
     </main>
