@@ -33,6 +33,9 @@ type TgResponse = {
   parameters?: { retry_after?: number };
 };
 
+/** A Telegram call that takes longer is abandoned and retried like any network failure (it would hold the queue job lock ~5 min). */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
 /** POST https://api.telegram.org/bot<token>/<method>; returns Telegram's `result` or throws with its error_code. */
 export async function callTelegram<T = unknown>(
   method: string,
@@ -43,6 +46,7 @@ export async function callTelegram<T = unknown>(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(params),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const body = (await res.json().catch(() => null)) as TgResponse | null;
   if (body?.ok) return body.result as T;

@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, notices, people, telegramMessages } from "@/db/schema";
 import type { OutboxJob, TelegramPayload } from "../kernel";
-import { callTelegram, deliverTelegram, performReply, sendNow } from "./deliver";
+import { callTelegram, deliverTelegram, performReply, REQUEST_TIMEOUT_MS, sendNow } from "./deliver";
 
 const db = () => testDb();
 const TOKEN = "123:secret-token";
@@ -212,6 +212,45 @@ describe("sendNow", () => {
     expect(
       await send(fakeTelegram(() => ({ error_code: 400, description: "Bad Request: chat not found" })).fetchImpl),
     ).toMatchObject({ ok: false, retry: false });
+  });
+});
+
+describe("request timeout", () => {
+  /** A fetch that never answers on its own: it only ends when its abort signal fires. */
+  const hanging = () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const fetchImpl = ((_url: unknown, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        seen.push(init?.signal ?? undefined);
+        if (init?.signal?.aborted) return reject(init.signal.reason);
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      })) as typeof fetch;
+    return { seen, fetchImpl };
+  };
+
+  it("every Telegram call carries a 10 s abort signal", async () => {
+    expect(REQUEST_TIMEOUT_MS).toBe(10_000);
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    const t = fakeTelegram();
+    const seen: unknown[] = [];
+    const f = ((u: RequestInfo | URL, init?: RequestInit) => (
+      seen.push(init?.signal), t.fetchImpl(u, init)
+    )) as typeof fetch;
+    await callTelegram("getMe", {}, f);
+    expect(spy).toHaveBeenCalledWith(10_000);
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    spy.mockRestore();
+  });
+
+  it("a hung request ends when the signal fires and is a normal retryable failure", async () => {
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() =>
+      AbortSignal.abort(new DOMException("The operation timed out.", "TimeoutError")),
+    );
+    const h = hanging();
+    const r = await sendNow(db(), { chatId: nextChat(), html: "x", kind: "alert" }, h.fetchImpl);
+    expect(h.seen).toHaveLength(1);
+    expect(r).toMatchObject({ ok: false, retry: true, error: expect.stringContaining("timed out") });
+    vi.restoreAllMocks();
   });
 });
 
