@@ -1,13 +1,17 @@
 import type { DeviceConfig, ModeResolution, Window } from "@eci-shuttle/shared/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  type Capability,
+  capabilityFor,
   type Fix,
   gateFixes,
+  IDLE_STOP_AFTER_MS,
   isForegroundNotAllowed,
   locationPlan,
   nativeDecision,
   planKey,
-  TRACKING_HORIZON_MS,
+  reminderAction,
+  reminderTarget,
   toPing,
 } from "./plan";
 
@@ -34,11 +38,28 @@ const res = (over: Partial<ModeResolution>): ModeResolution => ({
 const CFG = { activeIntervalS: 10, idleHeartbeatS: 900 };
 const HOUR = 3_600_000;
 
-describe("locationPlan: one tracking-day task, fixed options", () => {
+const P: Capability = "patched";
+const U: Capability = "unpatched";
+
+describe("capabilityFor: what this build's expo-location can do", () => {
+  it("0.1.1 and later are patched; 0.1.0, unknown and garbage are not", () => {
+    expect(capabilityFor("0.1.1", false)).toBe("patched");
+    expect(capabilityFor("0.2.0", false)).toBe("patched");
+    expect(capabilityFor("1.0", false)).toBe("patched");
+    expect(capabilityFor("0.1.0", false)).toBe("unpatched");
+    expect(capabilityFor(null, false)).toBe("unpatched");
+    expect(capabilityFor("", false)).toBe("unpatched");
+  });
+  it("a patched build whose in-place update was refused in the background falls back to unpatched", () => {
+    expect(capabilityFor("0.1.1", true)).toBe("unpatched");
+  });
+});
+
+describe("locationPlan: patched (per-mode options, in-place updates)", () => {
   const active = res({ mode: "active", intervalS: 10, until: at(11), window: win() });
 
   it("active: High accuracy at the active interval", () => {
-    expect(locationPlan(active, CFG, now)).toMatchObject({
+    expect(locationPlan(active, CFG, now, P)).toMatchObject({
       run: true,
       mode: "active",
       highAccuracy: true,
@@ -46,101 +67,141 @@ describe("locationPlan: one tracking-day task, fixed options", () => {
     });
   });
 
-  it("idle before a window inside the horizon: same options as active (the task is not retuned)", () => {
-    const idle = locationPlan(res({ until: now + 5 * HOUR }), CFG, now);
-    const act = locationPlan(active, CFG, now);
-    expect(idle).toMatchObject({ run: true, mode: "idle", highAccuracy: true, timeIntervalMs: 10_000 });
-    expect(planKey(idle)).toBe(planKey(act));
-  });
-
-  it("a window's own interval changes the gate, not the native task", () => {
-    const p = locationPlan(res({ mode: "active", intervalS: 30, window: win({ intervalS: 30 }) }), CFG, now);
-    expect(p).toMatchObject({ timeIntervalMs: 10_000 });
-  });
-
-  it("idle with the next change beyond the horizon, or none: no tracking", () => {
-    expect(locationPlan(res({ until: now + TRACKING_HORIZON_MS + 60_000 }), CFG, now)).toEqual({ run: false });
-    expect(locationPlan(res({ until: null }), CFG, now)).toEqual({ run: false });
-    expect(locationPlan(res({ until: now + TRACKING_HORIZON_MS }), CFG, now)).toMatchObject({ run: true });
-  });
-
-  it("killed, revoked and unpaired: no tracking", () => {
-    for (const mode of ["killed", "revoked", "unpaired"] as const) {
-      expect(locationPlan(res({ mode, intervalS: null }), CFG, now)).toEqual({ run: false });
+  it("idle: Lowest accuracy at the idle heartbeat, however far the next window is (never stopped for idle)", () => {
+    for (const until of [now + HOUR, now + 11 * HOUR, now + 40 * HOUR, null]) {
+      expect(locationPlan(res({ until }), CFG, now, P)).toMatchObject({
+        run: true,
+        mode: "idle",
+        highAccuracy: false,
+        timeIntervalMs: 900_000,
+      });
     }
   });
 
-  it("the notification text is fixed: no countdown, no clock", () => {
-    const a = locationPlan(active, CFG, now);
-    const b = locationPlan(res({ until: now + 5 * HOUR }), CFG, now + 7 * 60_000);
-    if (!a.run || !b.run) throw new Error("expected run");
-    expect(a.notification).toEqual(b.notification);
-    expect(JSON.stringify(a.notification)).not.toMatch(/\d:\d\d|until/i);
+  it("killed, revoked and unpaired stop", () => {
+    for (const mode of ["killed", "revoked", "unpaired"] as const) {
+      expect(locationPlan(res({ mode, intervalS: null }), CFG, now, P)).toEqual({ run: false });
+    }
   });
 
-  it("planKey does not change as time passes towards a window, or when the mode flips", () => {
+  it("the key follows mode/accuracy/interval, and nothing else", () => {
     const keys = new Set<string>();
     for (const m of [0, 1, 7, 60, 200]) {
-      keys.add(planKey(locationPlan(res({ until: now + 5 * HOUR }), CFG, now + m * 60_000)));
-      keys.add(planKey(locationPlan(res({ mode: "active", intervalS: 10, until: now + m * 60_000 }), CFG, now)));
+      keys.add(planKey(locationPlan(res({ until: now + 5 * HOUR }), CFG, now + m * 60_000, P)));
+      keys.add(planKey(locationPlan(res({ until: now + m * 60_000 + 1 }), CFG, now, P)));
     }
-    expect(keys.size).toBe(1);
-  });
-
-  it("planKey changes when the accuracy or interval does, and for stop", () => {
-    const k = planKey(locationPlan(active, CFG, now));
-    expect(planKey(locationPlan(active, { ...CFG, activeIntervalS: 5 }, now))).not.toBe(k);
+    expect(keys.size).toBe(1); // idle, however close the window gets
+    expect(planKey(locationPlan(active, CFG, now, P))).not.toBe([...keys][0]);
+    expect(planKey(locationPlan(active, { ...CFG, activeIntervalS: 5 }, now, P))).not.toBe(
+      planKey(locationPlan(active, CFG, now, P)),
+    );
     expect(planKey({ run: false })).toBe("stop");
   });
 });
 
-describe("nativeDecision: the native task is only touched while the app is on screen", () => {
-  const run = locationPlan(res({ until: now + HOUR }), CFG, now);
-  const stop = { run: false } as const;
-  const key = planKey(run);
+describe("locationPlan: unpatched (one fixed task per tracking day)", () => {
+  const active = res({ mode: "active", intervalS: 10, until: at(11), window: win() });
 
-  it("foreground, not running: start", () => {
-    expect(nativeDecision({ plan: run, running: false, startedKey: null, foreground: true })).toEqual({
-      action: "start",
-      needsApp: false,
+  it("active: High at the active interval", () => {
+    expect(locationPlan(active, CFG, now, U)).toMatchObject({ run: true, highAccuracy: true, timeIntervalMs: 10_000 });
+  });
+
+  it("idle with a window within 3 h: the same options as active, so the key does not change", () => {
+    const idle = locationPlan(res({ until: now + IDLE_STOP_AFTER_MS }), CFG, now, U);
+    expect(idle).toMatchObject({ run: true, mode: "idle", highAccuracy: true, timeIntervalMs: 10_000 });
+    expect(planKey(idle)).toBe(planKey(locationPlan(active, CFG, now, U)));
+  });
+
+  it("idle with the next window beyond 3 h, or none: stop (no all-night GPS)", () => {
+    expect(locationPlan(res({ until: now + IDLE_STOP_AFTER_MS + 60_000 }), CFG, now, U)).toEqual({ run: false });
+    expect(locationPlan(res({ until: now + 11 * HOUR }), CFG, now, U)).toEqual({ run: false });
+    expect(locationPlan(res({ until: null }), CFG, now, U)).toEqual({ run: false });
+  });
+
+  it("killed, revoked and unpaired stop", () => {
+    for (const mode of ["killed", "revoked", "unpaired"] as const) {
+      expect(locationPlan(res({ mode, intervalS: null }), CFG, now, U)).toEqual({ run: false });
+    }
+  });
+
+  it("the notification text is fixed: no countdown, no clock, in both builds", () => {
+    const a = locationPlan(active, CFG, now, U);
+    const b = locationPlan(res({ until: now + 2 * HOUR }), CFG, now + 7 * 60_000, U);
+    const c = locationPlan(res({ until: now + 2 * HOUR }), CFG, now, P);
+    if (!a.run || !b.run || !c.run) throw new Error("expected run");
+    expect(a.notification).toEqual(b.notification);
+    expect(a.notification).toEqual(c.notification);
+    expect(JSON.stringify(a.notification)).not.toMatch(/\d:\d\d|until/i);
+  });
+});
+
+describe("nativeDecision: build x plan x foreground/background -> native action", () => {
+  const act = res({ mode: "active", intervalS: 10, until: at(11), window: win() });
+  const idleNear = res({ until: now + HOUR });
+  const idleFar = res({ until: now + 11 * HOUR });
+  const dead = res({ mode: "killed", intervalS: null });
+  const d = (cap: Capability, r: ModeResolution, running: boolean, key: "same" | "other" | null, fg: boolean) => {
+    const plan = locationPlan(r, CFG, now, cap);
+    return nativeDecision({
+      plan,
+      running,
+      startedKey: key === "same" ? planKey(plan) : key === "other" ? "low|900000|x" : null,
+      foreground: fg,
+      capability: cap,
+    });
+  };
+  const none = { action: "none", needsApp: false } as const;
+  const start = { action: "start", needsApp: false } as const;
+  const stop = { action: "stop", needsApp: false } as const;
+  const open = { action: "none", needsApp: true } as const;
+
+  describe("patched", () => {
+    it("killed/revoked: stop from foreground or background; nothing to do when not running", () => {
+      expect(d(P, dead, true, "same", true)).toEqual(stop);
+      expect(d(P, dead, true, "same", false)).toEqual(stop);
+      expect(d(P, dead, false, null, false)).toEqual(none);
+    });
+    it("running with the right options: nothing, in any mode", () => {
+      for (const r of [act, idleNear, idleFar])
+        for (const fg of [true, false]) expect(d(P, r, true, "same", fg)).toEqual(none);
+    });
+    it("running with other options (mode changed) or unknown (older build): update in place, fg or bg", () => {
+      for (const r of [act, idleNear, idleFar])
+        for (const key of ["other", null] as const)
+          for (const fg of [true, false]) expect(d(P, r, true, key, fg)).toEqual(start);
+    });
+    it("not running: start in the foreground; in the background a cold start is impossible -> open the app", () => {
+      for (const r of [act, idleNear, idleFar]) {
+        expect(d(P, r, false, null, true)).toEqual(start);
+        expect(d(P, r, false, null, false)).toEqual(open);
+      }
     });
   });
-  it("foreground, running with the right options: nothing to do", () => {
-    expect(nativeDecision({ plan: run, running: true, startedKey: key, foreground: true })).toEqual({
-      action: "none",
-      needsApp: false,
+
+  describe("unpatched", () => {
+    it("killed/revoked: stop from foreground or background", () => {
+      expect(d(U, dead, true, "same", true)).toEqual(stop);
+      expect(d(U, dead, true, "same", false)).toEqual(stop);
     });
-  });
-  it("foreground, running with other or unknown options (an older build's task): restart it", () => {
-    expect(nativeDecision({ plan: run, running: true, startedKey: "low|900000", foreground: true }).action).toBe(
-      "start",
-    );
-    expect(nativeDecision({ plan: run, running: true, startedKey: null, foreground: true }).action).toBe("start");
-  });
-  it("foreground, task died but we remember starting it: start again", () => {
-    expect(nativeDecision({ plan: run, running: false, startedKey: key, foreground: true }).action).toBe("start");
-  });
-  it("background: never start or change; flag that the app must be opened when the task isn't right", () => {
-    expect(nativeDecision({ plan: run, running: false, startedKey: null, foreground: false })).toEqual({
-      action: "none",
-      needsApp: true,
+    it("idle with the next window beyond 3 h: stop from foreground or background; none when already stopped", () => {
+      expect(d(U, idleFar, true, "same", true)).toEqual(stop);
+      expect(d(U, idleFar, true, "same", false)).toEqual(stop);
+      expect(d(U, idleFar, false, null, false)).toEqual(none);
     });
-    expect(nativeDecision({ plan: run, running: true, startedKey: null, foreground: false })).toEqual({
-      action: "none",
-      needsApp: true,
+    it("active / idle within 3 h, running with the day's options: nothing (mode changes never touch the task)", () => {
+      for (const r of [act, idleNear]) for (const fg of [true, false]) expect(d(U, r, true, "same", fg)).toEqual(none);
     });
-    expect(nativeDecision({ plan: run, running: true, startedKey: key, foreground: false })).toEqual({
-      action: "none",
-      needsApp: false,
+    it("active / idle within 3 h, not running or other options: start in the foreground, open the app in the background", () => {
+      for (const r of [act, idleNear])
+        for (const [running, key] of [
+          [false, null],
+          [true, "other"],
+          [true, null],
+        ] as const) {
+          expect(d(U, r, running, key, true)).toEqual(start);
+          expect(d(U, r, running, key, false)).toEqual(open);
+        }
     });
-  });
-  it("stop only in the foreground; in the background the gate drops the fixes instead", () => {
-    expect(nativeDecision({ plan: stop, running: true, startedKey: key, foreground: true }).action).toBe("stop");
-    expect(nativeDecision({ plan: stop, running: true, startedKey: key, foreground: false })).toEqual({
-      action: "none",
-      needsApp: false,
-    });
-    expect(nativeDecision({ plan: stop, running: false, startedKey: null, foreground: true }).action).toBe("none");
   });
 });
 
@@ -161,7 +222,72 @@ describe("isForegroundNotAllowed", () => {
   });
 });
 
-describe("gateFixes: what the JS side keeps from the always-on task", () => {
+describe("reminderTarget: which window the 'open the app' reminder is for", () => {
+  it("idle before an active window: 15 min before it starts", () => {
+    const r = res({ until: now + 11 * HOUR, next: win({ startsAt: now + 11 * HOUR }) });
+    expect(reminderTarget(r, now)).toEqual({ for: now + 11 * HOUR, at: now + 11 * HOUR - 15 * 60_000 });
+  });
+  it("never in the past: at least a minute from now", () => {
+    const r = res({ until: now + 5 * 60_000, next: win({ startsAt: now + 5 * 60_000 }) });
+    expect(reminderTarget(r, now)?.at).toBe(now + 60_000);
+  });
+  it("active now (task missing): a minute from now, for the current window", () => {
+    expect(reminderTarget(res({ mode: "active", window: win({ startsAt: at(8) }) }), now)).toEqual({
+      for: at(8),
+      at: now + 60_000,
+    });
+  });
+  it("idle with no window ahead, or killed: none", () => {
+    expect(reminderTarget(res({ until: null }), now)).toBeNull();
+    expect(reminderTarget(res({ mode: "killed", intervalS: null }), now)).toBeNull();
+    expect(reminderTarget(res({ until: now + HOUR, next: win({ mode: "idle" }) }), now)).toBeNull();
+  });
+});
+
+describe("reminderAction: one local notification 'Shuttle tracking: open the app to start'", () => {
+  const target = { for: now + 11 * HOUR, at: now + 11 * HOUR - 15 * 60_000 };
+  const base = {
+    capability: U,
+    mode: "idle" as const,
+    taskWanted: false,
+    needsApp: false,
+    target,
+    reminderFor: null as number | null,
+    hasPermission: true,
+  };
+  const sched = { action: "schedule", at: target.at, for: target.for };
+
+  it("unpatched, idle with the task stopped for the night: schedule it", () => {
+    expect(reminderAction(base)).toEqual(sched);
+  });
+  it("unpatched, tracking wanted but only the app can start it: schedule it", () => {
+    expect(reminderAction({ ...base, taskWanted: true, needsApp: true })).toEqual(sched);
+  });
+  it("already pending for this window: leave it", () => {
+    expect(reminderAction({ ...base, reminderFor: target.for })).toEqual({ action: "none" });
+  });
+  it("pending for another window: replace it", () => {
+    expect(reminderAction({ ...base, reminderFor: target.for - 1000 })).toEqual(sched);
+  });
+  it("no notification permission: skip, and clear one we had", () => {
+    expect(reminderAction({ ...base, hasPermission: false })).toEqual({ action: "none" });
+    expect(reminderAction({ ...base, hasPermission: false, reminderFor: 5 })).toEqual({ action: "cancel" });
+  });
+  it("the task runs fine: cancel a pending one, else nothing", () => {
+    expect(reminderAction({ ...base, mode: "active", taskWanted: true, reminderFor: 5 })).toEqual({ action: "cancel" });
+    expect(reminderAction({ ...base, mode: "active", taskWanted: true })).toEqual({ action: "none" });
+  });
+  it("killed / revoked / nothing ahead: cancel a pending one", () => {
+    expect(reminderAction({ ...base, mode: "killed", target: null, reminderFor: 5 })).toEqual({ action: "cancel" });
+    expect(reminderAction({ ...base, target: null, reminderFor: 5 })).toEqual({ action: "cancel" });
+  });
+  it("patched phones never need it", () => {
+    expect(reminderAction({ ...base, capability: P })).toEqual({ action: "none" });
+    expect(reminderAction({ ...base, capability: P, reminderFor: 5 })).toEqual({ action: "cancel" });
+  });
+});
+
+describe("gateFixes: what the JS side keeps from the task's fixes", () => {
   const dc = (schedule: Window[]): DeviceConfig => ({
     configVersion: 1,
     killed: false,
@@ -196,15 +322,19 @@ describe("gateFixes: what the JS side keeps from the always-on task", () => {
     expect(times(g.keep)).toEqual([t0, t0 + 30_000, t0 + 60_000]);
   });
 
-  it("idle: keeps one fix per heartbeat and drops the rest", () => {
+  it("idle: drops every fix (SPEC §4: positions only inside windows)", () => {
     const t0 = at(12);
-    const g = gateFixes([fix(t0), fix(t0 + 10_000), fix(t0 + 14 * 60_000), fix(t0 + 15 * 60_000)], dc([run]), 0, null);
-    expect(times(g.keep)).toEqual([t0, t0 + 14 * 60_000]);
+    expect(gateFixes([fix(t0), fix(t0 + 10_000), fix(t0 + 16 * 60_000)], dc([run]), 0, null).keep).toEqual([]);
+  });
+
+  it("a silence window drops fixes inside an active window", () => {
+    const silence = win({ startsAt: at(9), endsAt: at(10), mode: "idle", source: "silence" });
+    expect(gateFixes([fix(at(9, 30))], dc([run, silence]), 0, null).keep).toEqual([]);
   });
 
   it("carries the cadence across calls through lastKeptAt", () => {
-    const t0 = at(12);
-    const g = gateFixes([fix(t0 + 60_000)], dc([run]), 0, t0);
+    const t0 = at(9);
+    const g = gateFixes([fix(t0 + 1_000)], dc([run]), 0, t0);
     expect(g.keep).toEqual([]);
     expect(g.lastKeptAt).toBe(t0);
   });

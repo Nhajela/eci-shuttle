@@ -1,49 +1,77 @@
 /**
  * Pure side of the location service (SPEC §4 "Modes on the phone"). No react-native imports, so vitest can run it.
  *
- * Model (see NOTES.md): expo-location refuses startLocationUpdatesAsync with a foreground service whenever the app is
- * not on screen, so the native task is started ONCE, while the app is foregrounded, with options that never depend
- * on the mode or the clock. Active vs idle is decided in JS by gateFixes() as each delivery arrives.
+ * expo-location 57 refuses startLocationUpdatesAsync with a foreground service whenever the app is not on screen
+ * (LocationModule.kt), even for a task that is already running. Two builds exist:
+ * - patched (native app version >= 0.1.1): an APK with a pnpm patch that lets a RUNNING task be re-registered with
+ *   new options from the background. Per-mode options again; a cold start still needs the app on screen.
+ * - unpatched (0.1.0): nothing can be started or changed from the background. One fixed "tracking day" task started
+ *   in the foreground, mode decided by gateFixes(), stopped overnight (stopping works from the background) and
+ *   restarted by the driver opening the app, prompted by a local notification.
  */
 import type { DeviceConfig, ModeResolution, Ping } from "@eci-shuttle/shared/contracts";
 import { resolveMode } from "@eci-shuttle/shared/schedule";
+import { isOlderVersion } from "../screens/status";
 
-/** Idle phones keep the task on only if a window starts within this long ("tracking day"); otherwise it is stopped. */
-export const TRACKING_HORIZON_MS = 16 * 3_600_000;
-/** Same text all day: a foreground notification can't be updated from the background, so it must never go stale. */
+export type Capability = "patched" | "unpatched";
+
+/** First native app version that carries the expo-location patch (branch fix/driver-native). */
+export const PATCHED_FROM_VERSION = "0.1.1";
+
+/**
+ * What this phone's expo-location can do. `nativeVersion` is the APK's version (not the OTA bundle's), null if unknown.
+ * `degraded`: a patched build whose in-place update was still refused in the background; it behaves as unpatched.
+ */
+export function capabilityFor(nativeVersion: string | null, degraded: boolean): Capability {
+  if (degraded || !nativeVersion || !/^\d+(\.\d+)*$/.test(nativeVersion)) return "unpatched";
+  return isOlderVersion(nativeVersion, PATCHED_FROM_VERSION) ? "unpatched" : "patched";
+}
+
+/** Unpatched: with no active window this close, the task is stopped (no all-night GPS) and a reminder is set. */
+export const IDLE_STOP_AFTER_MS = 3 * 3_600_000;
+/** The reminder fires this long before the next window starts. */
+export const REMINDER_LEAD_MS = 15 * 60_000;
+export const REMINDER_TEXT = { title: "Shuttle tracking: open the app to start", body: "Tap to open the app" };
+/** Same text all day: a foreground notification can't be refreshed from the background, so it must never go stale. */
 export const NOTIFICATION = { title: "ECI Shuttle", body: "Location is on for today's shuttle runs" };
 
 export type LocationPlan =
   | { run: false }
   | {
       run: true;
-      /** what the phone is doing right now. Gate only: it never changes the native task. */
+      /** what the phone is doing right now */
       mode: "active" | "idle";
-      highAccuracy: true;
-      /** the ACTIVE interval, fixed for the tracking day */
+      highAccuracy: boolean;
       timeIntervalMs: number;
       notification: { title: string; body: string };
     };
 
-/** Native options are fixed for the day; mode is deliberately not part of them. */
+/** What the native task should be doing. Killed / revoked / unpaired always stop, in both builds. */
 export function locationPlan(
   r: ModeResolution,
   cfg: { activeIntervalS: number; idleHeartbeatS: number },
   now: number,
+  capability: Capability,
 ): LocationPlan {
   if (r.mode !== "active" && r.mode !== "idle") return { run: false };
-  // idle with no window soon (or none in the schedule at all): nothing to track for a long time
-  if (r.mode === "idle" && (r.until === null || r.until - now > TRACKING_HORIZON_MS)) return { run: false };
-  return {
-    run: true,
-    mode: r.mode,
-    highAccuracy: true,
-    timeIntervalMs: cfg.activeIntervalS * 1000,
-    notification: NOTIFICATION,
-  };
+  const activeOptions = { highAccuracy: true, timeIntervalMs: cfg.activeIntervalS * 1000 };
+  if (r.mode === "active") return { run: true, mode: "active", ...activeOptions, notification: NOTIFICATION };
+  if (capability === "patched") {
+    // cheap enough to leave on all night, and a background cold start would be impossible
+    return {
+      run: true,
+      mode: "idle",
+      highAccuracy: false,
+      timeIntervalMs: cfg.idleHeartbeatS * 1000,
+      notification: NOTIFICATION,
+    };
+  }
+  // unpatched: same options as active, so nothing needs retuning; but not all night
+  if (r.until === null || r.until - now > IDLE_STOP_AFTER_MS) return { run: false };
+  return { run: true, mode: "idle", ...activeOptions, notification: NOTIFICATION };
 }
 
-/** What the native task was started with. Equal keys = nothing to restart. Only accuracy + interval (+ fixed text). */
+/** What the native task was started with: accuracy + interval + the fixed text. No countdown, no clock. */
 export function planKey(p: LocationPlan): string {
   return p.run ? `${p.highAccuracy ? "high" : "low"}|${p.timeIntervalMs}|${p.notification.title}` : "stop";
 }
@@ -51,9 +79,12 @@ export function planKey(p: LocationPlan): string {
 export type NativeDecision = { action: "none" | "start" | "stop"; needsApp: boolean };
 
 /**
- * The only place that decides whether to touch the native task. Start and stop need the app on screen
- * (expo-location LocationModule.kt throws otherwise, even for an already-running task). In the background we never
- * call it: if the native state isn't what the plan wants we say so (`needsApp`) and the gate keeps data right.
+ * The only place that decides whether to touch the native task.
+ * - plan says stop: stop whenever it runs (stopLocationUpdatesAsync works from the background).
+ * - right options already running: nothing.
+ * - running with other options: patched updates it in place from anywhere; unpatched needs the app on screen.
+ * - not running: start only with the app on screen (a cold start fails from the background even when patched).
+ * Whenever tracking is wanted and we can't act, `needsApp` is set so the status screen can ask for the app.
  * `startedKey` = planKey of our last successful start; null = unknown (an older build's task) and counts as wrong.
  */
 export function nativeDecision(i: {
@@ -61,10 +92,12 @@ export function nativeDecision(i: {
   running: boolean;
   startedKey: string | null;
   foreground: boolean;
+  capability: Capability;
 }): NativeDecision {
-  if (!i.plan.run) return { action: i.running && i.foreground ? "stop" : "none", needsApp: false };
+  if (!i.plan.run) return { action: i.running ? "stop" : "none", needsApp: false };
   if (i.running && i.startedKey === planKey(i.plan)) return { action: "none", needsApp: false };
-  return i.foreground ? { action: "start", needsApp: false } : { action: "none", needsApp: true };
+  if (i.foreground || (i.running && i.capability === "patched")) return { action: "start", needsApp: false };
+  return { action: "none", needsApp: true };
 }
 
 /** expo-location's "Foreground service cannot be started when the application is in the background" refusal. */
@@ -77,13 +110,50 @@ export function isForegroundNotAllowed(e: unknown): boolean {
   );
 }
 
+/** The window the "open the app" reminder is about, and when to fire it. Null: nothing to remind of. */
+export function reminderTarget(r: ModeResolution, now: number): { for: number; at: number } | null {
+  if (r.mode === "active") return { for: r.window?.startsAt ?? now, at: now + 60_000 };
+  if (r.mode === "idle" && r.until !== null && r.next?.mode === "active")
+    return { for: r.until, at: Math.max(now + 60_000, r.until - REMINDER_LEAD_MS) };
+  return null;
+}
+
+export type ReminderAction =
+  | { action: "none" }
+  | { action: "cancel" }
+  | { action: "schedule"; at: number; for: number };
+
+/**
+ * One pending local notification at a time (replaced, or cancelled once the task runs). Only the unpatched build
+ * needs it: when the task is stopped for the night or can't be started from the background, nothing else will
+ * bring the driver to the app. `reminderFor` = the window start it is pending for (persisted), null = none.
+ */
+export function reminderAction(i: {
+  capability: Capability;
+  mode: ModeResolution["mode"];
+  /** locationPlan(...).run */
+  taskWanted: boolean;
+  needsApp: boolean;
+  target: { for: number; at: number } | null;
+  reminderFor: number | null;
+  hasPermission: boolean;
+}): ReminderAction {
+  const cancel: ReminderAction = i.reminderFor !== null ? { action: "cancel" } : { action: "none" };
+  const needed =
+    i.capability === "unpatched" && i.target !== null && ((i.mode === "idle" && !i.taskWanted) || i.needsApp);
+  if (!needed || !i.hasPermission || !i.target) return cancel;
+  if (i.reminderFor === i.target.for) return { action: "none" };
+  return { action: "schedule", at: i.target.at, for: i.target.for };
+}
+
 // Native deliveries jitter a little early; without slack a 10 s fix at 9.8 s after the last would be thinned away.
 const CADENCE_SLACK = 0.8;
 
 /**
- * Which of the task's fixes to queue as pings. Each fix is judged by its own (server) time:
- * active window → at the window's cadence; idle → one per idleHeartbeatS (so the server still gets check-ins);
- * killed / revoked / unpaired → none. `lastKeptAt` is the time of the last kept fix (persist it between wakes).
+ * Which of the task's fixes to queue as pings. Each fix is judged by its own (server) time: only inside an active
+ * window, at the window's cadence. Idle, killed, revoked and unpaired fixes are dropped (SPEC §4: positions only
+ * inside windows; idle check-ins still sync, just without pings). `lastKeptAt` is the time of the last kept fix
+ * (persist it between wakes).
  */
 export function gateFixes(
   fixes: Fix[],
@@ -95,7 +165,7 @@ export function gateFixes(
   let last = lastKeptAt;
   for (const f of [...fixes].sort((a, b) => a.timestamp - b.timestamp)) {
     const r = resolveMode(dc, f.timestamp + clockOffsetMs);
-    if ((r.mode !== "active" && r.mode !== "idle") || r.intervalS === null) continue;
+    if (r.mode !== "active" || r.intervalS === null) continue;
     if (last === null || f.timestamp - last >= r.intervalS * 1000 * CADENCE_SLACK) {
       keep.push(f);
       last = f.timestamp;

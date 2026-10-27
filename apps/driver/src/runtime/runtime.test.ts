@@ -1,5 +1,6 @@
 import type { ModeResolution, SyncResponse } from "@eci-shuttle/shared/contracts";
 import { describe, expect, it, vi } from "vitest";
+import type { NativeState } from "../location/apply";
 import { createDeviceStore } from "../store/deviceStore";
 import { memoryKV } from "../store/kv";
 import { createPingQueue } from "../store/pingQueue";
@@ -49,8 +50,8 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
     return new Response(JSON.stringify(respond(body)), { status: 200 });
   });
   const applied: ModeResolution[] = [];
-  const calls: { cfg: { activeIntervalS: number; idleHeartbeatS: number }; startedKey: string | null }[] = [];
-  let nativeResult: { startedKey: string | null; needsApp: boolean } = { startedKey: "k1", needsApp: false };
+  const calls: { cfg: { activeIntervalS: number; idleHeartbeatS: number }; prev: NativeState }[] = [];
+  let nativeResult: NativeState = { startedKey: "k1", needsApp: false, degradedAt: null, reminderFor: null };
   const ota = { report: vi.fn(async () => ({ updateId: "u1" })), reconcile: vi.fn(async () => "none") };
   const deps: RuntimeDeps = {
     store,
@@ -61,9 +62,9 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
     now: () => now,
     random: () => 0,
     location: {
-      apply: async (r, cfg, _now, startedKey) => {
+      apply: async (r, cfg, _now, prev) => {
         applied.push(r);
-        calls.push({ cfg, startedKey });
+        calls.push({ cfg, prev });
         return nativeResult;
       },
     },
@@ -148,14 +149,11 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(await s.queue.size()).toBe(0);
   });
 
-  it("judges each fix by its own time: before the window only the idle heartbeat cadence is kept", async () => {
+  it("judges each fix by its own time: a fix from before the window is not queued", async () => {
     const s = await setup();
-    // the always-on task delivers 10 s fixes from before startsAt too
+    // the task delivers fixes from before startsAt too (idle polling, or a cached fix)
     await s.rt.wake([fix(T - 5 * MIN), fix(T - 5 * MIN + 10_000), fix(T)]);
-    expect(s.bodies[0].pings).toEqual([
-      expect.objectContaining({ recordedAt: T - 5 * MIN }),
-      expect.objectContaining({ recordedAt: T }),
-    ]);
+    expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T })]);
   });
 
   it("judges each fix by its own time: a batch delivered after endsAt keeps the in-window fixes", async () => {
@@ -166,14 +164,14 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T + 59 * MIN })]);
   });
 
-  it("idle: thins fixes to the heartbeat, syncs every idleHeartbeatS, and syncs at once when the mode flips", async () => {
+  it("idle: drops fixes, heartbeats every idleHeartbeatS, and syncs at once when the mode flips", async () => {
     const s = await setup();
     s.at(T + 61 * MIN); // after the window
     await s.rt.wake([fix(T + 61 * MIN)]);
     expect(s.fetch).toHaveBeenCalledOnce();
     expect(s.bodies[0]).toMatchObject({
       reportedMode: "idle",
-      pings: [expect.objectContaining({ recordedAt: T + 61 * MIN })],
+      pings: [],
     });
     s.at(T + 66 * MIN);
     await s.rt.wake([fix(T + 66 * MIN)]);
@@ -344,32 +342,36 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(await s.store.token()).toBe("tok2");
   });
 
-  it("hands the location service the config intervals and the key it last started with", async () => {
+  it("hands the location service the config intervals and the native state it persisted last time", async () => {
     const s = await setup();
     await s.rt.sync();
-    expect(s.calls[0]).toEqual({ cfg: { activeIntervalS: 10, idleHeartbeatS: 900 }, startedKey: null });
+    expect(s.calls[0]).toEqual({
+      cfg: { activeIntervalS: 10, idleHeartbeatS: 900 },
+      prev: { startedKey: null, needsApp: false, degradedAt: null, reminderFor: null },
+    });
+    s.setNative({ startedKey: "k2", needsApp: true, degradedAt: "0.1.1", reminderFor: 123 });
     await s.rt.sync();
-    expect(s.calls.at(-1)?.startedKey).toBe("k1"); // persisted from the first apply
+    s.setNative({ startedKey: "k2", needsApp: true, degradedAt: "0.1.1", reminderFor: 123 });
+    await s.rt.sync();
+    expect(s.calls.at(-1)?.prev).toEqual({ startedKey: "k2", needsApp: true, degradedAt: "0.1.1", reminderFor: 123 });
   });
 
   it("persists 'open the app to start tracking' from the location service and clears it", async () => {
     const s = await setup();
-    s.setNative({ startedKey: null, needsApp: true });
+    s.setNative({ startedKey: null, needsApp: true, degradedAt: null, reminderFor: null });
     await s.rt.wake([]);
     expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ needsApp: true });
-    s.setNative({ startedKey: "k1", needsApp: false });
+    s.setNative({ startedKey: "k1", needsApp: false, degradedAt: null, reminderFor: null });
     await s.rt.wake([]);
     expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ needsApp: false });
   });
 
-  it("the idle cadence survives between wakes (new process each time)", async () => {
+  it("keeps the active cadence between wakes (new process each time)", async () => {
     const s = await setup();
-    s.at(T + 61 * MIN);
-    await s.rt.wake([fix(T + 61 * MIN)]);
-    s.at(T + 62 * MIN);
-    await s.rt.wake([fix(T + 62 * MIN)]);
-    expect(await s.queue.size()).toBe(0); // first was synced and acked; the second was thinned away, not queued
-    expect(JSON.parse(s.files.dump()["sync-state"]).lastKeptAt).toBe(T + 61 * MIN);
+    await s.rt.wake([fix(T)]);
+    s.at(T + 1_000);
+    await s.rt.wake([fix(T + 1_000)]);
+    expect(JSON.parse(s.files.dump()["sync-state"]).lastKeptAt).toBe(T);
   });
 
   it("a location service that can't start (no permission yet) does not stop the sync", async () => {

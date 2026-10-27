@@ -1,11 +1,12 @@
 /**
  * The driver app's composition root, minus native modules (those are passed in by ./native): one cycle runs
  * location wake → resolveMode → ping queue → syncOnce → apply config (service, intervals, kill latch) → OTA.
- * The location task's wakes (one fix per activeIntervalS, all tracking day) are the clock, so this works headless;
+ * The location task's wakes (a fix per active or idle interval) are the clock, so this works headless;
  * a push or the screens call sync() to force a sync.
  */
 import type { Mode, ModeResolution, SyncRequest } from "@eci-shuttle/shared/contracts";
 import { resolveMode } from "@eci-shuttle/shared/schedule";
+import type { NativeState } from "../location/apply";
 import { type Fix, gateFixes, toPing } from "../location/plan";
 import type { DeviceStore } from "../store/deviceStore";
 import { type KV, parseJson, serial } from "../store/kv";
@@ -26,10 +27,11 @@ type Persisted = Pick<SyncState, "clockOffsetMs" | "lastSyncAt" | "failures"> & 
   lastError: string | null;
   /** phone clock before which a 429 asked us not to sync again (Retry-After) */
   retryAfterAt: number | null;
-  /** planKey of the last native start (location/apply); null = not started by this build */
+  /** location/apply NativeState, flattened: key of the last native start, "open the app" flag, patch fallback, reminder */
   nativeKey: string | null;
-  /** the plan wants tracking, the native task isn't running right and the app is in the background */
   needsApp: boolean;
+  degradedAt: string | null;
+  reminderFor: number | null;
   /** time of the last fix kept by gateFixes, so the idle/active cadence holds across wakes */
   lastKeptAt: number | null;
 };
@@ -54,16 +56,16 @@ export type RuntimeDeps = {
   cycleTimeoutMs?: number;
   random?: () => number;
   /**
-   * Put the native task in the state the plan wants, if the app is on screen (location/service syncLocationService).
-   * `startedKey` is what we persisted from the last call. Void = nothing known to record.
+   * Put the native task (and the start reminder) in the state the plan wants, as far as this build and the app's
+   * foreground state allow (location/service syncLocationService). `prev` is what we persisted from the last call.
    */
   location: {
     apply: (
       r: ModeResolution,
       cfg: { activeIntervalS: number; idleHeartbeatS: number },
       serverNow: number,
-      startedKey: string | null,
-    ) => Promise<{ startedKey: string | null; needsApp: boolean } | undefined>;
+      prev: NativeState,
+    ) => Promise<NativeState | undefined>;
   };
   /** 0–100 or null; stamped on each ping and the sync */
   battery: () => Promise<number | null>;
@@ -92,6 +94,8 @@ export function createRuntime(deps: RuntimeDeps) {
       retryAfterAt: v.retryAfterAt ?? null,
       nativeKey: v.nativeKey ?? null,
       needsApp: v.needsApp ?? false,
+      degradedAt: v.degradedAt ?? null,
+      reminderFor: v.reminderFor ?? null,
       lastKeptAt: v.lastKeptAt ?? null,
     };
   };
@@ -108,9 +112,21 @@ export function createRuntime(deps: RuntimeDeps) {
     lastMode = r.mode;
     const cfg = { activeIntervalS: dc?.activeIntervalS ?? 10, idleHeartbeatS: dc?.idleHeartbeatS ?? 900 };
     try {
-      const res = await deps.location.apply(r, cfg, serverNow, p.nativeKey);
-      if (res && (res.startedKey !== p.nativeKey || res.needsApp !== p.needsApp)) {
-        p = { ...p, nativeKey: res.startedKey, needsApp: res.needsApp };
+      const prev: NativeState = {
+        startedKey: p.nativeKey,
+        needsApp: p.needsApp,
+        degradedAt: p.degradedAt,
+        reminderFor: p.reminderFor,
+      };
+      const res = await deps.location.apply(r, cfg, serverNow, prev);
+      if (res && JSON.stringify(res) !== JSON.stringify(prev)) {
+        p = {
+          ...p,
+          nativeKey: res.startedKey,
+          needsApp: res.needsApp,
+          degradedAt: res.degradedAt,
+          reminderFor: res.reminderFor,
+        };
         await savePersisted(p);
       }
     } catch (e) {
@@ -125,8 +141,8 @@ export function createRuntime(deps: RuntimeDeps) {
     const dc = await deps.store.deviceConfig();
 
     // Queue the fixes before anything that can hang (native calls, network): a cut-off cycle must not lose them.
-    // The native task runs all day; gateFixes keeps the active cadence in windows, the idle heartbeat cadence
-    // outside them, and nothing when killed or revoked. Each fix is judged by its own (server) time.
+    // gateFixes keeps fixes at the active cadence inside windows and drops the rest (idle polling, killed, revoked);
+    // idle check-ins still sync, just without pings. Each fix is judged by its own (server) time.
     const gated = gateFixes(fixes, dc, p.clockOffsetMs, p.lastKeptAt);
     if (gated.keep.length) {
       const battery = await deps.battery();
