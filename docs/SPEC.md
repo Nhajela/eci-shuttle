@@ -197,9 +197,11 @@ No login. Polls every 10s, response cached `s-maxage=5`.
    `prefers-reduced-motion` gets a still one.
    - Data: `GET /api/positions?w=<slug>` (same caching as `/api/status`): stops, route paths and vehicles.
    - **Privacy rule:** a vehicle is on the public map only while it is on an active shift (`service_vehicles`
-     covering now) of a public service running today, is active, was resolved by ingest to that service, is at a
-     stop or en route, and has a fix at most 2 min old. Off duty, between shifts, offline, stale or retired vehicles
-     never appear: a driver going home is nobody's business. A vehicle on a driver's break shows with a ☕ and no ETA.
+     covering now) of a public service running today (or yesterday's service day past midnight, minus cancelled
+     days), is active, was resolved by ingest to that service, and is "live" by the same sight rule as the text
+     answer (`services/public/sight.ts`): last fix at most 5 min old, at a stop or en route (a short network drop
+     doesn't hide it). Off duty, between shifts, stale or retired vehicles never appear: a driver going home is
+     nobody's business. A vehicle on a driver's break shows with a ☕ and no ETA.
      Never lateness, as everywhere else on the page.
 
 Later, optional: `/shuttle` in a Telegram bot that answers with the same line, and a pinned group message.
