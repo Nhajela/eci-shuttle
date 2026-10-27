@@ -28,7 +28,7 @@ import { addException, getSchedule } from "@/services/catalog/schedule";
 import { listSpots } from "@/services/catalog/spots";
 import { listVehicles } from "@/services/catalog/vehicles";
 import { updateWorkspace } from "@/services/catalog/workspaces";
-import { killPhone, listPhones, nudgePhone, silencePhone } from "@/services/devices/phones";
+import { isOutsideApp, killPhone, listPhones, nudgePhone, resumePhone, silencePhone } from "@/services/devices/phones";
 import { vehicleStates } from "@/services/ingest/ingest";
 import { createNotice, listNotices } from "@/services/notices/notices";
 import {
@@ -423,7 +423,12 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
   if (!dev) return toast(q, "That phone no longer exists.");
   const actor = await actorIn(ctx, dev.workspaceId);
   const input = { workspaceId: dev.workspaceId, deviceId: dev.id };
-  const killed = `${esc(dev.label)} is killed. It stays off until the driver taps Resume in the app.`;
+  // a Telegram/Traccar phone has no app to tap Resume in: ops resumes it from here or the admin page
+  const outside = isOutsideApp(dev);
+  const killed = outside
+    ? `${esc(dev.label)} is killed. It has no app, so it stays off until you tap Resume tracking.`
+    : `${esc(dev.label)} is killed. It stays off until the driver taps Resume in the app.`;
+  const killedButtons = outside ? [[btn("Resume tracking", "resume", dev.id)]] : [];
 
   switch (cb.action) {
     case "nudge":
@@ -460,10 +465,16 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
         `<b>Kill ${esc(dev.label)}?</b>\nIt stops sharing location until the driver taps Resume in the app.`,
         [[btn("Yes, kill", "killok", dev.id), btn("Cancel", "noop")]],
       );
+    case "resume":
+      requireRole(actor, dev.workspaceId, "admin");
+      if (!dev.killedAt) return toast(q, "Not killed.");
+      if (!outside) return toast(q, "Only the driver can resume this phone, with Resume in the app.");
+      await resumePhone(ctx.db, actor, input);
+      return editTo(q, `${esc(dev.label)} is resumed. It tracks again from its next update.`, [], "Resumed.");
     default: // killok
-      if (dev.killedAt) return editTo(q, killed, [], "Already killed.");
+      if (dev.killedAt) return editTo(q, killed, killedButtons, "Already killed.");
       await killPhone(ctx.db, actor, input);
-      return editTo(q, killed, [], "Killed.");
+      return editTo(q, killed, killedButtons, "Killed.");
   }
 }
 
@@ -495,7 +506,7 @@ async function onCancelDay(ctx: BotContext, cb: Callback, q: TgCallbackQuery): P
 }
 
 /**
- * Buttons nudge / sil1h / kill → killok / cday → cdayok / nw / noop. Destructive ones (kill, cday) first edit the
+ * Buttons nudge / sil1h / kill → killok / resume (a killed Telegram/Traccar phone) / cday → cdayok / nw / noop. Destructive ones (kill, cday) first edit the
  * message into "Are you sure?" with [Yes, kill] [Cancel]; only the *ok action changes anything.
  */
 export async function onAdminCallback(ctx: BotContext, cb: Callback, query: TgCallbackQuery): Promise<BotReply> {
@@ -505,6 +516,7 @@ export async function onAdminCallback(ctx: BotContext, cb: Callback, query: TgCa
       case "sil1h":
       case "kill":
       case "killok":
+      case "resume":
         return await onPhoneButton(ctx, cb, query);
       case "cday":
       case "cdayok":

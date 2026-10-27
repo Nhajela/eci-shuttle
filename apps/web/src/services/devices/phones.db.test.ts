@@ -268,6 +268,69 @@ describe("directives", () => {
     });
   });
 
+  describe("resume a killed phone that can't press Resume (Telegram / Traccar)", () => {
+    const resumed = (id: string) => audits(id).then((a) => a.filter((r) => r.action === "phone.resume"));
+    const killAlerts = (wsId: string) =>
+      db()
+        .select()
+        .from(outbox)
+        .where(and(eq(outbox.workspaceId, wsId), eq(outbox.kind, "telegram")))
+        .then((rows) => rows.map((r) => (r.payload as { html: string }).html));
+
+    it.each(["telegram", "traccar"])(
+      "admin resumes a killed %s phone: audited, bumped, alerted",
+      async (appVersion) => {
+        const { ws, actor, phone } = await setup("admin", { appVersion });
+        await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+        const killed = await device(phone.id);
+        expect(killed.killedAt).toBeInstanceOf(Date);
+        expect(await resumePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).toBe(1);
+        const after = await device(phone.id);
+        expect(after.killedAt).toBeNull();
+        expect(after.configVersion).toBe(killed.configVersion + 1);
+        expect(after.version).toBe(killed.version + 1);
+        const [row] = await resumed(phone.id);
+        expect(row.before).toMatchObject({ killedAt: killed.killedAt?.toISOString() });
+        expect(row.after).toMatchObject({ killedAt: null });
+        expect((await killAlerts(ws.id)).filter((h) => h.includes("resumed"))).toHaveLength(1);
+        // nothing left to lift: no second audit row, no second alert
+        expect(await resumePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).toBe(0);
+        expect(await resumed(phone.id)).toHaveLength(1);
+        expect((await killAlerts(ws.id)).filter((h) => h.includes("resumed"))).toHaveLength(1);
+      },
+    );
+
+    it("lifting the kill and an open silence is one audit row", async () => {
+      const { ws, actor, phone } = await setup("admin", { appVersion: "telegram" });
+      await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+      await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+      expect(await resumePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).toBe(2);
+      expect(await resumed(phone.id)).toHaveLength(1);
+      expect((await device(phone.id)).killedAt).toBeNull();
+    });
+
+    it("ops may not lift a kill (kill is admin only), and nothing changes", async () => {
+      const { ws, actor, phone } = await setup("admin", { appVersion: "telegram" });
+      await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+      const { actor: ops } = await makeAdmin(db(), ws.id, "ops");
+      await expect(resumePhone(db(), ops, { workspaceId: ws.id, deviceId: phone.id })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+      expect((await device(phone.id)).killedAt).toBeInstanceOf(Date);
+    });
+
+    it.each([null, "1.4.0"])(
+      "an app phone (app_version %s) stays killed until the driver taps Resume",
+      async (appVersion) => {
+        const { ws, actor, phone } = await setup("admin", { appVersion });
+        await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+        expect(await resumePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id })).toBe(0);
+        expect((await device(phone.id)).killedAt).toBeInstanceOf(Date);
+        expect(await resumed(phone.id)).toHaveLength(0);
+      },
+    );
+  });
+
   it("force active on a phone whose vehicle is silenced is INVALID", async () => {
     const { ws, actor, phone } = await setup("ops");
     const v = await makeVehicle(ws.id);

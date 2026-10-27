@@ -226,7 +226,11 @@ export async function cancelDirective(
 
 /**
  * ops. Lifts the phone's own pause now: its open silence_until directives end, so it tracks again in its windows
- * (a vehicle-wide silence is cancelDirective's). Returns how many were open; none = nothing to do, nothing audited.
+ * (a vehicle-wide silence is cancelDirective's). For a killed phone that can't press Resume itself (Telegram live
+ * location, Traccar Client: isOutsideApp) it also clears killed_at, like the driver's Resume would (admin only,
+ * since kill is; alerts kill_resume "resumed"). An app phone's kill stays: only the driver's Resume clears it.
+ * Returns how many things were lifted (open silences + the kill); none = nothing to do, nothing audited.
+ * One audit row (phone.resume) however many.
  */
 export async function resumePhone(db: Db, actor: Actor, input: z.input<typeof ResumePhoneInput>): Promise<number> {
   const { workspaceId, deviceId } = parseInput(ResumePhoneInput, input);
@@ -238,25 +242,36 @@ export async function resumePhone(db: Db, actor: Actor, input: z.input<typeof Re
     isNull(directives.cancelledAt),
     gt(directives.endsAt, now),
   );
-  await livePhone(db, workspaceId, deviceId);
+  const phone = await livePhone(db, workspaceId, deviceId);
+  const unkill = !!phone.killedAt && isOutsideApp(phone);
+  if (unkill) requireRole(actor, workspaceId, "admin");
   const [any] = await db.select({ id: directives.id }).from(directives).where(openSilence).limit(1);
-  if (!any) return 0;
+  if (!any && !unkill) return 0;
   return mutate(
     db,
     actor,
     { action: "phone.resume", entity: "device", entityId: deviceId, workspaceId },
     async (tx) => {
+      const before = await livePhone(tx, workspaceId, deviceId, true);
+      const wasKilledAt = before.killedAt && isOutsideApp(before) ? before.killedAt : null;
       const rows = await tx
         .update(directives)
         .set({ cancelledAt: now, version: sql`${directives.version} + 1` })
         .where(openSilence)
         .returning({ id: directives.id });
+      if (wasKilledAt)
+        await tx
+          .update(devices)
+          .set({ killedAt: null, ...edited() })
+          .where(eq(devices.id, deviceId));
       await bumpConfigs(tx, { deviceIds: [deviceId] }, "phone.resume");
+      const after = await getInWorkspace(tx, devices, workspaceId, deviceId, "phone");
+      if (wasKilledAt) await alertKillResume(tx, after, "resumed", wasKilledAt, now);
       const ids = rows.map((r) => r.id);
       return {
-        before: { openSilences: ids },
-        after: { openSilences: [], cancelledDirectiveIds: ids },
-        result: ids.length,
+        before: { openSilences: ids, ...(wasKilledAt && { killedAt: wasKilledAt }) },
+        after: { openSilences: [], cancelledDirectiveIds: ids, ...(wasKilledAt && { killedAt: null }) },
+        result: ids.length + (wasKilledAt ? 1 : 0),
       };
     },
   );

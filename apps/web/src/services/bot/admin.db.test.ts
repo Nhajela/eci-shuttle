@@ -12,7 +12,7 @@ import { adminActor, resolveWorkspace } from "@/services/auth/actor";
 import { addException, getSchedule } from "@/services/catalog/schedule";
 import { listSpots } from "@/services/catalog/spots";
 import { listVehicles } from "@/services/catalog/vehicles";
-import { killPhone, listPhones, nudgePhone, silencePhone } from "@/services/devices/phones";
+import { killPhone, listPhones, nudgePhone, resumePhone, silencePhone } from "@/services/devices/phones";
 import { vehicleStates } from "@/services/ingest/ingest";
 import { createNotice, listNotices } from "@/services/notices/notices";
 import { type Actor, ServiceError, type TelegramButton } from "../kernel";
@@ -38,9 +38,11 @@ vi.mock("@/services/catalog/schedule", () => ({ addException: vi.fn(), getSchedu
 vi.mock("@/services/catalog/spots", () => ({ listSpots: vi.fn() }));
 vi.mock("@/services/catalog/vehicles", () => ({ listVehicles: vi.fn() }));
 vi.mock("@/services/devices/phones", () => ({
+  isOutsideApp: (d: { appVersion: string | null }) => d.appVersion === "telegram" || d.appVersion === "traccar",
   killPhone: vi.fn(),
   listPhones: vi.fn(),
   nudgePhone: vi.fn(),
+  resumePhone: vi.fn(),
   silencePhone: vi.fn(),
 }));
 vi.mock("@/services/ingest/ingest", () => ({ vehicleStates: vi.fn() }));
@@ -513,6 +515,36 @@ describe("phone buttons", () => {
     expect(twice.edit?.html).toContain("is killed");
     expect(killPhone).toHaveBeenCalledTimes(1);
     expect((await onAdminCallback(ctx, cb("kill", killed.id), query("x"))).edit).toBeUndefined();
+  });
+
+  it("a killed Telegram phone gets a Resume button after the kill; pressing it (admin only) calls resumePhone", async () => {
+    const { ws, ctx } = await setup("admin");
+    const tg = await makeDevice(db(), ws.id, { appVersion: "telegram" });
+    const ok = await onAdminCallback(ctx, cb("killok", tg.id), query("x"));
+    expect(datas(ok.edit?.buttons)).toEqual([`resume:${tg.id}`]);
+    expect(ok.edit?.html).toContain("Resume tracking");
+
+    const killedTg = await makeDevice(db(), ws.id, { appVersion: "traccar", killedAt: new Date(+NOW - 60_000) });
+    const done = await onAdminCallback(ctx, cb("resume", killedTg.id), query("x"));
+    expect(vi.mocked(resumePhone).mock.calls[0][2]).toEqual({ workspaceId: ws.id, deviceId: killedTg.id });
+    expect(done.edit?.html).toContain("is resumed");
+
+    const ops = await setup("ops");
+    const opsTg = await makeDevice(db(), ops.ws.id, { appVersion: "telegram", killedAt: new Date(+NOW - 60_000) });
+    const refused = await onAdminCallback(ops.ctx, cb("resume", opsTg.id), query("x"));
+    expect(refused.answerCallback).toMatchObject({ text: "This needs the admin role.", showAlert: true });
+    expect(resumePhone).toHaveBeenCalledTimes(1);
+  });
+
+  it("Resume does nothing for an app phone (the driver does it) or a phone that isn't killed", async () => {
+    const { ws, ctx } = await setup("admin");
+    const app = await makeDevice(db(), ws.id, { appVersion: "1.4.0", killedAt: new Date(+NOW - 60_000) });
+    const r1 = await onAdminCallback(ctx, cb("resume", app.id), query("x"));
+    expect(r1.answerCallback?.text).toMatch(/driver/);
+    const tg = await makeDevice(db(), ws.id, { appVersion: "telegram" });
+    const r2 = await onAdminCallback(ctx, cb("resume", tg.id), query("x"));
+    expect(r2.answerCallback?.text).toBe("Not killed.");
+    expect(resumePhone).not.toHaveBeenCalled();
   });
 
   it("Cancel on a confirm changes nothing", async () => {

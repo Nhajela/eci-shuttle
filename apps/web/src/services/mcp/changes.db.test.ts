@@ -239,6 +239,16 @@ describe("describeChange", () => {
     );
   });
 
+  it("phone.resume says when it lifts the kill of a phone without an app", async () => {
+    const { ws, phone } = await setup();
+    const d = () => describeChange(db(), ws.id, { kind: "phone.resume", deviceId: phone.id });
+    expect(await d()).toBe("Lift the pause on phone 'Ravi's Redmi' (Bus 1) now: it tracks again in its shift");
+    await db().update(devices).set({ appVersion: "telegram", killedAt: NOW }).where(eq(devices.id, phone.id));
+    expect(await d()).toBe(
+      "Resume phone 'Ravi's Redmi' (Bus 1) after its kill: it has no app to resume itself, so tracking restarts at its next update",
+    );
+  });
+
   it("NOT_FOUND when a referenced object isn't in the workspace", async () => {
     const a = await setup();
     const b = await setup();
