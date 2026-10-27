@@ -30,6 +30,24 @@ export function isOlderVersion(version: string, min: string | null): boolean {
   return false;
 }
 
+/** Plain words for the runtime's lastError (SyncError, or "timeout"). Null = no error to show. */
+export function syncProblem(error: string | null): string | null {
+  if (!error) return null;
+  if (error === "unauthorized") return "The server did not accept this phone. Ask the shuttle team.";
+  if (error === "network") return "No internet. Trying again soon.";
+  if (error === "timeout") return "The server took too long. Trying again soon.";
+  if (error === "invalid_response" || error === "invalid_request")
+    return "The server sent something this app can't read.";
+  const http = /^http_(\d{3})$/.exec(error);
+  if (http) {
+    const code = Number(http[1]);
+    if (code === 429) return "The server is busy. Trying again soon.";
+    if (code >= 500) return `The server had a problem (${code}). Trying again soon.`;
+    return `The server refused the update (${code}).`;
+  }
+  return "The last sync failed.";
+}
+
 export type StatusInput = {
   config: SyncResponse;
   /** resolveMode(config, now) */
@@ -37,6 +55,12 @@ export type StatusInput = {
   lastSyncAt: number | null;
   appVersion: string;
   now: number;
+  /** runtime's last sync error, null after a success */
+  lastError?: string | null;
+  /** tracking should be running but only opening the app can start it */
+  needsApp?: boolean;
+  /** a patched build's background update was refused on this phone (it works like the unpatched build) */
+  degraded?: boolean;
 };
 
 export type StatusView = {
@@ -48,10 +72,25 @@ export type StatusView = {
   lastSync: string;
   showResume: boolean;
   newApkUrl: string | null;
+  /** why the last sync failed, or null */
+  problem: string | null;
+  /** "Open the app to start tracking" when the app is needed to start the location task, or null */
+  notice: string | null;
+  /** longer-lived explanation under the notice, or null */
+  note: string | null;
 };
 
 /** Everything the status screen shows, as text. */
-export function statusView({ config, resolution: r, lastSyncAt, appVersion, now }: StatusInput): StatusView {
+export function statusView({
+  config,
+  resolution: r,
+  lastSyncAt,
+  appVersion,
+  now,
+  lastError = null,
+  needsApp = false,
+  degraded = false,
+}: StatusInput): StatusView {
   const until = r.until === null ? "" : ` until ${formatIst(r.until, now)}`;
   const headline =
     r.mode === "active"
@@ -85,5 +124,12 @@ export function statusView({ config, resolution: r, lastSyncAt, appVersion, now 
     lastSync,
     showResume: r.mode === "killed",
     newApkUrl: config.apkUrl && isOlderVersion(appVersion, config.minAppVersion) ? config.apkUrl : null,
+    problem: syncProblem(lastError),
+    // only while tracking is wanted: a killed or unpaired phone must not be told to start it
+    notice: needsApp && (r.mode === "active" || r.mode === "idle") ? "Open the app to start tracking" : null,
+    note:
+      degraded && (r.mode === "active" || r.mode === "idle")
+        ? "Background tracking can't restart itself on this phone. Open the app before each run."
+        : null,
   };
 }

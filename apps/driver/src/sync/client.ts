@@ -19,6 +19,8 @@ export type SyncError =
   | "unauthorized"
   | "invalid_response"
   | "invalid_request"
+  /** the whole cycle ran out of time (set by the runtime, not by a request) */
+  | "timeout"
   /** the token changed (re-pair) while the request was in flight; the response belongs to the old pairing */
   | "superseded"
   | `http_${number}`;
@@ -31,45 +33,70 @@ export type SyncOutcome =
       /** remove this many pings from the queue head (sent or dropped as invalid) */
       sentPings: number;
     }
-  | { ok: false; state: SyncState; error: SyncError; sentPings: 0 };
+  | {
+      ok: false;
+      state: SyncState;
+      error: SyncError;
+      sentPings: 0;
+      /** the server's Retry-After on a 429 (ms, capped); the caller should not sync again before then */
+      retryAfterMs?: number;
+    };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
+/** A server asking for more than this is not believed: the phone must keep checking in. */
+const MAX_RETRY_AFTER_MS = 10 * 60_000;
 
-async function post(deps: SyncDeps, url: string, token: string, body: string): Promise<Response> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  try {
-    return await deps.fetch(url, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body,
-      signal: ctrl.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+type OriginResult = { response: SyncResponse } | { error: SyncError; retryAfterMs?: number };
+
+/** Retry-After is delta-seconds or an HTTP date. Anything else is ignored. */
+function parseRetryAfter(h: string | null, now: number): number | undefined {
+  if (!h) return undefined;
+  const t = h.trim();
+  const ms = /^\d+$/.test(t) ? Number(t) * 1000 : Date.parse(t) - now;
+  return Number.isFinite(ms) ? Math.min(MAX_RETRY_AFTER_MS, Math.max(0, ms)) : undefined;
 }
 
-/** One origin: the parsed response, or why it failed. Never throws. */
-async function tryOrigin(
-  deps: SyncDeps,
-  origin: string,
-  token: string,
-  body: string,
-): Promise<{ response: SyncResponse } | { error: SyncError }> {
-  let res: Response;
+/**
+ * One origin: the parsed response, or why it failed. Never throws. One deadline covers the request AND the body
+ * read: a server that sends headers and then stalls must not hang the sync (and everything queued behind it).
+ * The race makes the deadline hold even when the fetch implementation ignores the abort signal.
+ */
+async function tryOrigin(deps: SyncDeps, origin: string, token: string, body: string): Promise<OriginResult> {
+  const ctrl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      ctrl.abort();
+      reject(new Error("timeout"));
+    }, deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  });
+  deadline.catch(() => {}); // rejected after we returned: nobody is waiting on it
   try {
-    res = await post(deps, `${origin}/api/device/sync`, token, body);
+    const res = await Promise.race([
+      deps.fetch(`${origin}/api/device/sync`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body,
+        signal: ctrl.signal,
+      }),
+      deadline,
+    ]);
+    if (res.status === 401) return { error: "unauthorized" };
+    if (res.status === 429)
+      return { error: "http_429", retryAfterMs: parseRetryAfter(res.headers.get("retry-after"), deps.now()) };
+    if (!res.ok) return { error: `http_${res.status}` };
+    let json: unknown;
+    try {
+      json = await Promise.race([res.json(), deadline]);
+    } catch (e) {
+      return { error: e instanceof Error && e.message === "timeout" ? "network" : "invalid_response" };
+    }
+    const parsed = SyncResponse.safeParse(json);
+    return parsed.success ? { response: parsed.data } : { error: "invalid_response" };
   } catch {
-    return { error: "network" as const };
-  }
-  if (res.status === 401) return { error: "unauthorized" as const };
-  if (!res.ok) return { error: `http_${res.status}` as const };
-  try {
-    const parsed = SyncResponse.safeParse(await res.json());
-    return parsed.success ? { response: parsed.data } : { error: "invalid_response" as const };
-  } catch {
-    return { error: "invalid_response" as const };
+    return { error: "network" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -87,9 +114,9 @@ export async function syncOnce(
 ): Promise<SyncOutcome> {
   const before = getState();
   const token = before.token;
-  const fail = (error: SyncError): SyncOutcome => {
+  const fail = (error: SyncError, retryAfterMs?: number): SyncOutcome => {
     const s = getState();
-    return { ok: false, state: { ...s, failures: s.failures + 1 }, error, sentPings: 0 };
+    return { ok: false, state: { ...s, failures: s.failures + 1 }, error, sentPings: 0, retryAfterMs };
   };
   if (!token) return { ok: false, state: before, error: "unpaired", sentPings: 0 };
 
@@ -109,6 +136,8 @@ export async function syncOnce(
       response = r.response;
       break;
     }
+    // rate limited: the other origins are the same server, so asking again only makes it worse
+    if (r.error === "http_429") return fail(r.error, r.retryAfterMs);
     if (i === 0) firstError = r.error;
   }
   if (!response) return fail(firstError);

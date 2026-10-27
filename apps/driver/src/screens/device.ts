@@ -8,6 +8,7 @@ import * as Device from "expo-device";
 import * as Updates from "expo-updates";
 import { useEffect, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
+import { nativeVersion } from "../lib/nativeVersion";
 import { runtime } from "../runtime/native";
 import { fileKV, deviceStore as store } from "../store/native";
 import { createScreenDevice, type ScreenSnapshot } from "./deviceCore";
@@ -18,6 +19,7 @@ const syncNow = () => runtime.sync();
 
 const device = createScreenDevice({ store, files: fileKV, syncNow, fetch: (u, i) => fetch(u, i), builtInOrigin });
 
+export { nativeVersion };
 export const appVersion = (): string => Constants.expoConfig?.version ?? "0.0.0";
 
 let snap: ScreenSnapshot | null = null;

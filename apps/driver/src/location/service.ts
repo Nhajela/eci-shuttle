@@ -1,22 +1,28 @@
 /**
- * The foreground location service (SPEC §4/§5): expo-location background updates + expo-task-manager.
- * Whoever owns the stored config (sync) calls syncLocationService() after every resolveMode(); every fix or
- * idle wake runs the handler set with onLocationWake(). See NOTES.md for reboot / swiped-away behaviour.
+ * The location task (SPEC §4/§5): expo-location background updates + expo-task-manager, as thin native wiring.
+ * What to do is decided in plan.ts and apply.ts (unit-tested); this file only holds the expo calls.
+ *
+ * Model (NOTES.md): expo-location throws when a foreground-service task is started or changed while the app is in the
+ * background. Patched APKs (>= 0.1.1) may update a RUNNING task from anywhere; 0.1.0 may only start it on screen and
+ * only stops it from the background (plus a reminder notification). Which applies is plan.capabilityFor().
  *
  * Import this module from the app entry (top level), so the task is defined when Android starts JS headless.
  */
 import type { ModeResolution } from "@eci-shuttle/shared/contracts";
 import * as Location from "expo-location";
+import * as Notifications from "expo-notifications";
 import * as TaskManager from "expo-task-manager";
-import { type LocationPlan, locationPlan, planKey } from "./plan";
+import { AppState } from "react-native";
+import { nativeVersion } from "../lib/nativeVersion";
+import { applyLocationPlan, type NativeLocation, type NativeState, type ReminderNative, runReminder } from "./apply";
+import { capabilityFor, locationPlan, REMINDER_TEXT, reminderAction, reminderTarget } from "./plan";
 
 export const LOCATION_TASK = "eci-shuttle-location";
 
 type WakeHandler = (fixes: Location.LocationObject[], now: number) => Promise<void>;
 let handler: WakeHandler | null = null;
-let appliedKey: string | null = null;
 
-/** Called on every delivery: active fixes, or the idle low-power wake (use it as a clock: re-resolve, maybe sync). */
+/** Called on every delivery of the task (one fix per activeIntervalS while the task runs). */
 export function onLocationWake(h: WakeHandler): void {
   handler = h;
 }
@@ -26,22 +32,15 @@ TaskManager.defineTask<{ locations: Location.LocationObject[] }>(LOCATION_TASK, 
   await handler?.(data?.locations ?? [], Date.now());
 });
 
-/** Start, retune or stop the service for this resolution. Returns the plan so the caller knows whether to keep pings. */
-export async function syncLocationService(
-  r: ModeResolution,
-  idleHeartbeatS: number,
-  now: number,
-): Promise<LocationPlan> {
-  const plan = locationPlan(r, idleHeartbeatS, now);
-  const key = planKey(plan);
-  if (key === appliedKey) return plan;
-  appliedKey = null; // a failed start/stop is retried on the next call
-  if (!plan.run) {
-    if (await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK))
-      await Location.stopLocationUpdatesAsync(LOCATION_TASK);
-  } else {
-    // Calling start on a running task replaces its options and notification in place.
-    await Location.startLocationUpdatesAsync(LOCATION_TASK, {
+/** Headless JS reports "background" or "unknown", so only an explicit "active" counts as on screen. */
+export const isForeground = () => AppState.currentState === "active";
+
+const native: NativeLocation = {
+  isRunning: () => Location.hasStartedLocationUpdatesAsync(LOCATION_TASK),
+  stop: () => Location.stopLocationUpdatesAsync(LOCATION_TASK),
+  start: (plan) =>
+    // On a running task this replaces its options in place. From the background that only works on a patched APK.
+    Location.startLocationUpdatesAsync(LOCATION_TASK, {
       accuracy: plan.highAccuracy ? Location.Accuracy.High : Location.Accuracy.Lowest,
       timeInterval: plan.timeIntervalMs,
       distanceInterval: 0,
@@ -51,8 +50,91 @@ export async function syncLocationService(
         notificationBody: plan.notification.body,
         killServiceOnDestroy: false,
       },
+    }),
+};
+
+/**
+ * True once this JS process has registered the task from the foreground. Module state on purpose: it is reset by every
+ * process start, which is exactly when expo-task-manager may have restored a registry without a service.
+ */
+let verified = false;
+/**
+ * Called by the runtime once it has SAVED the key of a registration made by syncLocationService. Not before: a
+ * late, cut-off call whose key was refused must not mark the task verified (the next wake would see a key mismatch).
+ */
+export function confirmRegistered() {
+  verified = true;
+}
+/** A new foreground session: register again even if the registry looks right. */
+export function forceReregister() {
+  verified = false;
+}
+
+const REMINDER_ID = "eci-shuttle.start-reminder";
+
+const reminder: ReminderNative = {
+  // the same identifier replaces the pending notification: one at a time
+  schedule: async (atMs) => {
+    await Notifications.scheduleNotificationAsync({
+      identifier: REMINDER_ID,
+      content: { title: REMINDER_TEXT.title, body: REMINDER_TEXT.body },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(atMs) },
     });
-  }
-  appliedKey = key;
-  return plan;
+  },
+  cancel: () => Notifications.cancelScheduledNotificationAsync(REMINDER_ID),
+};
+
+const hasNotificationPermission = () =>
+  Notifications.getPermissionsAsync().then(
+    (p) => p.granted,
+    () => false,
+  );
+
+/**
+ * Bring the native task in line with this resolution as far as this build and the app's foreground state allow
+ * (plan.nativeDecision), and keep the "open the app to start" reminder right (unpatched builds only).
+ * `nativeVersion` is injected: tests and the wiring in runtime/native.ts decide where it comes from.
+ */
+export async function syncLocationService(
+  r: ModeResolution,
+  cfg: { activeIntervalS: number; idleHeartbeatS: number; charging?: boolean | null; clockOffsetMs?: number },
+  now: number,
+  prev: NativeState,
+  version: string | null = nativeVersion(),
+): Promise<NativeState & { registered: boolean }> {
+  const capability = capabilityFor(version, prev.degradedAt !== null && prev.degradedAt === version);
+  const plan = locationPlan(r, cfg, now, capability);
+  const applied = await applyLocationPlan(plan, {
+    native,
+    foreground: isForeground(),
+    startedKey: prev.startedKey,
+    capability,
+    verified,
+  });
+  if (!plan.run) verified = false;
+  // set on a refused update of our own task; cleared by the next successful foreground start; ignored on a new APK
+  const degradedAt = applied.degraded
+    ? version
+    : applied.registered
+      ? null
+      : prev.degradedAt === version
+        ? version
+        : null;
+  const action = reminderAction({
+    capability,
+    mode: r.mode,
+    taskWanted: plan.run,
+    needsApp: applied.needsApp,
+    target: reminderTarget(r, now),
+    reminderFor: prev.reminderFor,
+    hasPermission: await hasNotificationPermission(),
+  });
+  const reminderFor = await runReminder(action, reminder, prev.reminderFor, cfg.clockOffsetMs ?? 0);
+  return {
+    startedKey: applied.startedKey,
+    needsApp: applied.needsApp,
+    degradedAt,
+    reminderFor,
+    registered: applied.registered,
+  };
 }
