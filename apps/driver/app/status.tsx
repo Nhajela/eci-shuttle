@@ -24,7 +24,7 @@ export default function Status() {
     const t = setInterval(() => {
       setNow(Date.now());
       void refresh();
-    }, 30_000);
+    }, 5_000);
     return () => clearInterval(t);
   }, []);
 
@@ -38,6 +38,8 @@ export default function Status() {
     lastSyncAt: d.sync.lastSyncAt === null ? null : serverNow(d.sync, d.sync.lastSyncAt),
     appVersion: appVersion(),
     now: serverTime,
+    lastError: d.runtime.lastError,
+    needsApp: d.runtime.needsApp,
   });
   const tone = TONE[v.tone];
 
@@ -49,6 +51,14 @@ export default function Status() {
         </Text>
         {v.detail && <Text style={s.text}>{v.detail}</Text>}
       </View>
+
+      {v.notice && (
+        <View style={[styles.card, { backgroundColor: colors.amberBg }]}>
+          <Text style={[styles.noticeText, { color: colors.amber }]} accessibilityLiveRegion="polite">
+            {v.notice}
+          </Text>
+        </View>
+      )}
 
       {v.showResume && (
         <Button
@@ -65,6 +75,7 @@ export default function Status() {
       <Row label="Next" value={v.next} />
       <Row label="Vehicle" value={v.vehicle} />
       <Row label="Last sync" value={v.lastSync} />
+      {v.problem && <Row label="Problem" value={v.problem} />}
 
       {v.newApkUrl && (
         <Button label="New version: tap to install" onPress={() => void Linking.openURL(v.newApkUrl as string)} />
@@ -89,6 +100,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   card: { borderRadius: 12, padding: 20, gap: 8 },
+  noticeText: { fontSize: 18, fontWeight: "600" },
   headline: { fontSize: 24, fontWeight: "700" },
   row: { gap: 2, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.line },
 });

@@ -103,6 +103,15 @@ describe("resume", () => {
   });
 });
 
+describe("load: runtime flags", () => {
+  it("reads the last sync error and the open-the-app flag the runtime wrote", async () => {
+    const { dev, files } = setup();
+    expect((await dev.load()).runtime).toEqual({ lastError: null, needsApp: false });
+    await files.set("sync-state", JSON.stringify({ lastError: "http_429", needsApp: true }));
+    expect((await dev.load()).runtime).toEqual({ lastError: "http_429", needsApp: true });
+  });
+});
+
 describe("load", () => {
   it("shows the latched kill, not the last response", async () => {
     const { dev, store } = setup();

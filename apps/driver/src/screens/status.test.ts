@@ -1,6 +1,6 @@
 import type { ModeResolution, SyncResponse, Window } from "@eci-shuttle/shared/contracts";
 import { describe, expect, it } from "vitest";
-import { formatIst, isOlderVersion, statusView } from "./status";
+import { formatIst, isOlderVersion, statusView, syncProblem } from "./status";
 
 const MIN = 60_000;
 /** epoch ms of an IST wall-clock time on 2026-10-14 (+ dayOffset days) */
@@ -82,6 +82,8 @@ describe("statusView", () => {
       lastSync: "3 min ago (08:57)",
       showResume: false,
       newApkUrl: null,
+      problem: null,
+      notice: null,
     });
   });
 
@@ -138,5 +140,49 @@ describe("statusView", () => {
       statusView({ ...base, lastSyncAt, config: config(), resolution: res({}) }).lastSync;
     expect(v(NOW - 125 * MIN)).toBe("2 h ago (06:55)");
     expect(v(NOW - 10_000)).toBe("just now (08:59)");
+  });
+});
+
+describe("syncProblem: plain words for the last sync error", () => {
+  it.each([
+    ["unauthorized", "The server did not accept this phone. Ask the shuttle team."],
+    ["network", "No internet. Trying again soon."],
+    ["timeout", "The server took too long. Trying again soon."],
+    ["http_429", "The server is busy. Trying again soon."],
+    ["http_503", "The server had a problem (503). Trying again soon."],
+    ["http_400", "The server refused the update (400)."],
+    ["invalid_response", "The server sent something this app can't read."],
+    ["invalid_request", "The server sent something this app can't read."],
+    ["whatever", "The last sync failed."],
+  ])("%s", (code, text) => {
+    expect(syncProblem(code)).toBe(text);
+  });
+  it("nothing when there is no error", () => {
+    expect(syncProblem(null)).toBeNull();
+  });
+});
+
+describe("statusView: problem and notice", () => {
+  const base = { appVersion: "0.1.0", lastSyncAt: NOW - 3 * MIN, now: NOW, config: config() };
+
+  it("shows the last sync error", () => {
+    const v = statusView({ ...base, resolution: res({}), lastError: "network" });
+    expect(v.problem).toBe("No internet. Trying again soon.");
+    expect(statusView({ ...base, resolution: res({}), lastError: null }).problem).toBeNull();
+  });
+
+  it("asks to open the app when tracking should run but can't start from the background", () => {
+    const active = res({ mode: "active", intervalS: 10, window: win(at(8), at(11)), until: at(11) });
+    expect(statusView({ ...base, resolution: active, needsApp: true }).notice).toBe("Open the app to start tracking");
+    expect(statusView({ ...base, resolution: res({ until: at(16) }), needsApp: true }).notice).toBe(
+      "Open the app to start tracking",
+    );
+    expect(statusView({ ...base, resolution: active, needsApp: false }).notice).toBeNull();
+  });
+
+  it("no notice when the phone is stopped or unpaired, whatever an old flag says", () => {
+    for (const mode of ["killed", "revoked", "unpaired"] as const) {
+      expect(statusView({ ...base, resolution: res({ mode, intervalS: null }), needsApp: true }).notice).toBeNull();
+    }
   });
 });
