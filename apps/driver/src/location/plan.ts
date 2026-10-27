@@ -27,6 +27,8 @@ export function capabilityFor(nativeVersion: string | null, degraded: boolean): 
   return isOlderVersion(nativeVersion, PATCHED_FROM_VERSION) ? "unpatched" : "patched";
 }
 
+/** Unpatched and charging: the overnight stop is skipped for a window up to this far away. */
+export const CHARGING_HORIZON_MS = 16 * 3_600_000;
 /** Unpatched: with no active window this close, the task is stopped (no all-night GPS) and a reminder is set. */
 export const IDLE_STOP_AFTER_MS = 3 * 3_600_000;
 /** The reminder fires this long before the next window starts. */
@@ -49,7 +51,7 @@ export type LocationPlan =
 /** What the native task should be doing. Killed / revoked / unpaired always stop, in both builds. */
 export function locationPlan(
   r: ModeResolution,
-  cfg: { activeIntervalS: number; idleHeartbeatS: number },
+  cfg: { activeIntervalS: number; idleHeartbeatS: number; charging?: boolean | null },
   now: number,
   capability: Capability,
 ): LocationPlan {
@@ -66,8 +68,10 @@ export function locationPlan(
       notification: NOTIFICATION,
     };
   }
-  // unpatched: same options as active, so nothing needs retuning; but not all night
-  if (r.until === null || r.until - now > IDLE_STOP_AFTER_MS) return { run: false };
+  // unpatched: same options as active, so nothing needs retuning; but not all night on battery. On a charger GPS
+  // costs nothing that matters, and a missed "open the app" reminder would mean no tracking all day.
+  const horizon = cfg.charging === true ? CHARGING_HORIZON_MS : IDLE_STOP_AFTER_MS;
+  if (r.until === null || r.until - now > horizon) return { run: false };
   return { run: true, mode: "idle", ...activeOptions, notification: NOTIFICATION };
 }
 
@@ -81,7 +85,7 @@ export type NativeDecision = { action: "none" | "start" | "stop"; needsApp: bool
 /**
  * The only place that decides whether to touch the native task.
  * - plan says stop: stop whenever it runs (stopLocationUpdatesAsync works from the background).
- * - right options already running: nothing.
+ * - right options already running: nothing, except once per process in the foreground (see `verified`).
  * - running with other options: patched updates it in place from anywhere; unpatched needs the app on screen.
  * - not running: start only with the app on screen (a cold start fails from the background even when patched).
  * Whenever tracking is wanted and we can't act, `needsApp` is set so the status screen can ask for the app.
@@ -93,9 +97,19 @@ export function nativeDecision(i: {
   startedKey: string | null;
   foreground: boolean;
   capability: Capability;
+  /**
+   * We registered the task from the foreground in THIS JS process. expo-task-manager rebuilds its registry on every
+   * process start (reboot, OEM/low-memory kill, app open) and on 0.1.0 that restore never starts the foreground
+   * service, so "running" and a persisted key prove nothing until we have started it ourselves.
+   */
+  verified: boolean;
 }): NativeDecision {
   if (!i.plan.run) return { action: i.running ? "stop" : "none", needsApp: false };
-  if (i.running && i.startedKey === planKey(i.plan)) return { action: "none", needsApp: false };
+  if (i.running && i.startedKey === planKey(i.plan)) {
+    // in the foreground, re-register once per process / foreground session (in place, so cheap); in the background
+    // we can neither tell nor start, so leave it
+    return { action: i.foreground && !i.verified ? "start" : "none", needsApp: false };
+  }
   if (i.foreground || (i.running && i.capability === "patched")) return { action: "start", needsApp: false };
   return { action: "none", needsApp: true };
 }

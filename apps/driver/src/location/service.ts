@@ -53,6 +53,16 @@ const native: NativeLocation = {
     }),
 };
 
+/**
+ * True once this JS process has registered the task from the foreground. Module state on purpose: it is reset by every
+ * process start, which is exactly when expo-task-manager may have restored a registry without a service.
+ */
+let verified = false;
+/** A new foreground session: register again even if the registry looks right. */
+export function forceReregister() {
+  verified = false;
+}
+
 const REMINDER_ID = "eci-shuttle.start-reminder";
 
 const reminder: ReminderNative = {
@@ -80,7 +90,7 @@ const hasNotificationPermission = () =>
  */
 export async function syncLocationService(
   r: ModeResolution,
-  cfg: { activeIntervalS: number; idleHeartbeatS: number },
+  cfg: { activeIntervalS: number; idleHeartbeatS: number; charging?: boolean | null; clockOffsetMs?: number },
   now: number,
   prev: NativeState,
   version: string | null = nativeVersion(),
@@ -92,8 +102,18 @@ export async function syncLocationService(
     foreground: isForeground(),
     startedKey: prev.startedKey,
     capability,
+    verified,
   });
-  const degradedAt = applied.degraded ? version : prev.degradedAt === version ? version : null;
+  if (applied.registered) verified = true;
+  if (!plan.run) verified = false;
+  // set on a refused update of our own task; cleared by the next successful foreground start; ignored on a new APK
+  const degradedAt = applied.degraded
+    ? version
+    : applied.registered
+      ? null
+      : prev.degradedAt === version
+        ? version
+        : null;
   const action = reminderAction({
     capability,
     mode: r.mode,
@@ -103,6 +123,6 @@ export async function syncLocationService(
     reminderFor: prev.reminderFor,
     hasPermission: await hasNotificationPermission(),
   });
-  const reminderFor = await runReminder(action, reminder, prev.reminderFor);
+  const reminderFor = await runReminder(action, reminder, prev.reminderFor, cfg.clockOffsetMs ?? 0);
   return { startedKey: applied.startedKey, needsApp: applied.needsApp, degradedAt, reminderFor };
 }

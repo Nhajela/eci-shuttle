@@ -50,7 +50,8 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
     return new Response(JSON.stringify(respond(body)), { status: 200 });
   });
   const applied: ModeResolution[] = [];
-  const calls: { cfg: { activeIntervalS: number; idleHeartbeatS: number }; prev: NativeState }[] = [];
+  const calls: { cfg: Record<string, unknown>; prev: NativeState }[] = [];
+  let charging: boolean | null = false;
   let nativeResult: NativeState = { startedKey: "k1", needsApp: false, degradedAt: null, reminderFor: null };
   const ota = { report: vi.fn(async () => ({ updateId: "u1" })), reconcile: vi.fn(async () => "none") };
   const deps: RuntimeDeps = {
@@ -69,6 +70,7 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
       },
     },
     battery: async () => 80,
+    charging: async () => charging,
     telemetry: async () => ({
       charging: false,
       permissions: { location: "always", preciseLocation: true, notifications: true, batteryOptimizationExempt: true },
@@ -87,6 +89,9 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
     bodies,
     applied,
     calls,
+    setCharging: (c: boolean | null) => {
+      charging = c;
+    },
     setNative: (r: typeof nativeResult) => {
       nativeResult = r;
     },
@@ -346,7 +351,7 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     const s = await setup();
     await s.rt.sync();
     expect(s.calls[0]).toEqual({
-      cfg: { activeIntervalS: 10, idleHeartbeatS: 900 },
+      cfg: { activeIntervalS: 10, idleHeartbeatS: 900, charging: false, clockOffsetMs: 0 },
       prev: { startedKey: null, needsApp: false, degradedAt: null, reminderFor: null },
     });
     s.setNative({ startedKey: "k2", needsApp: true, degradedAt: "0.1.1", reminderFor: 123 });
@@ -372,6 +377,75 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     s.at(T + 1_000);
     await s.rt.wake([fix(T + 1_000)]);
     expect(JSON.parse(s.files.dump()["sync-state"]).lastKeptAt).toBe(T);
+  });
+
+  it("tells the location service whether the phone is charging and how far the server clock is off", async () => {
+    const s = await setup({ respond: () => config({ serverTime: T + 5_000 }) });
+    s.setCharging(true);
+    await s.rt.sync();
+    await s.rt.sync();
+    expect(s.calls.at(-1)?.cfg).toMatchObject({ charging: true, clockOffsetMs: 5_000 });
+  });
+
+  it("a battery read that hangs does not lose the fixes: they are queued with battery null", async () => {
+    const s = await setup();
+    s.deps.batteryTimeoutMs = 20;
+    s.deps.battery = () => new Promise(() => {});
+    await s.rt.wake([fix(T)]);
+    expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T, battery: null })]);
+  });
+
+  it("a forced sync (Resume, push, app opened) still waits out a Retry-After", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T + 10_000);
+    await s.rt.sync();
+    expect(s.fetch).toHaveBeenCalledOnce();
+    s.at(T + 61_000);
+    await s.rt.sync();
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("a timeout after the sync already succeeded (slow OTA) is not counted as a sync failure", async () => {
+    const s = await setup();
+    s.deps.cycleTimeoutMs = 30;
+    s.ota.reconcile.mockImplementationOnce(() => new Promise(() => {}));
+    await s.rt.sync();
+    expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ lastError: null, failures: 0, lastSyncAt: T });
+  });
+
+  it("a cut-off cycle makes no native call and writes nothing when it finally wakes up", async () => {
+    const s = await setup();
+    s.deps.cycleTimeoutMs = 30;
+    let release: (b: number) => void = () => {};
+    s.deps.battery = () => new Promise<number>((r) => (release = r)); // the cycle hangs here, before the location apply
+    await s.rt.wake([fix(T)]);
+    s.deps.battery = async () => 80;
+    s.setNative({ startedKey: "k2", needsApp: false, degradedAt: null, reminderFor: null });
+    s.at(T + 10_000);
+    await s.rt.wake([fix(T + 10_000)]);
+    const saved = JSON.parse(s.files.dump()["sync-state"]);
+    expect(saved).toMatchObject({ nativeKey: "k2", lastKeptAt: T + 10_000 });
+    const nativeCalls = s.calls.length;
+    release(55);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(s.calls.length).toBe(nativeCalls); // the late cycle made no native call
+    expect(JSON.parse(s.files.dump()["sync-state"])).toEqual(saved); // no stale rollback
+  });
+
+  it("a cut-off cycle whose native call returns late does not overwrite newer state", async () => {
+    const s = await setup();
+    s.deps.cycleTimeoutMs = 30;
+    let release: (r: NativeState) => void = () => {};
+    s.deps.location.apply = () => new Promise((r) => (release = r));
+    await s.rt.wake([fix(T)]);
+    s.deps.location.apply = async () => ({ startedKey: "new", needsApp: false, degradedAt: null, reminderFor: null });
+    s.at(T + 10_000);
+    await s.rt.wake([fix(T + 10_000)]);
+    release({ startedKey: "stale", needsApp: true, degradedAt: null, reminderFor: null });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ nativeKey: "new", needsApp: false });
   });
 
   it("a location service that can't start (no permission yet) does not stop the sync", async () => {
