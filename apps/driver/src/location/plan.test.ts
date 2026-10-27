@@ -118,9 +118,24 @@ describe("locationPlan: unpatched (one fixed task per tracking day)", () => {
     expect(locationPlan(res({ until: null }), CFG, now, U)).toEqual({ run: false });
   });
 
-  it("killed, revoked and unpaired stop", () => {
+  it("charging: no overnight stop (a missed reminder must not mean no tracking all day), up to 16 h ahead", () => {
+    const plugged = { ...CFG, charging: true };
+    const far = res({ until: now + 11 * HOUR });
+    expect(locationPlan(far, plugged, now, U)).toMatchObject({ run: true, mode: "idle", highAccuracy: true });
+    expect(planKey(locationPlan(far, plugged, now, U))).toBe(planKey(locationPlan(active, plugged, now, U)));
+    expect(locationPlan(res({ until: now + 17 * HOUR }), plugged, now, U)).toEqual({ run: false });
+    expect(locationPlan(res({ until: null }), plugged, now, U)).toEqual({ run: false });
+  });
+
+  it("on battery (or unknown): the overnight stop stays", () => {
+    const far = res({ until: now + 11 * HOUR });
+    expect(locationPlan(far, { ...CFG, charging: false }, now, U)).toEqual({ run: false });
+    expect(locationPlan(far, { ...CFG, charging: null }, now, U)).toEqual({ run: false });
+  });
+
+  it("killed, revoked and unpaired stop, charging or not", () => {
     for (const mode of ["killed", "revoked", "unpaired"] as const) {
-      expect(locationPlan(res({ mode, intervalS: null }), CFG, now, U)).toEqual({ run: false });
+      expect(locationPlan(res({ mode, intervalS: null }), { ...CFG, charging: true }, now, U)).toEqual({ run: false });
     }
   });
 
@@ -140,7 +155,14 @@ describe("nativeDecision: build x plan x foreground/background -> native action"
   const idleNear = res({ until: now + HOUR });
   const idleFar = res({ until: now + 11 * HOUR });
   const dead = res({ mode: "killed", intervalS: null });
-  const d = (cap: Capability, r: ModeResolution, running: boolean, key: "same" | "other" | null, fg: boolean) => {
+  const d = (
+    cap: Capability,
+    r: ModeResolution,
+    running: boolean,
+    key: "same" | "other" | null,
+    fg: boolean,
+    verified = true,
+  ) => {
     const plan = locationPlan(r, CFG, now, cap);
     return nativeDecision({
       plan,
@@ -148,6 +170,7 @@ describe("nativeDecision: build x plan x foreground/background -> native action"
       startedKey: key === "same" ? planKey(plan) : key === "other" ? "low|900000|x" : null,
       foreground: fg,
       capability: cap,
+      verified,
     });
   };
   const none = { action: "none", needsApp: false } as const;
@@ -161,9 +184,17 @@ describe("nativeDecision: build x plan x foreground/background -> native action"
       expect(d(P, dead, true, "same", false)).toEqual(stop);
       expect(d(P, dead, false, null, false)).toEqual(none);
     });
-    it("running with the right options: nothing, in any mode", () => {
+    it("running with the right options and verified in this process: nothing, in any mode", () => {
       for (const r of [act, idleNear, idleFar])
-        for (const fg of [true, false]) expect(d(P, r, true, "same", fg)).toEqual(none);
+        for (const fg of [true, false]) expect(d(P, r, true, "same", fg, true)).toEqual(none);
+    });
+    it("foreground, registry says running with the right key but not verified in this process: re-register", () => {
+      // expo-task-manager restores its registry on every process start (reboot, OEM kill, app open) without
+      // necessarily starting the service, so "running" + a persisted key proves nothing until we start it ourselves
+      for (const r of [act, idleNear, idleFar]) expect(d(P, r, true, "same", true, false)).toEqual(start);
+    });
+    it("background, unverified, right key: cannot tell and cannot start: nothing", () => {
+      for (const r of [act, idleNear]) expect(d(P, r, true, "same", false, false)).toEqual(none);
     });
     it("running with other options (mode changed) or unknown (older build): update in place, fg or bg", () => {
       for (const r of [act, idleNear, idleFar])
@@ -188,8 +219,14 @@ describe("nativeDecision: build x plan x foreground/background -> native action"
       expect(d(U, idleFar, true, "same", false)).toEqual(stop);
       expect(d(U, idleFar, false, null, false)).toEqual(none);
     });
-    it("active / idle within 3 h, running with the day's options: nothing (mode changes never touch the task)", () => {
+    it("active / idle within 3 h, running with the day's options, verified: nothing (mode changes never touch the task)", () => {
       for (const r of [act, idleNear]) for (const fg of [true, false]) expect(d(U, r, true, "same", fg)).toEqual(none);
+    });
+    it("restored registry after a reboot / kill (right key, not verified), app opened: start", () => {
+      for (const r of [act, idleNear]) expect(d(U, r, true, "same", true, false)).toEqual(start);
+    });
+    it("restored registry, still in the background: nothing we can do, nothing to claim", () => {
+      for (const r of [act, idleNear]) expect(d(U, r, true, "same", false, false)).toEqual(none);
     });
     it("active / idle within 3 h, not running or other options: start in the foreground, open the app in the background", () => {
       for (const r of [act, idleNear])

@@ -32,13 +32,24 @@ export type Applied = {
   startedKey: string | null;
   /** the plan wants tracking but the native task isn't right and only opening the app can fix it */
   needsApp: boolean;
-  /** a patched build's in-place update was refused in the background: behave as unpatched from now on */
+  /**
+   * A patched build's in-place update of a task WE started in this process was refused in the background: behave as
+   * unpatched from now on. Never set for a restored, unverified task, or for a foreground refusal.
+   */
   degraded: boolean;
+  /** this call registered the task from the foreground: it is verified for the rest of the process */
+  registered: boolean;
 };
 
 export async function applyLocationPlan(
   plan: LocationPlan,
-  i: { native: NativeLocation; foreground: boolean; startedKey: string | null; capability: Capability },
+  i: {
+    native: NativeLocation;
+    foreground: boolean;
+    startedKey: string | null;
+    capability: Capability;
+    verified: boolean;
+  },
 ): Promise<Applied> {
   const running = await i.native.isRunning();
   const d = nativeDecision({
@@ -47,25 +58,27 @@ export async function applyLocationPlan(
     startedKey: i.startedKey,
     foreground: i.foreground,
     capability: i.capability,
+    verified: i.verified,
   });
   // the key only means something while the task exists; a task the OS or the user killed has forgotten its options
   const known = running ? i.startedKey : null;
   if (d.action === "stop") {
     await i.native.stop();
-    return { startedKey: null, needsApp: false, degraded: false };
+    return { startedKey: null, needsApp: false, degraded: false, registered: false };
   }
   if (d.action === "start" && plan.run) {
     try {
       await i.native.start(plan);
-      return { startedKey: planKey(plan), needsApp: false, degraded: false };
+      return { startedKey: planKey(plan), needsApp: false, degraded: false, registered: i.foreground };
     } catch (e) {
       if (!isForegroundNotAllowed(e)) throw e;
       // Foreground: JS saw "active" a moment before the native side did; the next delivery or app focus retries.
-      // Background: the patch is not doing its job on this phone, so stop relying on it.
-      return { startedKey: known, needsApp: true, degraded: !i.foreground };
+      // Background: if we registered this task ourselves in this process, the patch is not doing its job on this
+      // phone, so stop relying on it. A task merely restored by the task manager proves nothing about the patch.
+      return { startedKey: known, needsApp: true, degraded: !i.foreground && i.verified, registered: false };
     }
   }
-  return { startedKey: known, needsApp: d.needsApp, degraded: false };
+  return { startedKey: known, needsApp: d.needsApp, degraded: false, registered: false };
 }
 
 export type ReminderNative = {
@@ -79,10 +92,12 @@ export async function runReminder(
   a: ReminderAction,
   native: ReminderNative,
   reminderFor: number | null,
+  /** serverTime - phone clock: the plan's times are server time, notifications fire on the phone clock */
+  clockOffsetMs: number,
 ): Promise<number | null> {
   try {
     if (a.action === "schedule") {
-      await native.schedule(a.at);
+      await native.schedule(a.at - clockOffsetMs);
       return a.for;
     }
     if (a.action === "cancel") {

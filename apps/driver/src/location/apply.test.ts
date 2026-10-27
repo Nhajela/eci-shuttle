@@ -30,14 +30,15 @@ const run = (
   foreground: boolean,
   startedKey: string | null,
   cap: Capability,
-) => applyLocationPlan(plan, { native, foreground, startedKey, capability: cap });
+  verified = true,
+) => applyLocationPlan(plan, { native, foreground, startedKey, capability: cap, verified });
 
 describe("applyLocationPlan: unpatched", () => {
   it("foreground: starts the task with the fixed options and remembers the key", async () => {
     const native = fake(false);
     const out = await run(planU, native, true, null, "unpatched");
     expect(native.start).toHaveBeenCalledWith(planU);
-    expect(out).toEqual({ startedKey: key, needsApp: false, degraded: false });
+    expect(out).toEqual({ startedKey: key, needsApp: false, degraded: false, registered: true });
   });
 
   it("background: touches nothing and says the app must be opened", async () => {
@@ -45,19 +46,19 @@ describe("applyLocationPlan: unpatched", () => {
     const out = await run(planU, native, false, null, "unpatched");
     expect(native.start).not.toHaveBeenCalled();
     expect(native.stop).not.toHaveBeenCalled();
-    expect(out).toEqual({ startedKey: null, needsApp: true, degraded: false });
+    expect(out).toEqual({ startedKey: null, needsApp: true, degraded: false, registered: false });
   });
 
   it("background with a running task that matches: no calls, no flag (idle <-> active never retunes)", async () => {
     const native = fake(true);
     const out = await run(planU, native, false, key, "unpatched");
     expect(native.start).not.toHaveBeenCalled();
-    expect(out).toEqual({ startedKey: key, needsApp: false, degraded: false });
+    expect(out).toEqual({ startedKey: key, needsApp: false, degraded: false, registered: false });
   });
 
   it("a foreground start the OS still refuses is recorded as needsApp, not thrown, and is not 'degraded'", async () => {
     const out = await run(planU, fake(false, REFUSED), true, null, "unpatched");
-    expect(out).toEqual({ startedKey: null, needsApp: true, degraded: false });
+    expect(out).toEqual({ startedKey: null, needsApp: true, degraded: false, registered: false });
   });
 
   it("other start errors (permissions) still throw so the runtime logs them", async () => {
@@ -69,7 +70,7 @@ describe("applyLocationPlan: unpatched", () => {
     const native = fake(true);
     const out = await run(stop, native, false, key, "unpatched");
     expect(native.stop).toHaveBeenCalledOnce();
-    expect(out).toEqual({ startedKey: null, needsApp: false, degraded: false });
+    expect(out).toEqual({ startedKey: null, needsApp: false, degraded: false, registered: false });
   });
 
   it("a stopped task with a stop plan clears a stale key", async () => {
@@ -78,6 +79,7 @@ describe("applyLocationPlan: unpatched", () => {
       startedKey: null,
       needsApp: false,
       degraded: false,
+      registered: false,
     });
     expect(native.stop).not.toHaveBeenCalled();
   });
@@ -88,25 +90,37 @@ describe("applyLocationPlan: patched", () => {
     const native = fake(true);
     const out = await run(planPActive, native, false, planKey(planPIdle), "patched");
     expect(native.start).toHaveBeenCalledWith(planPActive);
-    expect(out).toEqual({ startedKey: planKey(planPActive), needsApp: false, degraded: false });
+    expect(out).toEqual({ startedKey: planKey(planPActive), needsApp: false, degraded: false, registered: false });
   });
 
   it("background, not running: no cold start attempt, asks for the app", async () => {
     const native = fake(false);
     const out = await run(planPIdle, native, false, null, "patched");
     expect(native.start).not.toHaveBeenCalled();
-    expect(out).toEqual({ startedKey: null, needsApp: true, degraded: false });
+    expect(out).toEqual({ startedKey: null, needsApp: true, degraded: false, registered: false });
   });
 
-  it("background in-place update refused anyway: falls back (degraded), keeps the old key, asks for the app", async () => {
+  it("background in-place update of a task we started in this process, refused: degraded, old key, ask for the app", async () => {
     const native = fake(true, REFUSED);
-    const out = await run(planPActive, native, false, planKey(planPIdle), "patched");
-    expect(out).toEqual({ startedKey: planKey(planPIdle), needsApp: true, degraded: true });
+    const out = await run(planPActive, native, false, planKey(planPIdle), "patched", true);
+    expect(out).toEqual({ startedKey: planKey(planPIdle), needsApp: true, degraded: true, registered: false });
+  });
+
+  it("background update refused on a restored, unverified task: NOT a patch failure, just needs the app", async () => {
+    const out = await run(planPActive, fake(true, REFUSED), false, planKey(planPIdle), "patched", false);
+    expect(out).toEqual({ startedKey: planKey(planPIdle), needsApp: true, degraded: false, registered: false });
+  });
+
+  it("foreground, right key but unverified (restored registry): re-registers and reports it", async () => {
+    const native = fake(true);
+    const out = await run(planPIdle, native, true, planKey(planPIdle), "patched", false);
+    expect(native.start).toHaveBeenCalledWith(planPIdle);
+    expect(out).toEqual({ startedKey: planKey(planPIdle), needsApp: false, degraded: false, registered: true });
   });
 
   it("foreground refusal on a patched phone is not a patch failure", async () => {
     const out = await run(planPActive, fake(true, REFUSED), true, planKey(planPIdle), "patched");
-    expect(out.degraded).toBe(false);
+    expect(out).toMatchObject({ degraded: false, needsApp: true, registered: false });
   });
 
   it("stops from the background on kill", async () => {
@@ -121,17 +135,22 @@ describe("runReminder", () => {
 
   it("schedule replaces the pending one and returns the window it is for", async () => {
     const r = rem();
-    expect(await runReminder({ action: "schedule", at: 5, for: 9 }, r, null)).toBe(9);
+    expect(await runReminder({ action: "schedule", at: 5, for: 9 }, r, null, 0)).toBe(9);
     expect(r.schedule).toHaveBeenCalledWith(5);
+  });
+  it("schedules on the PHONE clock: server time minus the known skew", async () => {
+    const r = rem();
+    await runReminder({ action: "schedule", at: 1_000_000, for: 9 }, r, null, 60_000); // server is 1 min ahead
+    expect(r.schedule).toHaveBeenCalledWith(940_000);
   });
   it("cancel clears it", async () => {
     const r = rem();
-    expect(await runReminder({ action: "cancel" }, r, 9)).toBeNull();
+    expect(await runReminder({ action: "cancel" }, r, 9, 0)).toBeNull();
     expect(r.cancel).toHaveBeenCalledOnce();
   });
   it("none keeps the state", async () => {
     const r = rem();
-    expect(await runReminder({ action: "none" }, r, 9)).toBe(9);
+    expect(await runReminder({ action: "none" }, r, 9, 0)).toBe(9);
     expect(r.schedule).not.toHaveBeenCalled();
   });
   it("a notification failure never throws; the reminder just stays unset", async () => {
@@ -139,6 +158,6 @@ describe("runReminder", () => {
     r.schedule = vi.fn(async () => {
       throw new Error("boom");
     });
-    expect(await runReminder({ action: "schedule", at: 5, for: 9 }, r, null)).toBeNull();
+    expect(await runReminder({ action: "schedule", at: 5, for: 9 }, r, null, 0)).toBeNull();
   });
 });

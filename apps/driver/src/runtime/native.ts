@@ -4,7 +4,7 @@
 import * as Battery from "expo-battery";
 import Constants from "expo-constants";
 import { AppState } from "react-native";
-import { isForeground, onLocationWake, syncLocationService } from "../location/service";
+import { forceReregister, isForeground, onLocationWake, syncLocationService } from "../location/service";
 import { createExpoOta } from "../ota/expo";
 import { definePushSyncTask, getPushToken, registerPushSync } from "../push/push";
 import { readPermissions } from "../screens/permissions";
@@ -54,6 +54,7 @@ void runtime.sync();
 // tracking. The native side learns it is foregrounded a moment after JS does: retry briefly if it still refuses.
 AppState.addEventListener("change", (st) => {
   if (st !== "active") return;
+  forceReregister(); // each foreground session re-registers the task once: the registry may be a restored one
   void (async () => {
     for (let i = 0; i < 3 && isForeground(); i++) {
       await runtime.sync();
