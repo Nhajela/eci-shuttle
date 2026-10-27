@@ -22,7 +22,17 @@ type Persisted = Pick<SyncState, "clockOffsetMs" | "lastSyncAt" | "failures"> & 
   lastAttemptAt: number | null;
   /** reportedMode of the last attempt; a different mode now means sync at once */
   reportedMode: Mode | null;
+  /** why the last attempt failed (SyncError), null after a success; the status screen shows it */
+  lastError: string | null;
+  /** phone clock before which a 429 asked us not to sync again (Retry-After) */
+  retryAfterAt: number | null;
 };
+
+/**
+ * One cycle gets this long (3 origins × 20 s request deadline, plus disk and OTA). Past it the serial queue moves on,
+ * so a stuck native call or socket can't stop every later wake, push and sync.
+ */
+export const CYCLE_TIMEOUT_MS = 90_000;
 
 // Wakes drift a little early on Android; without slack a 15 min heartbeat that fires at 14:58 waits another 15 min.
 const DUE_SLACK = 0.9;
@@ -34,6 +44,8 @@ export type RuntimeDeps = {
   fetch: typeof fetch;
   builtInOrigin: string;
   now: () => number;
+  /** per-cycle deadline, default CYCLE_TIMEOUT_MS */
+  cycleTimeoutMs?: number;
   random?: () => number;
   /** start / retune / stop the foreground service for this resolution (location/service syncLocationService) */
   location: { apply: (r: ModeResolution, idleHeartbeatS: number, serverNow: number) => Promise<unknown> };
@@ -60,6 +72,8 @@ export function createRuntime(deps: RuntimeDeps) {
       failures: v.failures ?? 0,
       lastAttemptAt: v.lastAttemptAt ?? null,
       reportedMode: v.reportedMode ?? null,
+      lastError: v.lastError ?? null,
+      retryAfterAt: v.retryAfterAt ?? null,
     };
   };
   const savePersisted = (p: Persisted) => deps.files.set(SYNC_KEY, JSON.stringify(p));
@@ -76,12 +90,13 @@ export function createRuntime(deps: RuntimeDeps) {
     return { r, dc };
   }
 
-  async function cycle(fixes: Fix[], force: boolean) {
+  async function cycle(fixes: Fix[], force: boolean, cancelled: () => boolean) {
     const now = deps.now();
     let p = await loadPersisted();
-    const { r, dc } = await apply(p);
+    const dc = await deps.store.deviceConfig();
 
-    // each fix by its own (server) time: a cached fix from before the window or a late batch after it
+    // Queue the fixes before anything that can hang (native calls, network): a cut-off cycle must not lose them.
+    // Each fix by its own (server) time: a cached fix from before the window or a late batch after it.
     const inWindow = fixes.filter((f) => resolveMode(dc, f.timestamp + p.clockOffsetMs).mode === "active");
     if (inWindow.length) {
       const battery = await deps.battery();
@@ -90,6 +105,7 @@ export function createRuntime(deps: RuntimeDeps) {
         now,
       );
     }
+    const { r } = await apply(p);
 
     const [st, token, origins] = await Promise.all([deps.store.state(), deps.store.token(), deps.store.origins()]);
     if (!token) return;
@@ -105,9 +121,11 @@ export function createRuntime(deps: RuntimeDeps) {
       failures: p.failures,
     };
     const delay = nextSyncDelayMs(r, now + p.clockOffsetMs, state, (deps.random ?? Math.random)());
+    const rateLimited = p.retryAfterAt !== null && now < p.retryAfterAt;
     const due =
       force ||
       (delay !== null &&
+        !rateLimited &&
         (p.lastAttemptAt === null || now - p.lastAttemptAt >= delay * DUE_SLACK || p.reportedMode !== r.mode));
     if (!due) return;
 
@@ -130,28 +148,54 @@ export function createRuntime(deps: RuntimeDeps) {
       now: deps.now,
       builtInOrigin: deps.builtInOrigin,
     });
+    // cut off while the request was out: a newer cycle owns the state now, and unacked pings are simply resent
+    if (cancelled()) return;
     p = { ...p, lastAttemptAt: now, reportedMode: r.mode, failures: out.state.failures };
     if (!out.ok) {
-      await savePersisted(p);
+      await savePersisted({
+        ...p,
+        lastError: out.error,
+        retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
+      });
       return;
     }
     // re-paired while the request was out: this response belongs to the old token (its pings were cleared with it)
     if ((await deps.store.token()) !== token) return;
     await deps.store.applySync(out.response, { sentResume: state.resumePending });
     await deps.queue.ack(pings.slice(0, out.sentPings));
-    p = { ...p, clockOffsetMs: out.state.clockOffsetMs, lastSyncAt: out.state.lastSyncAt, failures: 0 };
+    p = {
+      ...p,
+      clockOffsetMs: out.state.clockOffsetMs,
+      lastSyncAt: out.state.lastSyncAt,
+      failures: 0,
+      lastError: null,
+      retryAfterAt: null,
+    };
     await savePersisted(p);
     await apply(p);
     // last: applying an update reloads the JS
     await deps.ota.reconcile(out.response.targetUpdateId);
   }
 
+  /** One cycle with a deadline. On timeout the queue moves on and the late cycle is told to stand down. */
   const run = (fixes: Fix[], force: boolean) =>
-    one(() =>
-      cycle(fixes, force).catch((e) => {
+    one(async () => {
+      let cut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), deps.cycleTimeoutMs ?? CYCLE_TIMEOUT_MS);
+      });
+      const work = cycle(fixes, force, () => cut).catch((e) => {
         console.warn("runtime cycle", e instanceof Error ? e.message : e);
-      }),
-    );
+      });
+      const done = await Promise.race([work, timeout]);
+      clearTimeout(timer);
+      if (done !== "timeout") return;
+      cut = true;
+      console.warn("runtime cycle timed out");
+      const p = await loadPersisted();
+      await savePersisted({ ...p, lastError: "timeout", failures: p.failures + 1 }).catch(() => {});
+    });
 
   return {
     /** The location task's delivery: fixes while active, an empty clock tick while idle. Never throws. */

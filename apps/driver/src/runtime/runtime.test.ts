@@ -218,6 +218,55 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(s.ota.reconcile).not.toHaveBeenCalled();
   });
 
+  it("a cycle that hangs is cut off: later cycles still run and no queued ping is lost", async () => {
+    const s = await setup();
+    s.deps.cycleTimeoutMs = 30;
+    s.fetch.mockImplementationOnce(() => new Promise<Response>(() => {})); // never answers, ignores the abort
+    await s.rt.wake([fix(T)]);
+    expect(await s.queue.size()).toBe(1);
+    expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ lastError: "timeout", failures: 1 });
+    s.at(T + 10_000);
+    await s.rt.wake([fix(T + 10_000)]);
+    expect(s.bodies.at(-1)?.pings).toHaveLength(2);
+    expect(await s.queue.size()).toBe(0);
+    expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ lastError: null, failures: 0 });
+  });
+
+  it("a cycle cut off by the timeout does not apply its late response over the newer cycle", async () => {
+    const s = await setup();
+    s.deps.cycleTimeoutMs = 30;
+    let release: (r: Response) => void = () => {};
+    s.fetch.mockImplementationOnce(() => new Promise<Response>((r) => (release = r)));
+    await s.rt.wake([fix(T)]);
+    release(new Response(JSON.stringify(config({ configVersion: 99 })), { status: 200 }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect((await s.store.state()).config?.configVersion).toBe(3);
+  });
+
+  it("records why a sync failed and clears it on success", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("no", { status: 401 }));
+    await s.rt.sync();
+    expect(JSON.parse(s.files.dump()["sync-state"]).lastError).toBe("unauthorized");
+    await s.rt.sync();
+    expect(JSON.parse(s.files.dump()["sync-state"]).lastError).toBeNull();
+  });
+
+  it("429: waits out Retry-After before the next scheduled sync, and tries one origin only", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.wake([fix(T)]);
+    expect(s.fetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(s.files.dump()["sync-state"]).lastError).toBe("http_429");
+    s.at(T + 30_000); // backoff alone (2.5s) would be over; the server asked for 60s
+    await s.rt.wake([fix(T + 30_000)]);
+    expect(s.fetch).toHaveBeenCalledOnce();
+    s.at(T + 61_000);
+    await s.rt.wake([fix(T + 61_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    expect(await s.queue.size()).toBe(0);
+  });
+
   it("a kill is latched: the service stops and wakes no longer sync", async () => {
     const s = await setup({ respond: () => config({ killed: true }) });
     await s.rt.wake([fix(T)]);
