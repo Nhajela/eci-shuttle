@@ -57,7 +57,8 @@ start (reboot, OEM/low-memory kill, app open). On 0.1.0 that restore never start
 location was off at restore no updates are requested at all. So a persisted key that matches proves nothing. `service.ts`
 keeps a module-level `verified` flag, false at every process start and reset by every `AppState` "active"
 (`forceReregister()`); the first foreground pass with `plan.run` registers the task again (in place, cheap) and only a
-successful foreground start sets it. In the background an unverified-but-matching task is left alone: we can't tell and
+successful foreground start sets it, but only after the runtime has saved the new key (`location.confirm`): a
+late, cut-off cycle whose save was refused must not mark the task verified. In the background an unverified-but-matching task is left alone: we can't tell and
 can't start it, and a headless wake that gets fixes shows the task is delivering.
 
 `degradedAt` (patch fallback) is set only when a background in-place update of a task we registered in this process
