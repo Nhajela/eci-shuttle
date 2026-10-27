@@ -9,8 +9,12 @@ import type { Job } from "../job";
 const TICK_MS = 60_000;
 const CATCH_UP_MS = 15 * 60_000; // past this, phones' own idle heartbeat has caught up anyway
 const actor = systemActor("windows");
-/** End of the last fully scanned range; ranges run end to end so skipped ticks are caught up. */
-let lastTo: number | undefined;
+/**
+ * Per workspace: end of the last fully scanned range (or, after a failure, the start of the range that failed).
+ * Ranges run end to end so skipped ticks are caught up, and one failing workspace neither makes the others rescan
+ * (re-bumping every phone's config each minute) nor loses its own missed edges.
+ */
+const scanned = new Map<string, number>();
 
 /** Pure: does any window start or end in (from, to]? (Silences count: they flip the mode too.) */
 export const edgeIn = (schedule: Window[], from: number, to: number) =>
@@ -28,13 +32,14 @@ export const windows: Job = {
   schedule: "* * * * *",
   run: async ({ db, now }) => {
     const to = Math.floor(now.getTime() / TICK_MS) * TICK_MS;
-    // a cursor at or past `to` (same-minute rerun, clock step back) falls back to one tick
-    const from = lastTo !== undefined && lastTo < to ? Math.max(lastTo, to - CATCH_UP_MS) : to - TICK_MS;
-    const prev = new Date(from);
     const all = await listAllWorkspaces(db);
     const errors: string[] = [];
     let bumped = 0;
     for (const { id: workspaceId } of all) {
+      // a cursor at or past `to` (same-minute rerun, clock step back) falls back to one tick
+      const last = scanned.get(workspaceId);
+      const from = last !== undefined && last < to ? Math.max(last, to - CATCH_UP_MS) : to - TICK_MS;
+      const prev = new Date(from);
       try {
         const deviceIds: string[] = [];
         for (const { deviceId } of await trackedDevices(db, workspaceId)) {
@@ -51,14 +56,16 @@ export const windows: Job = {
             }))
           ).length;
         }
+        // the edges are handled: a failing refreshPhases below must not make the next tick bump them again
+        scanned.set(workspaceId, to);
         await refreshPhases(db, workspaceId, now);
       } catch (e) {
+        // not scanned: retried over the same range next tick (kept at its start, so the range can't be skipped)
+        if (scanned.get(workspaceId) !== to) scanned.set(workspaceId, from);
         errors.push(`${workspaceId}: ${e instanceof Error ? e.message : e}`);
       }
     }
-    // on error the cursor stays put, so the failed workspace is retried over the same range next tick
     if (errors.length) throw new Error(`windows failed for ${errors.join("; ")}`);
-    lastTo = to;
     return { workspaces: all.length, bumped };
   },
 };
