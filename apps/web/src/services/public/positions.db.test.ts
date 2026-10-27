@@ -1,14 +1,25 @@
 import { makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { describe, expect, it } from "vitest";
-import { routes, services, serviceVehicles, spots, vehicleBreaks, vehicleState, vehicles } from "@/db/schema";
+import {
+  routes,
+  serviceExceptions,
+  services,
+  serviceVehicles,
+  spots,
+  vehicleBreaks,
+  vehicleState,
+  vehicles,
+} from "@/db/schema";
 import { PublicMap, publicPositions } from "./positions";
 
 const db = () => testDb();
 const at = (hhmm: string, date = "2026-10-12") => new Date(`${date}T${hhmm}:00+05:30`);
 const NOW = at("09:30");
 
-async function world(over: { public?: boolean; validTo?: string } = {}) {
+async function world(
+  over: { public?: boolean; validTo?: string; startTime?: string; endTime?: string; daysOfWeek?: number[] } = {},
+) {
   const w = await makeWorkspace(db());
   const [riva, circle] = await db()
     .insert(spots)
@@ -43,9 +54,9 @@ async function world(over: { public?: boolean; validTo?: string } = {}) {
       public: over.public ?? true,
       validFrom: "2026-10-01",
       validTo: over.validTo ?? "2026-11-01",
-      daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
-      startTime: "08:00",
-      endTime: "22:00",
+      daysOfWeek: over.daysOfWeek ?? [1, 2, 3, 4, 5, 6, 7],
+      startTime: over.startTime ?? "08:00",
+      endTime: over.endTime ?? "22:00",
       pattern: { kind: "loop" },
     })
     .returning();
@@ -200,6 +211,87 @@ describe("publicPositions: what attendees may see", () => {
     expect(await names(w.id)).toEqual(["Fresh"]);
   });
 
+  describe("an offline vehicle follows the same 5 minute rule as the text (sight.ts)", () => {
+    const ago = (s: number) => new Date(NOW.getTime() - s * 1000);
+
+    it("ingest marks it offline after 2 min: still shown at 3 min, rebuilt as en route on its leg", async () => {
+      const { w, riva, circle, svc } = await world();
+      await bus(w.id, svc.id, "Quiet", {
+        phase: "offline",
+        spotId: riva.id,
+        nextSpotId: circle.id,
+        alongM: 300,
+        lastPingAt: ago(180),
+        geofence: { insideSpotId: null, enteredAt: null, candidateSpotId: null, candidateSince: null, lastFixAt: null },
+      });
+      const [v] = PublicMap.parse(await publicPositions(db(), w.id, NOW)).vehicles;
+      expect(v).toMatchObject({
+        name: "Quiet",
+        phase: "en_route",
+        atSpotId: null,
+        nextSpotId: circle.id,
+        legIndex: 0,
+        lastSeenS: 180,
+      });
+      expect(v?.legFraction).toBeGreaterThan(0);
+      expect(v?.headingDeg).not.toBeNull();
+    });
+
+    it("offline inside a stop is rebuilt as waiting at that stop, with its arrival as `since`", async () => {
+      const { w, riva, circle, svc } = await world();
+      const arrived = ago(400).getTime();
+      await bus(w.id, svc.id, "Waiting", {
+        phase: "offline",
+        spotId: null,
+        nextSpotId: circle.id,
+        alongM: 0,
+        lastPingAt: ago(200),
+        since: ago(120),
+        geofence: {
+          insideSpotId: riva.id,
+          enteredAt: arrived,
+          candidateSpotId: null,
+          candidateSince: null,
+          lastFixAt: null,
+        },
+      });
+      const [v] = (await publicPositions(db(), w.id, NOW)).vehicles;
+      expect(v).toMatchObject({ phase: "at_spot", atSpotId: riva.id, legIndex: null, headingDeg: null });
+      expect(v?.since).toBe(new Date(arrived).toISOString());
+    });
+
+    it("is gone at 6 min, and a vehicle parked at a stop 5-15 min ago is not drawn either", async () => {
+      const { w, riva, circle, svc } = await world();
+      await bus(w.id, svc.id, "Gone", {
+        phase: "offline",
+        spotId: riva.id,
+        nextSpotId: circle.id,
+        alongM: 300,
+        lastPingAt: ago(360),
+      });
+      await bus(w.id, svc.id, "Parked", {
+        phase: "offline",
+        nextSpotId: circle.id,
+        alongM: 0,
+        lastPingAt: ago(480),
+        geofence: {
+          insideSpotId: riva.id,
+          enteredAt: ago(900).getTime(),
+          candidateSpotId: null,
+          candidateSince: null,
+          lastFixAt: null,
+        },
+      });
+      expect(await names(w.id)).toEqual([]);
+    });
+
+    it("offline with nothing to rebuild from stays hidden", async () => {
+      const { w, svc } = await world();
+      await bus(w.id, svc.id, "Blank", { phase: "offline", lastPingAt: ago(180) });
+      expect(await names(w.id)).toEqual([]);
+    });
+  });
+
   it("flags a vehicle on a driver's break, and still shows where it is", async () => {
     const { w, riva, svc } = await world();
     const v = await bus(w.id, svc.id, "Chai", { phase: "at_spot", spotId: riva.id, alongM: 0 });
@@ -220,6 +312,68 @@ describe("publicPositions: what attendees may see", () => {
     await bus(old.w.id, old.svc.id, "Last week", { phase: "en_route", nextSpotId: old.circle.id, alongM: 300 });
     const m2 = await publicPositions(db(), old.w.id, NOW);
     expect(m2).toMatchObject({ spots: [], routes: [], vehicles: [] });
+  });
+
+  describe("service days (same rule as the text)", () => {
+    const onShift: [Date, Date] = [at("22:00", "2026-10-12"), at("04:00", "2026-10-13")];
+
+    it("a cross-midnight service from yesterday still shows its shuttle after midnight", async () => {
+      // Monday only, 20:00-02:00; it is 00:30 on Tuesday
+      const { w, circle, svc } = await world({ startTime: "20:00", endTime: "02:00", daysOfWeek: [1] });
+      const now = at("00:30", "2026-10-13");
+      await bus(
+        w.id,
+        svc.id,
+        "Night owl",
+        { phase: "en_route", nextSpotId: circle.id, alongM: 300, lastPingAt: new Date(now.getTime() - 30_000) },
+        { shift: onShift },
+      );
+      const m = await publicPositions(db(), w.id, now);
+      expect(m.vehicles.map((v) => v.name)).toEqual(["Night owl"]);
+      expect(m.routes).toHaveLength(1);
+    });
+
+    it("but not once yesterday's window has ended", async () => {
+      const { w, circle, svc } = await world({ startTime: "20:00", endTime: "02:00", daysOfWeek: [1] });
+      const now = at("02:30", "2026-10-13");
+      await bus(
+        w.id,
+        svc.id,
+        "Late",
+        { phase: "en_route", nextSpotId: circle.id, alongM: 300, lastPingAt: new Date(now.getTime() - 30_000) },
+        { shift: onShift },
+      );
+      expect(await publicPositions(db(), w.id, now)).toMatchObject({ spots: [], routes: [], vehicles: [] });
+    });
+
+    it("a cancelled day (cancel_day) shows nothing, even with a shuttle on shift", async () => {
+      const { w, circle, svc } = await world();
+      await bus(w.id, svc.id, "Cancelled", { phase: "en_route", nextSpotId: circle.id, alongM: 300 });
+      await db()
+        .insert(serviceExceptions)
+        .values({ workspaceId: w.id, serviceId: svc.id, date: "2026-10-12", kind: "cancel_day" });
+      expect(await publicPositions(db(), w.id, NOW)).toMatchObject({ spots: [], routes: [], vehicles: [] });
+    });
+
+    it("cancelling yesterday does not hide today's run, and cancelling today leaves yesterday's tail", async () => {
+      const { w, circle, svc } = await world({ startTime: "20:00", endTime: "02:00" });
+      const now = at("00:30", "2026-10-13");
+      await bus(
+        w.id,
+        svc.id,
+        "Tail",
+        { phase: "en_route", nextSpotId: circle.id, alongM: 300, lastPingAt: new Date(now.getTime() - 30_000) },
+        { shift: onShift },
+      );
+      await db()
+        .insert(serviceExceptions)
+        .values({ workspaceId: w.id, serviceId: svc.id, date: "2026-10-13", kind: "cancel_day" });
+      expect((await publicPositions(db(), w.id, now)).vehicles.map((v) => v.name)).toEqual(["Tail"]);
+      await db()
+        .insert(serviceExceptions)
+        .values({ workspaceId: w.id, serviceId: svc.id, date: "2026-10-12", kind: "cancel_day" });
+      expect((await publicPositions(db(), w.id, now)).vehicles).toEqual([]);
+    });
   });
 
   it("keeps workspaces apart", async () => {

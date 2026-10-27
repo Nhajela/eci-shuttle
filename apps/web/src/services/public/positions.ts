@@ -1,19 +1,32 @@
 /**
  * svc-public: live positions for the attendee map (SPEC §6). No login; no actor.
  * Privacy: a vehicle shows only while it is on an active shift (service_vehicles now) of a public service running
- * today, is active, was resolved to that service by ingest, is at a stop or en route, and has a fix ≤ 5 min old (sight.ts LIVE_MS, so the map and the text agree).
- * Off duty, between shifts, offline, stale or retired vehicles are never in the answer (a driver going home must
- * not be on the map). Same freshness rule as status.ts; no lateness anywhere.
+ * (service-days.ts: today, or yesterday's cross-midnight run, minus cancelled days), is active, was resolved to that
+ * service by ingest, and sight() says "live": a fix ≤ 5 min old (sight.ts LIVE_MS), at a stop or en route. Ingest
+ * marks a vehicle "offline" after 2 min; sight() rebuilds its stop or leg, so the map keeps it exactly as long as
+ * the text does. "parked" (last seen inside a stop 5-15 min ago, "may still be there") is a guess, not a position,
+ * so it is deliberately not drawn; neither are lost or hidden vehicles, off duty, between shifts or retired ones
+ * (a driver going home must not be on the map). No lateness anywhere.
  */
 import { istDate, type LatLng, pathLengthM } from "@eci-shuttle/shared";
 import { and, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { routes, services, serviceVehicles, spots, vehicleState, vehicles, workspaces } from "@/db/schema";
+import {
+  routes,
+  serviceExceptions,
+  services,
+  serviceVehicles,
+  spots,
+  vehicleState,
+  vehicles,
+  workspaces,
+} from "@/db/schema";
 import { activeBreaks } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { headingAlongPath, legFraction } from "./map-geo";
-import { LIVE_MS } from "./sight";
+import { addDays, serviceDaysInPlay } from "./service-days";
+import { sight } from "./sight";
 
 const Id = z.uuid();
 const LatLngZ = z.object({ lat: z.number(), lng: z.number() });
@@ -75,21 +88,41 @@ export const PublicMap = z.object({
 });
 export type PublicMap = z.infer<typeof PublicMap>;
 
-const weekday = (date: string) => ((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7) + 1;
-
 /** The public map of a workspace at `now`: stops and routes of today's public services, and the vehicles allowed to show. */
 export async function publicPositions(db: Db, workspaceId: string, now: Date): Promise<PublicMap> {
   const nowMs = now.getTime();
   const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
   if (!ws) throw new ServiceError("NOT_FOUND", "Workspace not found.");
 
+  const all = await db
+    .select()
+    .from(services)
+    .where(and(eq(services.workspaceId, workspaceId), eq(services.public, true), isNull(services.archivedAt)));
   const today = istDate(nowMs);
-  const svcs = (
-    await db
-      .select()
-      .from(services)
-      .where(and(eq(services.workspaceId, workspaceId), eq(services.public, true), isNull(services.archivedAt)))
-  ).filter((s) => today >= s.validFrom && today <= s.validTo && s.daysOfWeek.includes(weekday(today)));
+  const exRows = all.length
+    ? await db
+        .select()
+        .from(serviceExceptions)
+        .where(
+          and(
+            inArray(
+              serviceExceptions.serviceId,
+              all.map((s) => s.id),
+            ),
+            inArray(serviceExceptions.date, [addDays(today, -1), today]),
+            eq(serviceExceptions.kind, "cancel_day"),
+          ),
+        )
+    : [];
+  const svcs = [
+    ...new Map(
+      serviceDaysInPlay(
+        all,
+        exRows.map((e) => ({ serviceId: e.serviceId, date: e.date, type: e.kind })),
+        nowMs,
+      ).map((d) => [d.svc.id, d.svc]),
+    ).values(),
+  ];
   const empty: PublicMap = { generatedAt: now.toISOString(), spots: [], routes: [], vehicles: [] };
   if (!svcs.length) return empty;
 
@@ -149,10 +182,13 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
   const svcById = new Map(svcs.map((s) => [s.id, s]));
   const out: PublicVehicle[] = [];
   for (const r of rows) {
-    const s = r.state;
-    if (s.serviceId !== r.serviceId) continue;
+    if (r.state.serviceId !== r.serviceId) continue;
+    // live per sight(): a fix ≤ 5 min old; an "offline" state is rebuilt to the stop or leg it had at its last ping
+    const seen = sight(r.state, nowMs);
+    if (seen.kind !== "live") continue;
+    const s = seen.state;
     if (s.phase !== "at_spot" && s.phase !== "en_route") continue;
-    if (s.lat === null || s.lng === null || !s.lastPingAt || nowMs - s.lastPingAt.getTime() > LIVE_MS) continue;
+    if (s.lat === null || s.lng === null || !s.lastPingAt) continue;
     if (out.some((v) => v.id === r.vehicle.id)) continue; // two overlapping shifts on public services
     const route = routeById.get(svcById.get(r.serviceId)?.routeId ?? "");
     if (!route) continue;
