@@ -95,25 +95,23 @@ describe("runCleanup", () => {
     expect(left.every((r) => r.status === "pending" || +(r.sentAt ?? r.createdAt) > +ago(24 * 14))).toBe(true);
   });
 
-  it("keeps pings when PINGS_DELETE_AFTER is unset, in the future, or today (IST): the purge starts the day after", async () => {
+  it("keeps pings when PINGS_DELETE_AFTER is unset or still in the future (IST)", async () => {
     const db = testDb();
     const ws = await makeWorkspace(db);
     const p = await makePing(ws.id);
     await runCleanup(db, undefined, NOW);
     // NOW is 2 Nov in IST but 1 Nov in UTC: the date is read in IST
     await runCleanup(db, "2026-11-03", NOW);
-    // the date itself is still kept: it is the last day of the event
-    await runCleanup(db, "2026-11-02", NOW);
     expect(await db.select().from(pings).where(eq(pings.id, p.id))).toHaveLength(1);
   });
 
-  it("the day after PINGS_DELETE_AFTER (IST date), deletes every ping with one pings.purge audit row", async () => {
+  it("from PINGS_DELETE_AFTER (IST date) on, deletes every ping with one pings.purge audit row", async () => {
     const db = testDb();
     const ws = await makeWorkspace(db);
     const a = await makePing(ws.id);
     const b = await makePing(ws.id);
 
-    const r = await runCleanup(db, "2026-11-01", NOW);
+    const r = await runCleanup(db, "2026-11-02", NOW);
 
     expect(
       await db
@@ -130,7 +128,7 @@ describe("runCleanup", () => {
     expect(mine).toMatchObject({ actorKind: "system", entity: "pings", workspaceId: null });
 
     // nothing left to purge: no empty audit row the next night
-    const again = await runCleanup(db, "2026-11-01", new Date(+NOW + 86_400_000));
+    const again = await runCleanup(db, "2026-11-02", new Date(+NOW + 86_400_000));
     expect(again.pings).toBe(0);
     const after = await db.select().from(auditLog).where(eq(auditLog.action, "pings.purge"));
     expect(after).toHaveLength(audits.length);

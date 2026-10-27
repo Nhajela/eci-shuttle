@@ -12,8 +12,8 @@ const olderThan = (col: AnyColumn, fallback: AnyColumn, cut: Date) =>
 
 /**
  * Nightly cleanup (SPEC §2b, run by the worker job at 03:30 IST): delete login codes, pairing codes and proposals expired more than a day ago, and
- * outbox rows sent/dead more than 14 days ago. After the event (PINGS_DELETE_AFTER, the last IST date whose pings are kept, in env; unset =
- * keep: the purge starts the day after) delete raw pings: the phones belong to the drivers (SPEC §4). Deleting expired credentials is
+ * outbox rows sent/dead more than 14 days ago. After the event (PINGS_DELETE_AFTER, an IST date in env; unset =
+ * keep) delete raw pings: the phones belong to the drivers (SPEC §4). Deleting expired credentials is
  * bookkeeping, not audited; the ping purge writes one audit row (pings.purge, system actor) with the count.
  * Confirmed proposals are kept: audit rows point at them.
  */
@@ -50,7 +50,7 @@ export async function runCleanup(db: Db, pingsDeleteAfter: string | undefined, n
     pings: 0,
   };
   // IST calendar days compare as ISO strings; skip an empty table so later nights write no audit row
-  if (pingsDeleteAfter && istDate(now) > pingsDeleteAfter && (await db.select().from(pings).limit(1)).length) {
+  if (pingsDeleteAfter && istDate(now) >= pingsDeleteAfter && (await db.select().from(pings).limit(1)).length) {
     counts.pings = await mutate(
       db,
       systemActor("cleanup"),
