@@ -15,6 +15,7 @@ vi.mock("@/services/devices/phones", () => ({
   cancelDirective: vi.fn(),
   nudgePhone: vi.fn(),
   killPhone: vi.fn(),
+  resumePhone: vi.fn(),
   revokePhone: vi.fn(),
   movePhoneToWorkspace: vi.fn(),
 }));
@@ -81,6 +82,12 @@ describe("phone actions", () => {
     vi.mocked(phones.revokePhone).mockRejectedValueOnce(new Error("db down"));
     expect(await a.revokePhoneAction("test", "d1")).toEqual({ ok: false, error: "Something went wrong. Try again." });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("resume passes the phone through and revalidates", async () => {
+    expect(await a.resumePhoneAction("test", "d1")).toEqual({ ok: true });
+    expect(phones.resumePhone).toHaveBeenCalledWith("DB", actor, { workspaceId: "w1", deviceId: "d1" });
+    expect(revalidatePath).toHaveBeenCalledWith("/admin/phones");
   });
 
   it("assign, move, label, cancel pass their fields through", async () => {

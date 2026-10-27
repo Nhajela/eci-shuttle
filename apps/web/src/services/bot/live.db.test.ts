@@ -1,8 +1,8 @@
 import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, devices } from "@/db/schema";
+import { auditLog, deviceAssignments, devices, directives, vehicles } from "@/db/schema";
 import type { Person } from "@/db/types";
 import { createPairingCode } from "../devices/pairing";
 import { syncDevice } from "../devices/sync";
@@ -55,6 +55,7 @@ describe("onPair (/pair 123456)", () => {
     const reply = await onPair(ctx, await codeIn(ws.id));
     expect(html(reply)).toMatch(/Share My Live Location/);
     expect(html(reply)).toMatch(/until I turn it off/);
+    expect(html(reply)).toMatch(/isn't on a shuttle yet/);
     const [d] = await db()
       .select()
       .from(devices)
@@ -82,8 +83,28 @@ describe("onPair (/pair 123456)", () => {
   });
 });
 
+const assign = async (d: { id: string; workspaceId: string }) => {
+  const [v] = await db().insert(vehicles).values({ workspaceId: d.workspaceId, name: "Bus 1" }).returning();
+  await db()
+    .insert(deviceAssignments)
+    .values({
+      workspaceId: d.workspaceId,
+      deviceId: d.id,
+      vehicleId: v.id,
+      startsAt: new Date(NOW.getTime() - 86_400_000), // already running at the test's NOW (desiredConfig reads it)
+    });
+  return v;
+};
+const unassign = (deviceId: string, at: Date) =>
+  db().update(deviceAssignments).set({ endsAt: at }).where(eq(deviceAssignments.deviceId, deviceId));
+const notices = (deviceId: string) =>
+  db()
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.entityId, deviceId), eq(auditLog.action, "device.driver_notified")));
+
 describe("onLocation", () => {
-  const paired = async () => {
+  const paired = async (assigned = true) => {
     const person = await makePerson(db());
     const ws = await makeWorkspace(db());
     await onPair(await ctxFor(person), await codeIn(ws.id));
@@ -91,6 +112,7 @@ describe("onLocation", () => {
       .select()
       .from(devices)
       .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
+    if (assigned) await assign(d);
     return { person, device: d };
   };
 
@@ -122,11 +144,7 @@ describe("onLocation", () => {
 
   it("an edited_message update uses edit_date, defaults accuracy, and replies nothing", async () => {
     const { person } = await paired();
-    const reply = await onLocation(
-      db(),
-      locMsg(person.telegramId, { edit_date: SEC - 5 }, { live_period: undefined }),
-      NOW,
-    );
+    const reply = await onLocation(db(), locMsg(person.telegramId, { edit_date: SEC - 5 }), NOW);
     expect(reply.send).toEqual([]);
     const input = vi.mocked(syncDevice).mock.calls[0][2];
     expect(input.pings[0]).toMatchObject({ recordedAt: (SEC - 5) * 1000, accuracy: 50, heading: null });
@@ -146,5 +164,217 @@ describe("onLocation", () => {
     const edit = { ...locMsg(person.telegramId, { edit_date: SEC }), location: undefined, text: "hi" };
     expect((await onLocation(db(), edit, NOW)).send).toEqual([]);
     expect(syncDevice).not.toHaveBeenCalled();
+  });
+});
+
+describe("onLocation: tells the driver once why nothing is tracked", () => {
+  const setup = async (assigned = true) => {
+    const person = await makePerson(db());
+    const ws = await makeWorkspace(db());
+    await onPair(await ctxFor(person), await codeIn(ws.id));
+    const [device] = await db()
+      .select()
+      .from(devices)
+      .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
+    if (assigned) await assign(device);
+    return { person, device };
+  };
+  const live = (person: Person, edit = true, over: Partial<TgMessage> = {}) =>
+    locMsg(person.telegramId, edit ? { edit_date: SEC - 5, ...over } : over);
+
+  it("a killed phone: one 'paused' reply, then silence for every later update; still syncs", async () => {
+    const { person, device } = await setup();
+    await db()
+      .update(devices)
+      .set({ killedAt: new Date(NOW.getTime() - 60_000) })
+      .where(eq(devices.id, device.id));
+    const first = await onLocation(db(), live(person, false), NOW);
+    expect(html(first)).toBe("The shuttle team has paused your tracking.");
+    expect(html(first)).not.toMatch(/Got your live location/);
+    for (let i = 0; i < 3; i++) expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    expect(syncDevice).toHaveBeenCalledTimes(4);
+    expect(await notices(device.id)).toHaveLength(1);
+  });
+
+  it("a new kill is told again; a new share message while still killed is told once more", async () => {
+    const { person, device } = await setup();
+    const kill = (ms: number) =>
+      db()
+        .update(devices)
+        .set({ killedAt: new Date(ms) })
+        .where(eq(devices.id, device.id));
+    await kill(NOW.getTime() - 120_000);
+    expect(html(await onLocation(db(), live(person), NOW))).toMatch(/paused/);
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    await db().update(devices).set({ killedAt: null }).where(eq(devices.id, device.id));
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    await kill(NOW.getTime() - 30_000);
+    expect(html(await onLocation(db(), live(person), NOW))).toMatch(/paused/);
+    const reshare = await onLocation(db(), live(person, false, { message_id: 9 }), NOW);
+    expect(html(reshare)).toMatch(/paused/);
+    expect(await notices(device.id)).toHaveLength(3);
+  });
+
+  it("a revoked phone: one 'removed' reply asking for a new pairing code", async () => {
+    const { person, device } = await setup();
+    await db().update(devices).set({ revokedAt: NOW }).where(eq(devices.id, device.id));
+    await unassign(device.id, NOW);
+    const first = await onLocation(db(), live(person), NOW);
+    expect(html(first)).toMatch(/removed from the shuttle.*new pairing code/);
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    expect(await notices(device.id)).toHaveLength(1);
+  });
+
+  it("a phone on no vehicle: one 'isn't on a shuttle yet'; assigned and un-assigned again is told again", async () => {
+    const { person, device } = await setup(false);
+    const first = await onLocation(db(), live(person, false), NOW);
+    expect(html(first)).toBe("This phone isn't on a shuttle yet — ask the shuttle team to assign it.");
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+
+    await assign(device);
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    await unassign(device.id, new Date(NOW.getTime() - 1000));
+    expect(html(await onLocation(db(), live(person), NOW))).toMatch(/isn't on a shuttle yet/);
+    expect((await onLocation(db(), live(person), NOW)).send).toEqual([]);
+    expect(await notices(device.id)).toHaveLength(2);
+  });
+
+  it("an assigned, healthy phone gets the normal confirmation and no notice", async () => {
+    const { person, device } = await setup();
+    expect(html(await onLocation(db(), live(person, false), NOW))).toMatch(/Got your live location/);
+    expect(await notices(device.id)).toHaveLength(0);
+  });
+
+  it("the notice is one audit row by the device (device.driver_notified)", async () => {
+    const { person, device } = await setup(false);
+    await onLocation(db(), live(person), NOW);
+    const [row] = await notices(device.id);
+    expect(row).toMatchObject({
+      actorKind: "device",
+      actorId: device.id,
+      entity: "device",
+      workspaceId: device.workspaceId,
+    });
+  });
+});
+
+describe("onLocation: sharing ended", () => {
+  /** assigned, and inside a tracking window now unless `onShift` is false (the windows come from desiredConfig) */
+  const setup = async (onShift = true) => {
+    const person = await makePerson(db());
+    const ws = await makeWorkspace(db());
+    await onPair(await ctxFor(person), await codeIn(ws.id));
+    const [device] = await db()
+      .select()
+      .from(devices)
+      .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
+    await assign(device);
+    if (onShift)
+      await db()
+        .insert(directives)
+        .values({
+          workspaceId: ws.id,
+          deviceId: device.id,
+          kind: "force_active",
+          startsAt: new Date(NOW.getTime() - 3_600_000),
+          endsAt: new Date(NOW.getTime() + 3_600_000),
+        });
+    return { person, device };
+  };
+  const expired = (person: Person, id = 5) =>
+    locMsg(person.telegramId, { message_id: id, date: SEC - 28800, edit_date: SEC }, { live_period: 28800 });
+  const dropped = (person: Person, id = 5) =>
+    locMsg(person.telegramId, { message_id: id, edit_date: SEC - 1 }, { live_period: undefined });
+
+  it("on shift, an edit that reaches date + live_period is the end: how to restart, once, ping still kept", async () => {
+    const { person, device } = await setup();
+    const reply = await onLocation(db(), expired(person), NOW);
+    expect(html(reply)).toMatch(/stopped/);
+    expect(html(reply)).toMatch(/Share My Live Location/);
+    expect(vi.mocked(syncDevice).mock.calls[0][2].pings[0]).toMatchObject({ recordedAt: SEC * 1000, lat: 15.67 });
+    expect((await onLocation(db(), expired(person), NOW)).send).toEqual([]);
+    expect(await notices(device.id)).toHaveLength(1);
+  });
+
+  it("on shift, an edit whose location lost live_period is the end too; a new share message can end again", async () => {
+    const { person } = await setup();
+    expect(html(await onLocation(db(), dropped(person, 5), NOW))).toMatch(/Share My Live Location/);
+    expect((await onLocation(db(), dropped(person, 5), NOW)).send).toEqual([]);
+    expect(html(await onLocation(db(), dropped(person, 6), NOW))).toMatch(/Share My Live Location/);
+    expect(vi.mocked(syncDevice)).toHaveBeenCalledTimes(3);
+  });
+
+  it("off shift (no tracking window now), ending the share is normal: no restart prompt, ping still synced", async () => {
+    const { person, device } = await setup(false);
+    expect((await onLocation(db(), expired(person), NOW)).send).toEqual([]);
+    expect((await onLocation(db(), dropped(person), NOW)).send).toEqual([]);
+    expect(syncDevice).toHaveBeenCalledTimes(2);
+    expect(await notices(device.id)).toHaveLength(0);
+  });
+
+  it("a killed phone's stop edit says paused, not 'start again'", async () => {
+    const { person, device } = await setup();
+    await db()
+      .update(devices)
+      .set({ killedAt: new Date(NOW.getTime() - 60_000) })
+      .where(eq(devices.id, device.id));
+    const reply = await onLocation(db(), dropped(person), NOW);
+    expect(html(reply)).toBe("The shuttle team has paused your tracking.");
+    expect((await onLocation(db(), dropped(person), NOW)).send).toEqual([]);
+  });
+
+  it("a revoked or unassigned phone's stop edit gets that notice, not the restart prompt", async () => {
+    const a = await setup();
+    await unassign(a.device.id, new Date(NOW.getTime() - 1000));
+    expect(html(await onLocation(db(), dropped(a.person), NOW))).toMatch(/isn't on a shuttle yet/);
+    const b = await setup();
+    await db().update(devices).set({ revokedAt: NOW }).where(eq(devices.id, b.device.id));
+    expect(html(await onLocation(db(), dropped(b.person), NOW))).toMatch(/removed from the shuttle/);
+  });
+
+  it("an ordinary update (inside its period, live_period kept) says nothing", async () => {
+    const { person } = await setup();
+    const msg = locMsg(person.telegramId, { date: SEC - 600, edit_date: SEC - 5 }, { live_period: 28800 });
+    expect((await onLocation(db(), msg, NOW)).send).toEqual([]);
+  });
+});
+
+describe("onLocation: which device a sender maps to", () => {
+  it("a re-pair moves the link, so the old (revoked) device neither swallows pings nor is told anything", async () => {
+    const person = await makePerson(db());
+    const ctx = await ctxFor(person);
+    const ws = await makeWorkspace(db());
+    await onPair(ctx, await codeIn(ws.id));
+    const [old] = await db()
+      .select()
+      .from(devices)
+      .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
+    await db().update(devices).set({ revokedAt: NOW }).where(eq(devices.id, old.id));
+    await onPair(ctx, await codeIn(ws.id, "New"));
+    const [fresh] = await db()
+      .select()
+      .from(devices)
+      .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
+    expect(fresh.id).not.toBe(old.id);
+    await assign(fresh);
+
+    const reply = await onLocation(db(), locMsg(person.telegramId), NOW);
+    expect(html(reply)).toMatch(/Got your live location/);
+    expect(vi.mocked(syncDevice).mock.calls[0][1]).toMatchObject({ id: fresh.id });
+    expect(await notices(old.id)).toHaveLength(0);
+  });
+
+  it("a revoked device that was not re-paired stays linked, so its driver is told rather than ignored", async () => {
+    const person = await makePerson(db());
+    const ws = await makeWorkspace(db());
+    await onPair(await ctxFor(person), await codeIn(ws.id));
+    const [d] = await db()
+      .select()
+      .from(devices)
+      .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
+    await db().update(devices).set({ revokedAt: NOW }).where(eq(devices.id, d.id));
+    expect(html(await onLocation(db(), locMsg(person.telegramId), NOW))).toMatch(/removed from the shuttle/);
+    expect(vi.mocked(syncDevice).mock.calls[0][1]).toMatchObject({ id: d.id });
   });
 });

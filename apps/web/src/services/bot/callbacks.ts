@@ -27,6 +27,7 @@ export const CallbackAction = z.enum([
   "sil1h", // sil1h:<deviceId>           silence 1 h
   "kill", // kill:<deviceId>             asks "Are you sure?"
   "killok", // killok:<deviceId>         confirmed
+  "resume", // resume:<deviceId>          lifts the kill of a Telegram/Traccar phone (it has no Resume button)
   "cday", // cday:<serviceId>:<YYYYMMDD> cancel a day, asks first
   "cdayok", // cdayok:<serviceId>:<YYYYMMDD>
   "nw", // nw:<step>:<value>             /notice wizard step

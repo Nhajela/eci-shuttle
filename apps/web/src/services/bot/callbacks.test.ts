@@ -42,9 +42,9 @@ describe("handleCallback", () => {
       expect(await handleCallback(ctx, q(`${a}:x`))).toBe(A);
       expect(onAttendeeCallback).toHaveBeenLastCalledWith(ctx, { action: a, args: ["x"] }, q(`${a}:x`));
     }
-    for (const a of ["nudge", "sil1h", "kill", "killok", "cday", "cdayok", "nw", "noop"])
+    for (const a of ["nudge", "sil1h", "kill", "killok", "resume", "cday", "cdayok", "nw", "noop"])
       expect(await handleCallback(ctx, q(a))).toBe(B);
-    expect(onAdminCallback).toHaveBeenCalledTimes(8);
+    expect(onAdminCallback).toHaveBeenCalledTimes(9);
   });
 
   it("answers an unknown or missing button as expired", async () => {

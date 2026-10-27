@@ -16,6 +16,7 @@ import {
   labelPhone,
   movePhoneToWorkspace,
   nudgePhone,
+  resumePhone,
   revokePhone,
   silencePhone,
 } from "@/services/devices/phones";
@@ -90,6 +91,11 @@ export async function nudgePhoneAction(w: string, deviceId: string) {
 
 export async function killPhoneAction(w: string, deviceId: string) {
   return run(w, async (a, workspaceId) => void (await killPhone(db(), a, { workspaceId, deviceId })));
+}
+
+/** Lifts a Telegram/Traccar phone's kill (they can't press Resume) and any pause of its own. */
+export async function resumePhoneAction(w: string, deviceId: string) {
+  return run(w, async (a, workspaceId) => void (await resumePhone(db(), a, { workspaceId, deviceId })));
 }
 
 export async function revokePhoneAction(w: string, deviceId: string) {

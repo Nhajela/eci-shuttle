@@ -65,6 +65,14 @@ describe("describeAudit", () => {
     ).toBe("Phone 'Bus 1' resumed tracking");
   });
 
+  it("tells a kill lifted by ops apart from a lifted pause, and a notice to the driver", () => {
+    const r = (after: Record<string, unknown>, action = "phone.resume") =>
+      describeAudit(row({ action, entity: "device", after }));
+    expect(r({ killedAt: null, openSilences: [] })).toBe("Asha resumed a killed phone");
+    expect(r({ openSilences: [] })).toBe("Asha lifted a phone's pause");
+    expect(r({ key: "killed:1:2:3" }, "device.driver_notified")).toMatch(/told its driver why it isn't tracked$/);
+  });
+
   it("names the object on create and lists changed fields on update", () => {
     expect(describeAudit(row({ after: { id: "s1", name: "Riva", radiusM: 75 } }))).toBe("Asha added spot 'Riva'");
     expect(

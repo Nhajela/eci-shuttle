@@ -48,6 +48,7 @@ import { createPairingCode } from "../devices/pairing";
 import {
   assignPhone,
   forceActive,
+  isOutsideApp,
   killPhone,
   labelPhone,
   movePhoneToWorkspace,
@@ -343,8 +344,14 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
     }
     case "phone.silence":
       return `Silence ${(await phone(db, ws, c.deviceId)).full} until ${when(c.until)}`;
-    case "phone.resume":
-      return `Lift the pause on ${(await phone(db, ws, c.deviceId)).full} now: it tracks again in its shift`;
+    case "phone.resume": {
+      const p = await phone(db, ws, c.deviceId);
+      const [dev] = await db.select().from(devices).where(eq(devices.id, c.deviceId));
+      // a killed Telegram/Traccar phone can't press Resume: this is how it gets back (admin only, checked on apply)
+      if (dev?.killedAt && isOutsideApp(dev))
+        return `Resume ${p.full} after its kill: it has no app to resume itself, so tracking restarts at its next update (an admin's confirm lifts the kill; ops lifts only its pauses)`;
+      return `Lift the pause on ${p.full} now: it tracks again in its shift`;
+    }
     case "phone.force_active":
       return `Keep ${(await phone(db, ws, c.deviceId)).full} tracking until ${when(c.until)}${c.intervalS ? `, a fix every ${c.intervalS} s` : ""}`;
     case "phone.nudge":

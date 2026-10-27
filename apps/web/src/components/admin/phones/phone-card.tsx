@@ -12,6 +12,7 @@ import {
   movePhoneAction,
   nudgePhoneAction,
   phoneUpdateAction,
+  resumePhoneAction,
   revokePhoneAction,
   silencePhoneAction,
 } from "@/app/admin/phones/actions";
@@ -63,6 +64,7 @@ export function PhoneCard({
   workspaceTarget: string | null;
 }) {
   const d = h.device;
+  const outsideApp = d.appVersion === "telegram" || d.appVersion === "traccar";
   const status = phoneStatus(h, now);
   const problems = phoneProblems(h, now);
   const { pending, run } = useAction();
@@ -130,7 +132,14 @@ export function PhoneCard({
           {d.killedAt && (
             <>
               <dt className="text-muted-foreground">Killed</dt>
-              <dd>{istWhen(d.killedAt, now)} · only the driver's Resume clears it</dd>
+              <dd>
+                {istWhen(d.killedAt, now)} ·{" "}
+                {outsideApp
+                  ? isAdmin
+                    ? "this phone has no app, so use Resume tracking below"
+                    : "this phone has no app, so an admin resumes it here"
+                  : "only the driver's Resume clears it"}
+              </dd>
             </>
           )}
         </dl>
@@ -318,11 +327,21 @@ export function PhoneCard({
                           </div>
                         </ConfirmButton>
                       )}
+                      {d.killedAt && outsideApp && (
+                        <ConfirmButton
+                          label="Resume tracking"
+                          question={`Resume ${d.label}?`}
+                          description="This phone has no app to press Resume in (Telegram or Traccar). Its location counts again from its next update."
+                          confirmLabel="Resume"
+                          disabled={pending}
+                          onConfirm={() => run(() => resumePhoneAction(w, id), "Resumed")}
+                        />
+                      )}
                       {!d.killedAt && (
                         <ConfirmButton
                           label="Kill tracking"
                           question={`Kill ${d.label}?`}
-                          description="The phone stops tracking on its next sync and stays stopped. Only the driver can resume it, with the Resume button in the app."
+                          description="The phone stops tracking on its next sync and stays stopped. An app phone can only be resumed by its driver (Resume button); a Telegram or Traccar phone by you, here."
                           confirmLabel="Kill"
                           disabled={pending}
                           onConfirm={() => run(() => killPhoneAction(w, id), "Killed")}
