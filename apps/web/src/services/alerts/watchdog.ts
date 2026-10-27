@@ -237,8 +237,8 @@ async function stampEpisodes(db: Db, workspaceId: string, found: Problem[], now:
 /** The admin pref that gates a problem (update_pending has no AlertKind of its own yet). */
 const alertKindOf = (k: Problem["kind"]): AlertKind => (k === "update_pending" ? "update_failed" : k);
 
-/** Problems where pausing the phone's tracking for an hour is a sensible thing to want (a parked or charging phone). */
-const PAUSABLE = new Set<Problem["kind"]>(["low_battery", "off_route"]);
+/** Problems where pausing the phone's tracking for an hour is a sensible thing to want (a phone that is charging); never off_route: a moving van must stay visible. */
+const PAUSABLE = new Set<Problem["kind"]>(["low_battery"]);
 
 async function alertProblems(db: Db, id: string, found: Problem[], now: Date): Promise<number> {
   let alerted = 0;

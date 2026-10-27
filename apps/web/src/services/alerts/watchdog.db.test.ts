@@ -471,6 +471,20 @@ describe("runWatchdog", () => {
     ]);
   });
 
+  it("off route: Mute alert 1h only, no Pause tracking (a moving van must stay visible)", async () => {
+    const ws = await makeWorkspace(db());
+    await makeAdmin(db(), ws.id);
+    const { device } = await makeAssignedDevice(db(), ws.id, {
+      state: { lastPingAt: ago(1), offRoute: true, phase: "en_route" },
+    });
+    schedules.set(device.id, activeSince(30));
+    await runWatchdog(db(), NOW);
+    const jobs = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
+    const buttons = JSON.stringify(jobs.map((j) => (j.payload as TelegramPayload).buttons));
+    expect(buttons).toContain(`mute:${device.id}:off_route`);
+    expect(buttons).not.toContain("pause1h");
+  });
+
   it("one workspace failing does not stop the others", async () => {
     const bad = await makeWorkspace(db());
     const ws = await makeWorkspace(db());
