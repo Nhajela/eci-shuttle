@@ -1,6 +1,6 @@
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { auditLog, routes } from "@/db/schema";
 import {
@@ -23,7 +23,8 @@ async function setup(role: "admin" | "ops" | "viewer" = "ops") {
   return { ws, actor };
 }
 
-const audits = (entityId: string) => db().select().from(auditLog).where(eq(auditLog.entityId, entityId));
+const audits = (entityId: string) =>
+  db().select().from(auditLog).where(eq(auditLog.entityId, entityId)).orderBy(asc(auditLog.id));
 
 describe("createSpot", () => {
   it("creates with defaults and writes one spot.create audit row", async () => {

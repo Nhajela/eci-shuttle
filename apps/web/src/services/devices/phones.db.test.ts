@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { OPS_HOURS_LABEL, type Role, resolveMode } from "@eci-shuttle/shared";
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
 import {
@@ -85,7 +85,8 @@ async function makeVehicle(workspaceId: string, name = "Bus 1") {
   return v;
 }
 const device = async (id: string) => (await db().select().from(devices).where(eq(devices.id, id)))[0];
-const audits = (entityId: string) => db().select().from(auditLog).where(eq(auditLog.entityId, entityId));
+const audits = (entityId: string) =>
+  db().select().from(auditLog).where(eq(auditLog.entityId, entityId)).orderBy(asc(auditLog.id));
 const pushes = (deviceId: string) =>
   db()
     .select()

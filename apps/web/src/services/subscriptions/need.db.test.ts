@@ -3,7 +3,7 @@ import { makeVehicle } from "@tests/factories/alerts";
 import { attendee, line, makeService, makeSpot } from "@tests/factories/bot-attendee";
 import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { alertPrefs, auditLog, outbox, subscriptions, vehicleState } from "@/db/schema";
 import type { Spot } from "@/db/types";
@@ -47,7 +47,8 @@ async function setup() {
   return { ws, riva, circle, nanu, person, actor: attendee(person, ws.id) };
 }
 
-const jobs = (ws: string) => db().select().from(outbox).where(eq(outbox.workspaceId, ws));
+// ordered: the tests compare the sequence of messages, and Postgres returns rows in no fixed order without one
+const jobs = (ws: string) => db().select().from(outbox).where(eq(outbox.workspaceId, ws)).orderBy(asc(outbox.id));
 const htmlOf = (j: { payload: unknown }) => (j.payload as { html: string }).html;
 
 beforeEach(() => {

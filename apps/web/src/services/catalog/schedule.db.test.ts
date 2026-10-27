@@ -1,6 +1,6 @@
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, routes, serviceExceptions, services, serviceVehicles, spots, vehicles } from "@/db/schema";
 import type { Actor } from "../kernel";
@@ -52,7 +52,8 @@ const base = (workspaceId: string, routeId: string) => ({
   pattern: { kind: "times" as const, times: ["08:00", "10:20"] },
 });
 
-const audits = (entityId: string) => db().select().from(auditLog).where(eq(auditLog.entityId, entityId));
+const audits = (entityId: string) =>
+  db().select().from(auditLog).where(eq(auditLog.entityId, entityId)).orderBy(asc(auditLog.id));
 
 beforeEach(() => bump.mockClear());
 
