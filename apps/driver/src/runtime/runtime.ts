@@ -1,12 +1,12 @@
 /**
  * The driver app's composition root, minus native modules (those are passed in by ./native): one cycle runs
  * location wake → resolveMode → ping queue → syncOnce → apply config (service, intervals, kill latch) → OTA.
- * The location task's wakes are the clock (every activeIntervalS while active, idleHeartbeatS while idle), so this
- * works headless; a push or the screens call sync() to force a sync.
+ * The location task's wakes (one fix per activeIntervalS, all tracking day) are the clock, so this works headless;
+ * a push or the screens call sync() to force a sync.
  */
 import type { Mode, ModeResolution, SyncRequest } from "@eci-shuttle/shared/contracts";
 import { resolveMode } from "@eci-shuttle/shared/schedule";
-import { type Fix, toPing } from "../location/plan";
+import { type Fix, gateFixes, toPing } from "../location/plan";
 import type { DeviceStore } from "../store/deviceStore";
 import { type KV, parseJson, serial } from "../store/kv";
 import type { PingQueue } from "../store/pingQueue";
@@ -26,6 +26,12 @@ type Persisted = Pick<SyncState, "clockOffsetMs" | "lastSyncAt" | "failures"> & 
   lastError: string | null;
   /** phone clock before which a 429 asked us not to sync again (Retry-After) */
   retryAfterAt: number | null;
+  /** planKey of the last native start (location/apply); null = not started by this build */
+  nativeKey: string | null;
+  /** the plan wants tracking, the native task isn't running right and the app is in the background */
+  needsApp: boolean;
+  /** time of the last fix kept by gateFixes, so the idle/active cadence holds across wakes */
+  lastKeptAt: number | null;
 };
 
 /**
@@ -47,8 +53,18 @@ export type RuntimeDeps = {
   /** per-cycle deadline, default CYCLE_TIMEOUT_MS */
   cycleTimeoutMs?: number;
   random?: () => number;
-  /** start / retune / stop the foreground service for this resolution (location/service syncLocationService) */
-  location: { apply: (r: ModeResolution, idleHeartbeatS: number, serverNow: number) => Promise<unknown> };
+  /**
+   * Put the native task in the state the plan wants, if the app is on screen (location/service syncLocationService).
+   * `startedKey` is what we persisted from the last call. Void = nothing known to record.
+   */
+  location: {
+    apply: (
+      r: ModeResolution,
+      cfg: { activeIntervalS: number; idleHeartbeatS: number },
+      serverNow: number,
+      startedKey: string | null,
+    ) => Promise<{ startedKey: string | null; needsApp: boolean } | undefined>;
+  };
   /** 0–100 or null; stamped on each ping and the sync */
   battery: () => Promise<number | null>;
   telemetry: () => Promise<Pick<Telemetry, "charging" | "permissions" | "appVersion">>;
@@ -74,20 +90,33 @@ export function createRuntime(deps: RuntimeDeps) {
       reportedMode: v.reportedMode ?? null,
       lastError: v.lastError ?? null,
       retryAfterAt: v.retryAfterAt ?? null,
+      nativeKey: v.nativeKey ?? null,
+      needsApp: v.needsApp ?? false,
+      lastKeptAt: v.lastKeptAt ?? null,
     };
   };
   const savePersisted = (p: Persisted) => deps.files.set(SYNC_KEY, JSON.stringify(p));
 
-  /** Resolve on server time and put the service in that state. A service that can't start must not stop the sync. */
-  async function apply(p: Persisted) {
+  /**
+   * Resolve on server time and put the service in that state. A service that can't start must not stop the sync.
+   * Returns the persisted state with what the native side reported (key it started with, "open the app" flag).
+   */
+  async function apply(p: Persisted): Promise<{ r: ModeResolution; p: Persisted }> {
     const dc = await deps.store.deviceConfig();
     const serverNow = deps.now() + p.clockOffsetMs;
     const r = resolveMode(dc, serverNow);
     lastMode = r.mode;
-    await deps.location.apply(r, dc?.idleHeartbeatS ?? 900, serverNow).catch((e) => {
+    const cfg = { activeIntervalS: dc?.activeIntervalS ?? 10, idleHeartbeatS: dc?.idleHeartbeatS ?? 900 };
+    try {
+      const res = await deps.location.apply(r, cfg, serverNow, p.nativeKey);
+      if (res && (res.startedKey !== p.nativeKey || res.needsApp !== p.needsApp)) {
+        p = { ...p, nativeKey: res.startedKey, needsApp: res.needsApp };
+        await savePersisted(p);
+      }
+    } catch (e) {
       console.warn("location service", e instanceof Error ? e.message : e);
-    });
-    return { r, dc };
+    }
+    return { r, p };
   }
 
   async function cycle(fixes: Fix[], force: boolean, cancelled: () => boolean) {
@@ -96,16 +125,21 @@ export function createRuntime(deps: RuntimeDeps) {
     const dc = await deps.store.deviceConfig();
 
     // Queue the fixes before anything that can hang (native calls, network): a cut-off cycle must not lose them.
-    // Each fix by its own (server) time: a cached fix from before the window or a late batch after it.
-    const inWindow = fixes.filter((f) => resolveMode(dc, f.timestamp + p.clockOffsetMs).mode === "active");
-    if (inWindow.length) {
+    // The native task runs all day; gateFixes keeps the active cadence in windows, the idle heartbeat cadence
+    // outside them, and nothing when killed or revoked. Each fix is judged by its own (server) time.
+    const gated = gateFixes(fixes, dc, p.clockOffsetMs, p.lastKeptAt);
+    if (gated.keep.length) {
       const battery = await deps.battery();
       await deps.queue.push(
-        inWindow.flatMap((f) => toPing(f, battery) ?? []),
+        gated.keep.flatMap((f) => toPing(f, battery) ?? []),
         now,
       );
+      p = { ...p, lastKeptAt: gated.lastKeptAt };
+      await savePersisted(p);
     }
-    const { r } = await apply(p);
+    const applied = await apply(p);
+    const r = applied.r;
+    p = applied.p;
 
     const [st, token, origins] = await Promise.all([deps.store.state(), deps.store.token(), deps.store.origins()]);
     if (!token) return;
@@ -204,6 +238,8 @@ export function createRuntime(deps: RuntimeDeps) {
     sync: () => run([], true),
     /** Sync only if one is due (foreground timer when the location service isn't running). Never throws. */
     tick: () => run([], false),
+    /** true while the plan wants tracking and only opening the app can start it (read by native.ts to retry) */
+    needsApp: async () => (await loadPersisted()).needsApp,
     /** Mode from the last cycle, for OTA (never reload while active). */
     mode: () => lastMode,
   };
