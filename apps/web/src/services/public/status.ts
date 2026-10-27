@@ -11,7 +11,6 @@ import {
   expandServiceDepartures,
   istDate,
   istHHMM,
-  istToEpoch,
   type LegEstimate,
   type PublicNotice,
   type PublicSpot,
