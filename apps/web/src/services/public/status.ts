@@ -42,6 +42,7 @@ import type { LegStat, Notice, Route, Service, Spot, VehicleState } from "@/db/t
 import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { activeNotices } from "../notices/notices";
+import { addDays, serviceDaysInPlay } from "./service-days";
 import { FRESH_MS, type LastSeen, lastSeenText, sight } from "./sight";
 
 const MATCH_WINDOW_MS = 25 * 60_000;
@@ -56,8 +57,6 @@ export const CANT_SEE = "can't see it right now";
 /** The freshest shuttle was last seen inside a stop 5–15 min ago: "last seen at Riva at 19:12 · may still be there". */
 export const MAY_STILL_BE_THERE = "may still be there";
 
-const addDays = (date: string, n: number) => istDate(istToEpoch(date, "00:00") + n * DAY);
-const weekday = (date: string) => ((new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7) + 1;
 const iso = (ms: number) => new Date(ms).toISOString();
 
 type Est = { medianS: number; p20S: number; p80S: number; n: number };
@@ -135,20 +134,7 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
   }));
 
   // service days in play: today, plus yesterday's for a cross-midnight service still inside its window
-  const days: { svc: Service; day: string; windowStart: number; windowEnd: number }[] = [];
-  for (const svc of svcs) {
-    for (const day of [yesterday, today]) {
-      const windowStart = istToEpoch(day, svc.startTime);
-      const windowEnd = istToEpoch(svc.endTime < svc.startTime ? addDays(day, 1) : day, svc.endTime);
-      const runs =
-        day >= svc.validFrom &&
-        day <= svc.validTo &&
-        svc.daysOfWeek.includes(weekday(day)) &&
-        !exceptions.some((e) => e.serviceId === svc.id && e.date === day && e.type === "cancel_day");
-      if (runs && (day === today || nowMs < windowEnd)) days.push({ svc, day, windowStart, windowEnd });
-    }
-  }
-  days.sort((a, b) => a.windowStart - b.windowStart);
+  const days = serviceDaysInPlay(svcs, exceptions, nowMs);
 
   const routeRows = days.length
     ? await db
