@@ -1,0 +1,103 @@
+diff --git a/android/src/main/java/expo/modules/location/LocationModule.kt b/android/src/main/java/expo/modules/location/LocationModule.kt
+index b286ea277f3658b62ab9fd9ed1df67359cea46fc..4ec2a705a8b62d4722d5471605d67c7072e254c4 100644
+--- a/android/src/main/java/expo/modules/location/LocationModule.kt
++++ b/android/src/main/java/expo/modules/location/LocationModule.kt
+@@ -62,6 +62,7 @@ import expo.modules.location.records.PermissionDetailsLocationAndroid
+ import expo.modules.location.records.PermissionRequestResponse
+ import expo.modules.location.records.ReverseGeocodeLocation
+ import expo.modules.location.records.ReverseGeocodeResponse
++import expo.modules.location.services.LocationTaskService
+ import expo.modules.location.taskConsumers.GeofencingTaskConsumer
+ import expo.modules.location.taskConsumers.LocationTaskConsumer
+ import java.util.Locale
+@@ -323,7 +324,11 @@ class LocationModule : Module(), SensorEventListener, ActivityEventListener {
+       if (!shouldUseForegroundService && isMissingBackgroundPermissions()) {
+         throw LocationBackgroundUnauthorizedException()
+       }
+-      if (!AppForegroundedSingleton.isForegrounded && options.foregroundService != null) {
++      // Patched: a background call is fine when it only updates a task whose foreground service is already
++      // running (TaskService.registerTask then calls setOptions in place and never starts a new service).
++      val updatesRunningService = LocationTaskService.isForeground &&
++        mTaskManager.taskHasConsumerOfClass(taskName, LocationTaskConsumer::class.java)
++      if (!AppForegroundedSingleton.isForegrounded && options.foregroundService != null && !updatesRunningService) {
+         throw ForegroundServiceStartNotAllowedException()
+       }
+ 
+diff --git a/android/src/main/java/expo/modules/location/services/LocationTaskService.kt b/android/src/main/java/expo/modules/location/services/LocationTaskService.kt
+index 0019485f58ba2a6f33ca227a40c37355adabf0c6..911b366010ea5c873e4211c53ef1fc2fe95afe34 100644
+--- a/android/src/main/java/expo/modules/location/services/LocationTaskService.kt
++++ b/android/src/main/java/expo/modules/location/services/LocationTaskService.kt
+@@ -48,10 +48,16 @@ class LocationTaskService : Service() {
+   }
+ 
+   fun stop() {
++    isForeground = false
+     stopForeground(true)
+     stopSelf()
+   }
+ 
++  override fun onDestroy() {
++    isForeground = false
++    super.onDestroy()
++  }
++
+   override fun onTaskRemoved(rootIntent: Intent) {
+     if (mKillService) {
+       super.onTaskRemoved(rootIntent)
+@@ -62,6 +68,7 @@ class LocationTaskService : Service() {
+   fun startForeground(serviceOptions: Bundle) {
+     val notification = buildServiceNotification(serviceOptions)
+     startForeground(mServiceId, notification)
++    isForeground = true
+   }
+ 
+   //region private
+@@ -144,6 +151,14 @@ class LocationTaskService : Service() {
+ 
+   companion object {
+     private var sServiceId = 481756
++
++    /**
++     * True while this process has a running foreground service. Lets the module accept a background
++     * re-registration (an in-place update) only when the service it would update is really alive.
++     */
++    @Volatile
++    var isForeground = false
++      private set
+     const val META_DATA_FOREGROUND_SERVICE_ICON_KEY: String =
+       "expo.modules.location.foreground_service_icon"
+   }
+diff --git a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
+index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..6308f3b0d9cd9842f46e3dbc4d2060404c63fecb 100644
+--- a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
++++ b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
+@@ -178,10 +178,9 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+       return
+     }
+-    if (!AppForegroundedSingleton.isForegrounded) {
+-      Log.w(TAG, "Foreground location task cannot be started while the app is in the background!")
+-      return
+-    }
++    // Patched: a running service may be updated or stopped from the background (no new start happens).
++    // A new one is only attempted below, and may be refused by Android, so that is caught instead of fatal.
++    val isBackgrounded = !AppForegroundedSingleton.isForegrounded
+     val task = mTask ?: run {
+       Log.w(TAG, "Location task is null")
+       return
+@@ -211,7 +210,14 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+       extras.putString("taskName", task.name)
+       extras.putBoolean("killService", serviceOptions.getBoolean("killServiceOnDestroy", false))
+       serviceIntent.putExtras(extras)
+-      context.startForegroundService(serviceIntent)
++      try {
++        context.startForegroundService(serviceIntent)
++      } catch (e: Exception) {
++        // Android refuses this from the background unless exempt (e.g. a BOOT_COMPLETED / MY_PACKAGE_REPLACED
++        // receiver restoring the task). Location updates keep running without the service.
++        Log.w(TAG, "Foreground service could not be started" + (if (isBackgrounded) " from the background" else ""), e)
++        return
++      }
+       context.bindService(
+         serviceIntent,
+         object : ServiceConnection {

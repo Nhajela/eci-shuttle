@@ -16,7 +16,7 @@ const config: ExpoConfig = {
   slug: "edge-city-india-shuttles",
   owner: "positive-sum-company",
   scheme: "ecishuttle",
-  version: "0.1.0",
+  version: "0.1.1",
   orientation: "portrait",
   platforms: ["android"],
   userInterfaceStyle: "automatic",
