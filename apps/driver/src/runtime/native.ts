@@ -4,7 +4,13 @@
 import * as Battery from "expo-battery";
 import Constants from "expo-constants";
 import { AppState } from "react-native";
-import { forceReregister, isForeground, onLocationWake, syncLocationService } from "../location/service";
+import {
+  confirmRegistered,
+  forceReregister,
+  isForeground,
+  onLocationWake,
+  syncLocationService,
+} from "../location/service";
 import { createExpoOta } from "../ota/expo";
 import { definePushSyncTask, getPushToken, registerPushSync } from "../push/push";
 import { readPermissions } from "../screens/permissions";
@@ -22,7 +28,7 @@ export const runtime = createRuntime({
   fetch: (u, i) => fetch(u, i),
   builtInOrigin,
   now: () => Date.now(),
-  location: { apply: syncLocationService },
+  location: { apply: syncLocationService, confirm: confirmRegistered },
   async battery() {
     const level = await Battery.getBatteryLevelAsync().catch(() => -1);
     return level < 0 ? null : Math.round(level * 100);

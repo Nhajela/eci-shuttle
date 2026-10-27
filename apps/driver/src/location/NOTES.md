@@ -70,7 +70,9 @@ A 10 s High-accuracy task left on through the ~11 h gap between ops hours (21:00
 drained a phone from full to dead mid-shift. So with no window within 3 h (`IDLE_STOP_AFTER_MS`) the task is stopped
 (allowed from the background), and `reminderAction` keeps one local notification pending, 15 min before the next
 window: "Shuttle tracking: open the app to start" (`expo-notifications`, fixed identifier so it is replaced, never
-stacked; skipped without notification permission; cancelled as soon as the task runs). Reminder times come from the server clock and are converted to the phone clock with the known skew. **On a charger
+stacked; skipped without notification permission; cancelled as soon as the task runs). The reminder is also scheduled on **any** build whenever `needsApp` is set (e.g. a patched phone whose task was
+restored after an OEM kill with the wrong options and whose background update was refused), with the same timing rules.
+Reminder times come from the server clock and are converted to the phone clock with the known skew. **On a charger
 the overnight stop is skipped** (window up to 16 h ahead): a missed reminder would otherwise mean no tracking all
 day, and GPS on a charger is harmless. Unplugged, the next cycle stops the task and schedules the reminder.
 Opening the app starts the

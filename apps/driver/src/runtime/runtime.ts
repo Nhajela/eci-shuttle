@@ -69,7 +69,9 @@ export type RuntimeDeps = {
       cfg: { activeIntervalS: number; idleHeartbeatS: number; charging: boolean | null; clockOffsetMs: number },
       serverNow: number,
       prev: NativeState,
-    ) => Promise<NativeState | undefined>;
+    ) => Promise<(NativeState & { registered?: boolean }) | undefined>;
+    /** the cycle saved the result of a foreground registration: the task is now verified for this process */
+    confirm?: () => void;
   };
   /** 0–100 or null; stamped on each ping and the sync */
   battery: () => Promise<number | null>;
@@ -143,17 +145,24 @@ export function createRuntime(deps: RuntimeDeps) {
         reminderFor: p.reminderFor,
       };
       const res = await deps.location.apply(r, cfg, serverNow, prev);
-      if (res && JSON.stringify(res) !== JSON.stringify(prev)) {
-        const saved = await patch(
-          {
-            nativeKey: res.startedKey,
-            needsApp: res.needsApp,
-            degradedAt: res.degradedAt,
-            reminderFor: res.reminderFor,
-          },
-          cancelled,
-        );
-        if (saved) p = saved;
+      if (res) {
+        const { registered, ...next } = res;
+        let saved = true;
+        if (JSON.stringify(next) !== JSON.stringify(prev)) {
+          const written = await patch(
+            {
+              nativeKey: next.startedKey,
+              needsApp: next.needsApp,
+              degradedAt: next.degradedAt,
+              reminderFor: next.reminderFor,
+            },
+            cancelled,
+          );
+          saved = written !== null;
+          if (written) p = written;
+        }
+        // only a cycle that is still current and has the key on disk may call the task verified
+        if (registered && saved && !cancelled()) deps.location.confirm?.();
       }
     } catch (e) {
       console.warn("location service", e instanceof Error ? e.message : e);

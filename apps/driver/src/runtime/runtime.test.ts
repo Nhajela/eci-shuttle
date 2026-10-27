@@ -51,8 +51,14 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
   });
   const applied: ModeResolution[] = [];
   const calls: { cfg: Record<string, unknown>; prev: NativeState }[] = [];
+  const confirmed = { count: 0 };
   let charging: boolean | null = false;
-  let nativeResult: NativeState = { startedKey: "k1", needsApp: false, degradedAt: null, reminderFor: null };
+  let nativeResult: NativeState & { registered?: boolean } = {
+    startedKey: "k1",
+    needsApp: false,
+    degradedAt: null,
+    reminderFor: null,
+  };
   const ota = { report: vi.fn(async () => ({ updateId: "u1" })), reconcile: vi.fn(async () => "none") };
   const deps: RuntimeDeps = {
     store,
@@ -67,6 +73,9 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
         applied.push(r);
         calls.push({ cfg, prev });
         return nativeResult;
+      },
+      confirm: () => {
+        confirmed.count++;
       },
     },
     battery: async () => 80,
@@ -89,6 +98,7 @@ async function setup(opts: { paired?: boolean; respond?: (body: Record<string, u
     bodies,
     applied,
     calls,
+    confirmed,
     setCharging: (c: boolean | null) => {
       charging = c;
     },
@@ -437,7 +447,7 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
   it("a cut-off cycle whose native call returns late does not overwrite newer state", async () => {
     const s = await setup();
     s.deps.cycleTimeoutMs = 30;
-    let release: (r: NativeState) => void = () => {};
+    let release: (r: NativeState & { registered?: boolean }) => void = () => {};
     s.deps.location.apply = () => new Promise((r) => (release = r));
     await s.rt.wake([fix(T)]);
     s.deps.location.apply = async () => ({ startedKey: "new", needsApp: false, degradedAt: null, reminderFor: null });
@@ -446,6 +456,28 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     release({ startedKey: "stale", needsApp: true, degradedAt: null, reminderFor: null });
     await new Promise((r) => setTimeout(r, 20));
     expect(JSON.parse(s.files.dump()["sync-state"])).toMatchObject({ nativeKey: "new", needsApp: false });
+  });
+
+  it("confirms a foreground registration only once the cycle has saved its key", async () => {
+    const s = await setup();
+    s.setNative({ startedKey: "k1", needsApp: false, degradedAt: null, reminderFor: null, registered: true });
+    await s.rt.wake([]);
+    expect(s.confirmed.count).toBeGreaterThan(0);
+    expect(JSON.parse(s.files.dump()["sync-state"]).nativeKey).toBe("k1");
+  });
+
+  it("a cut-off cycle whose registration returns late is not confirmed (its key was never saved)", async () => {
+    const s = await setup();
+    s.deps.cycleTimeoutMs = 30;
+    let release: (r: NativeState & { registered?: boolean }) => void = () => {};
+    s.deps.location.apply = () => new Promise((r) => (release = r));
+    await s.rt.wake([fix(T)]);
+    s.deps.location.apply = async () => ({ startedKey: "new", needsApp: false, degradedAt: null, reminderFor: null });
+    s.at(T + 10_000);
+    await s.rt.wake([fix(T + 10_000)]);
+    release({ startedKey: "stale", needsApp: false, degradedAt: null, reminderFor: null, registered: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(s.confirmed.count).toBe(0);
   });
 
   it("a location service that can't start (no permission yet) does not stop the sync", async () => {
