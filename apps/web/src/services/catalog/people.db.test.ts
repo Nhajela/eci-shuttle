@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { auditLog, memberships, people } from "@/db/schema";
 import { type Actor, systemActor } from "../kernel";
@@ -28,9 +28,8 @@ const audits = (entityId: string, action?: string) =>
   db()
     .select()
     .from(auditLog)
-    .where(
-      action ? and(eq(auditLog.entityId, entityId), eq(auditLog.action, action)) : eq(auditLog.entityId, entityId),
-    );
+    .where(action ? and(eq(auditLog.entityId, entityId), eq(auditLog.action, action)) : eq(auditLog.entityId, entityId))
+    .orderBy(asc(auditLog.id));
 
 describe("upsertPersonFromTelegram", () => {
   it("creates a person once, audited person.create with no workspace", async () => {
