@@ -5,7 +5,7 @@ import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
-import { devices, memberships, workspaces } from "@/db/schema";
+import { auditLog, devices, memberships, workspaces } from "@/db/schema";
 import type { Notice, Person, Workspace } from "@/db/types";
 import { detectProblems } from "@/services/alerts/watchdog";
 import { adminActor, resolveWorkspace } from "@/services/auth/actor";
@@ -453,31 +453,72 @@ describe("phone buttons", () => {
     const phone = await makeDevice(db(), other.id);
     const r = await onAdminCallback(ctx, cb("nudge", phone.id), query("alert"));
     expect(r.answerCallback).toMatchObject({ text: "You're not a member of this workspace.", showAlert: true });
-    expect((await onAdminCallback(ctx, cb("sil1h", "not-a-uuid"), query())).answerCallback?.text).toContain(
+    expect((await onAdminCallback(ctx, cb("mute", "not-a-uuid"), query())).answerCallback?.text).toContain(
       "no longer exists",
     );
     expect(nudgePhone).not.toHaveBeenCalled();
     expect(silencePhone).not.toHaveBeenCalled();
   });
 
-  it("Silence 1h, and a repeat press while silenced is a no-op", async () => {
+  it("Mute alert 1h only mutes: tracking is untouched, a repeat press is a no-op", async () => {
+    const { ws, person, ctx } = await setup("ops");
+    const phone = await makeDevice(db(), ws.id);
+    const r = await onAdminCallback(ctx, cb("mute", phone.id, "low_battery"), query("alert"));
+    expect(silencePhone).not.toHaveBeenCalled();
+    expect(r.answerCallback?.text).toBe(
+      "Muted low battery alerts for Ravi's phone until 11:00. Tracking is unchanged.",
+    );
+    const rows = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.workspaceId, ws.id), eq(auditLog.action, "alert.mute")));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ actorId: person.id, channel: "telegram", entityId: `low_battery:${phone.id}` });
+
+    const again = await onAdminCallback(ctx, cb("mute", phone.id, "low_battery"), query("alert"));
+    expect(again.answerCallback?.text).toContain("Already muted");
+    expect(
+      await db()
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.workspaceId, ws.id), eq(auditLog.action, "alert.mute"))),
+    ).toHaveLength(1);
+    expect((await onAdminCallback(ctx, cb("mute", phone.id, "bogus"), query())).answerCallback?.text).toContain(
+      "expired",
+    );
+  });
+
+  it("an old Silence 1h button (sil1h) is now a mute of every alert kind, never a pause", async () => {
     const { ws, ctx } = await setup("ops");
     const phone = await makeDevice(db(), ws.id);
     const r = await onAdminCallback(ctx, cb("sil1h", phone.id), query("alert"));
+    expect(silencePhone).not.toHaveBeenCalled();
+    expect(r.answerCallback?.text).toBe("Muted alerts for Ravi's phone until 11:00. Tracking is unchanged.");
+    const [row] = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.workspaceId, ws.id), eq(auditLog.action, "alert.mute")));
+    expect(row.entityId).toBe(`*:${phone.id}`);
+  });
+
+  it("Pause tracking 1h silences the phone, and a repeat press while paused is a no-op", async () => {
+    const { ws, ctx } = await setup("ops");
+    const phone = await makeDevice(db(), ws.id);
+    const r = await onAdminCallback(ctx, cb("pause1h", phone.id), query("alert"));
     expect(vi.mocked(silencePhone).mock.calls[0][2]).toEqual({
       workspaceId: ws.id,
       deviceId: phone.id,
       until: new Date(+NOW + H).toISOString(),
     });
-    expect(r.answerCallback?.text).toContain("until 11:00");
+    expect(r.answerCallback?.text).toContain("Paused tracking on Ravi's phone until 11:00");
 
     await makeSilence(db(), ws.id, phone.id, new Date(+NOW - 60_000), new Date(+NOW + H - 30_000));
-    const again = await onAdminCallback(ctx, cb("sil1h", phone.id), query("alert"));
-    expect(again.answerCallback?.text).toBe("Already silenced until 10:59.");
+    const again = await onAdminCallback(ctx, cb("pause1h", phone.id), query("alert"));
+    expect(again.answerCallback?.text).toBe("Tracking is already paused until 10:59.");
     expect(silencePhone).toHaveBeenCalledTimes(1);
   });
 
-  it("two Silence 1h presses at once silence once", async () => {
+  it("two Pause tracking presses at once pause once", async () => {
     const { ws, ctx } = await setup("ops");
     const phone = await makeDevice(db(), ws.id);
     vi.mocked(silencePhone).mockImplementation(async (d, _a, i) => {
@@ -486,7 +527,7 @@ describe("phone buttons", () => {
       return undefined as never;
     });
     lineUp();
-    await Promise.all([1, 2].map(() => onAdminCallback(ctx, cb("sil1h", phone.id), query("alert"))));
+    await Promise.all([1, 2].map(() => onAdminCallback(ctx, cb("pause1h", phone.id), query("alert"))));
     expect(silencePhone).toHaveBeenCalledTimes(1);
   });
 
@@ -604,11 +645,15 @@ describe("cancel-a-day buttons", () => {
 });
 
 describe("alertButtons", () => {
-  it("Nudge phone · Silence 1h, then Open in admin on our own origin", () => {
+  it("Nudge phone · Mute alert 1h (never a pause), then Open in admin on our own origin", () => {
+    expect(alertButtons({ slug: "test", page: "phones", deviceId: "d1", kind: "silent" })[0]).toEqual([
+      { text: "Nudge phone", callbackData: "nudge:d1" },
+      { text: "Mute alert 1h", callbackData: "mute:d1:silent" },
+    ]);
     expect(alertButtons({ slug: "test", page: "phones", deviceId: "d1" })).toEqual([
       [
         { text: "Nudge phone", callbackData: "nudge:d1" },
-        { text: "Silence 1h", callbackData: "sil1h:d1" },
+        { text: "Mute alert 1h", callbackData: "mute:d1" },
       ],
       [{ text: "Open in admin", url: "http://localhost:3000/admin/phones?w=test" }],
     ]);

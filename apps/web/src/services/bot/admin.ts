@@ -21,6 +21,7 @@ import { devices, directives, people, services } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { origin } from "@/lib/env";
 import { escapeHtml } from "@/lib/telegram/html";
+import { MUTE_ALL, muteAlert } from "@/services/alerts/alerts";
 import { detectProblems } from "@/services/alerts/watchdog";
 import { adminActor, resolveWorkspace } from "@/services/auth/actor";
 import { setRole } from "@/services/catalog/people";
@@ -45,6 +46,25 @@ import { type Callback, encodeCallback } from "./callbacks";
 import type { BotContext, BotReply, TgCallbackQuery } from "./types";
 
 const H = 3_600_000;
+/** Problem kinds a mute button can name (alerts/watchdog Problem["kind"]). */
+const MUTABLE_KINDS = new Set([
+  "silent",
+  "off_route",
+  "low_battery",
+  "permission_lost",
+  "mode_mismatch",
+  "update_failed",
+  "update_pending",
+]);
+const KIND_WORDS: Record<string, string> = {
+  silent: "silent",
+  off_route: "off-route",
+  low_battery: "low battery",
+  permission_lost: "permission",
+  mode_mismatch: "mode mismatch",
+  update_failed: "update",
+  update_pending: "update",
+};
 const esc = escapeHtml;
 const TEST_TAG = "TEST workspace: ";
 const tag = (ws: Workspace) => (ws.isLive ? "" : `<i>${TEST_TAG}${esc(ws.slug)}</i>\n`);
@@ -407,12 +427,25 @@ async function onWizard(ctx: BotContext, cb: Callback, q: TgCallbackQuery): Prom
 // ---------------------------------------------------------------- buttons
 
 /**
- * The buttons on an ops alert (SPEC §6c), for svc-alerts' AlertEvent.buttons: "Nudge phone" · "Silence 1h" when
- * the problem has a phone, then "Open in admin" (<origin>/admin/<page>?w=<slug>).
+ * The buttons on an ops alert (SPEC §6c), for svc-alerts' AlertEvent.buttons: "Nudge phone" · "Mute alert 1h" when
+ * the problem has a phone (`kind` = the problem kind it mutes, default every kind), then "Open in admin"
+ * (<origin>/admin/<page>?w=<slug>). Muting never touches the phone; pausing tracking is a separate, named button.
  */
-export function alertButtons(o: { slug: string; page: string; deviceId?: string | null }): TelegramButton[][] {
+export function alertButtons(o: {
+  slug: string;
+  page: string;
+  deviceId?: string | null;
+  kind?: string;
+}): TelegramButton[][] {
   return [
-    ...(o.deviceId ? [[btn("Nudge phone", "nudge", o.deviceId), btn("Silence 1h", "sil1h", o.deviceId)]] : []),
+    ...(o.deviceId
+      ? [
+          [
+            btn("Nudge phone", "nudge", o.deviceId),
+            btn("Mute alert 1h", "mute", o.deviceId, ...(o.kind ? [o.kind] : [])),
+          ],
+        ]
+      : []),
     [{ text: "Open in admin", url: `${origin()}/admin/${o.page}?w=${encodeURIComponent(o.slug)}` }],
   ];
 }
@@ -434,9 +467,23 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
     case "nudge":
       await nudgePhone(ctx.db, actor, input);
       return toast(q, `Nudged ${dev.label}: it will sync in a moment.`);
+    case "mute":
     case "sil1h": {
-      // a repeat press while an hour-ish silence is already running changes nothing
-      return locked(ctx, `sil1h:${dev.id}`, async (db) => {
+      // "sil1h" is the old button on alerts already sent: it only mutes now (every kind of that phone), never pauses
+      const kind = cb.action === "sil1h" ? MUTE_ALL : (cb.args[1] ?? MUTE_ALL);
+      if (kind !== MUTE_ALL && !MUTABLE_KINDS.has(kind)) return expired(q);
+      return locked(ctx, `mute:${dev.id}:${kind}:${actor.id}`, async (db) => {
+        const r = await muteAlert(db, actor, { ...input, kind }, ctx.now);
+        const what = kind === MUTE_ALL ? "alerts" : `${KIND_WORDS[kind] ?? kind} alerts`;
+        return toast(
+          q,
+          `${r.already ? "Already muted" : "Muted"} ${what} for ${dev.label} until ${when(r.until, ctx.now)}. Tracking is unchanged.`,
+        );
+      });
+    }
+    case "pause1h": {
+      // a repeat press while an hour-ish pause is already running changes nothing
+      return locked(ctx, `pause1h:${dev.id}`, async (db) => {
         const [cur] = await db
           .select()
           .from(directives)
@@ -451,10 +498,13 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
           )
           .orderBy(desc(directives.endsAt))
           .limit(1);
-        if (cur) return toast(q, `Already silenced until ${when(cur.endsAt, ctx.now)}.`);
+        if (cur) return toast(q, `Tracking is already paused until ${when(cur.endsAt, ctx.now)}.`);
         const until = new Date(+ctx.now + H);
         await silencePhone(db, actor, { ...input, until: until.toISOString() });
-        return toast(q, `Silenced ${dev.label} until ${when(until, ctx.now)}.`);
+        return toast(
+          q,
+          `Paused tracking on ${dev.label} until ${when(until, ctx.now)}. It sends no location until then.`,
+        );
       });
     }
     case "kill":
@@ -513,13 +563,16 @@ async function onCancelDay(ctx: BotContext, cb: Callback, q: TgCallbackQuery): P
 }
 
 /**
- * Buttons nudge / sil1h / kill → killok / resume (a killed Telegram/Traccar phone) / cday → cdayok / nw / noop. Destructive ones (kill, cday) first edit the
+ * Buttons nudge / mute (sil1h = legacy mute) / pause1h / kill → killok / resume (a killed Telegram/Traccar phone) /
+ * cday → cdayok / nw / noop. Destructive ones (kill, cday) first edit the
  * message into "Are you sure?" with [Yes, kill] [Cancel]; only the *ok action changes anything.
  */
 export async function onAdminCallback(ctx: BotContext, cb: Callback, query: TgCallbackQuery): Promise<BotReply> {
   try {
     switch (cb.action) {
       case "nudge":
+      case "mute":
+      case "pause1h":
       case "sil1h":
       case "kill":
       case "killok":

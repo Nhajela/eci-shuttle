@@ -386,6 +386,43 @@ describe("detectProblems", () => {
   });
 });
 
+describe("detectProblems: Telegram live-location phones parked at a stop", () => {
+  const inside = (spotId: string) => ({
+    insideSpotId: spotId,
+    enteredAt: ago(30).getTime(),
+    candidateSpotId: null,
+    candidateSince: null,
+    lastFixAt: ago(8).getTime(),
+  });
+  const silentFor = async (opts: { appVersion: string; min: number; geofence?: object | null; phase?: "offline" }) => {
+    const ws = await makeWorkspace(db());
+    const { device } = await makeAssignedDevice(db(), ws.id, {
+      device: { appVersion: opts.appVersion },
+      state: {
+        lastPingAt: ago(opts.min),
+        phase: opts.phase ?? "offline",
+        geofence: (opts.geofence ?? null) as never,
+      },
+    });
+    schedules.set(device.id, activeSince(60));
+    return (await detectProblems(db(), ws.id, NOW)).filter((p) => p.kind === "silent");
+  };
+  const spot = "11111111-1111-4111-8111-111111111111";
+
+  it("not silent until 15 min when its last fix was inside a stop (it sends nothing while stationary)", async () => {
+    expect(await silentFor({ appVersion: "telegram", min: 8, geofence: inside(spot) })).toEqual([]);
+    expect(await silentFor({ appVersion: "telegram", min: 14, geofence: inside(spot) })).toEqual([]);
+    expect(await silentFor({ appVersion: "telegram", min: 16, geofence: inside(spot) })).toHaveLength(1);
+  });
+
+  it("still silent after 5 min when the last fix was between stops, or for the Android app / Traccar", async () => {
+    expect(await silentFor({ appVersion: "telegram", min: 8 })).toHaveLength(1);
+    expect(await silentFor({ appVersion: "telegram", min: 8, geofence: inside(null as never) })).toHaveLength(1);
+    expect(await silentFor({ appVersion: "1.4.0", min: 8, geofence: inside(spot) })).toHaveLength(1);
+    expect(await silentFor({ appVersion: "traccar", min: 8, geofence: inside(spot) })).toHaveLength(1);
+  });
+});
+
 describe("runWatchdog", () => {
   it("refreshes phases, alerts each problem once per episode with buttons, and admin changes", async () => {
     const ws = await makeWorkspace(db());
@@ -407,13 +444,45 @@ describe("runWatchdog", () => {
     expect(payload.buttons).toEqual([
       [
         { text: "Nudge phone", callbackData: `nudge:${device.id}` },
-        { text: "Silence 1h", callbackData: `sil1h:${device.id}` },
+        { text: "Mute alert 1h", callbackData: `mute:${device.id}:silent` },
       ],
       [{ text: "Open in admin", url: `http://localhost:3000/admin/live?w=${ws.slug}` }],
     ]);
+    // never the old "Silence 1h": that paused tracking
+    expect(JSON.stringify(payload.buttons)).not.toContain("sil1h");
 
     await runWatchdog(db(), new Date(NOW.getTime() + 60_000));
     expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(1);
+  });
+
+  it("low battery: Mute alert 1h plus a separately named Pause tracking 1h", async () => {
+    const ws = await makeWorkspace(db());
+    await makeAdmin(db(), ws.id);
+    const { device } = await makeAssignedDevice(db(), ws.id, { device: { battery: 8, charging: false } });
+    await runWatchdog(db(), NOW);
+    const [job] = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
+    expect((job.payload as TelegramPayload).buttons).toEqual([
+      [
+        { text: "Nudge phone", callbackData: `nudge:${device.id}` },
+        { text: "Mute alert 1h", callbackData: `mute:${device.id}:low_battery` },
+      ],
+      [{ text: "Pause tracking 1h", callbackData: `pause1h:${device.id}` }],
+      [{ text: "Open in admin", url: `http://localhost:3000/admin/live?w=${ws.slug}` }],
+    ]);
+  });
+
+  it("off route: Mute alert 1h only, no Pause tracking (a moving van must stay visible)", async () => {
+    const ws = await makeWorkspace(db());
+    await makeAdmin(db(), ws.id);
+    const { device } = await makeAssignedDevice(db(), ws.id, {
+      state: { lastPingAt: ago(1), offRoute: true, phase: "en_route" },
+    });
+    schedules.set(device.id, activeSince(30));
+    await runWatchdog(db(), NOW);
+    const jobs = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
+    const buttons = JSON.stringify(jobs.map((j) => (j.payload as TelegramPayload).buttons));
+    expect(buttons).toContain(`mute:${device.id}:off_route`);
+    expect(buttons).not.toContain("pause1h");
   });
 
   it("one workspace failing does not stop the others", async () => {

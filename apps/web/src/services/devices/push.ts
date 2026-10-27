@@ -5,6 +5,8 @@ import { devices } from "@/db/schema";
 import { type DeliveryResult, mutate, type OutboxJob, type PushPayload, systemActor } from "../kernel";
 
 export const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+/** An Expo call that takes longer is abandoned and retried like any network failure (it would hold the queue job lock ~5 min). */
+export const REQUEST_TIMEOUT_MS = 10_000;
 
 /** Expo per-message errors worth another try; everything else (InvalidCredentials, MessageTooBig …) is final. */
 const RETRYABLE = new Set(["MessageRateExceeded"]);
@@ -36,6 +38,7 @@ export async function deliverPush(db: Db, job: OutboxJob, fetchImpl: typeof fetc
         accept: "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       body: JSON.stringify([
         // no title/body: a data-only message wakes the app's background task without showing anything
         { to: device.pushToken, data: { type: "sync", deviceId, reason }, priority: "high", _contentAvailable: true },

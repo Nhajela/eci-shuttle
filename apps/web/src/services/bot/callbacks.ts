@@ -24,7 +24,9 @@ export const CallbackAction = z.enum([
   "login", // login:<code>               confirms a browser's deep-link login
   // admin (bot/admin)
   "nudge", // nudge:<deviceId>
-  "sil1h", // sil1h:<deviceId>           silence 1 h
+  "mute", // mute:<deviceId>[:<problemKind>]  mute that alert for me for 1 h (tracking untouched)
+  "pause1h", // pause1h:<deviceId>      PAUSE TRACKING for 1 h (silence_until directive: the phone goes idle)
+  "sil1h", // sil1h:<deviceId>           legacy button of already-sent alerts: now only a mute (all kinds), never a pause
   "kill", // kill:<deviceId>             asks "Are you sure?"
   "killok", // killok:<deviceId>         confirmed
   "resume", // resume:<deviceId>          lifts the kill of a Telegram/Traccar phone (it has no Resume button)

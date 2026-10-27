@@ -125,6 +125,46 @@ describe("windows job", () => {
     expect(await bumpAudits(good.id)).toHaveLength(1);
   });
 
+  it("progress is per workspace: a failing one is retried over its own range, the others are not rescanned", async () => {
+    const bad = await makeWorkspace(testDb());
+    const good = await makeWorkspace(testDb());
+    phonesByWs[good.id] = [phone("good")];
+    phonesByWs[bad.id] = [phone("bad")];
+    schedules = {
+      good: [win(t - 30_000, t + 60 * MIN)], // opens in the first tick
+      bad: [win(t - 20_000, t + 60 * MIN)], // opens in the first tick, which fails for this workspace
+    };
+    let failing = true;
+    vi.mocked(trackedDevices).mockImplementation(async (_db, workspaceId) => {
+      if (workspaceId === bad.id && failing) throw new Error("boom");
+      return phonesByWs[workspaceId] ?? [];
+    });
+    await expect(run()).rejects.toThrow(/boom/);
+    expect(vi.mocked(bumpConfigs).mock.calls.map((c) => c[1].deviceIds)).toEqual([["good"]]);
+
+    failing = false;
+    vi.mocked(bumpConfigs).mockClear();
+    vi.mocked(desiredConfig).mockClear();
+    await run(new Date(+NOW + MIN));
+    // good: scanned only the new minute (read as of FLOOR); its phone is not bumped again
+    expect(desiredConfig).toHaveBeenCalledWith(expect.anything(), "good", new Date(FLOOR));
+    // bad: retried from where it failed (read as of FLOOR - 1 min), so the missed edge is bumped now
+    expect(desiredConfig).toHaveBeenCalledWith(expect.anything(), "bad", new Date(FLOOR - MIN));
+    expect(vi.mocked(bumpConfigs).mock.calls.map((c) => c[1].deviceIds)).toEqual([["bad"]]);
+  });
+
+  it("a refreshPhases failure after a successful bump does not re-bump the same phones next tick", async () => {
+    const ws = await makeWorkspace(testDb());
+    phonesByWs[ws.id] = [phone("p")];
+    schedules = { p: [win(t - 30_000, t + 60 * MIN)] };
+    vi.mocked(refreshPhases).mockRejectedValueOnce(new Error("refresh down"));
+    await expect(run()).rejects.toThrow(/refresh down/);
+    expect(bumpConfigs).toHaveBeenCalledTimes(1);
+    vi.mocked(bumpConfigs).mockClear();
+    await run(new Date(+NOW + MIN));
+    expect(bumpConfigs).not.toHaveBeenCalled();
+  });
+
   it("catches up the edges of a skipped tick", async () => {
     const ws = await makeWorkspace(testDb());
     phonesByWs[ws.id] = [phone("late")];

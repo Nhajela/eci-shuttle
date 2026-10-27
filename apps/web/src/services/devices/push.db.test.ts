@@ -5,7 +5,7 @@ import { and, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { auditLog, devices } from "@/db/schema";
 import { enqueue, type OutboxJob } from "../kernel";
-import { deliverPush, EXPO_PUSH_URL } from "./push";
+import { deliverPush, EXPO_PUSH_URL, REQUEST_TIMEOUT_MS } from "./push";
 
 const db = () => testDb();
 
@@ -53,6 +53,31 @@ describe("deliverPush", () => {
     });
     expect(msg.title).toBeUndefined();
     expect(msg.body).toBeUndefined();
+  });
+
+  it("the Expo call has a 10 s abort signal; a timeout is a normal retryable failure", async () => {
+    expect(REQUEST_TIMEOUT_MS).toBe(10_000);
+    const { job } = await setup();
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    const f = okTicket();
+    await deliverPush(db(), job, f);
+    expect(spy).toHaveBeenCalledWith(10_000);
+    expect(f.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+
+    spy.mockImplementation(() => AbortSignal.abort(new DOMException("The operation timed out.", "TimeoutError")));
+    const hung = vi.fn(
+      (_u: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_res, reject) => {
+          if (init?.signal?.aborted) return reject(init.signal.reason);
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        }),
+    );
+    expect(await deliverPush(db(), job, hung)).toMatchObject({
+      ok: false,
+      retry: true,
+      error: expect.stringContaining("timed out"),
+    });
+    spy.mockRestore();
   });
 
   it("sends the Expo access token as a bearer only when set", async () => {
