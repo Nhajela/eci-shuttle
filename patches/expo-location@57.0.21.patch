@@ -24,7 +24,7 @@ index b286ea277f3658b62ab9fd9ed1df67359cea46fc..4ec2a705a8b62d4722d5471605d67c70
        }
  
 diff --git a/android/src/main/java/expo/modules/location/services/LocationTaskService.kt b/android/src/main/java/expo/modules/location/services/LocationTaskService.kt
-index 0019485f58ba2a6f33ca227a40c37355adabf0c6..911b366010ea5c873e4211c53ef1fc2fe95afe34 100644
+index 0019485f58ba2a6f33ca227a40c37355adabf0c6..3cafb301b527424c4849848d20b9c609ba069591 100644
 --- a/android/src/main/java/expo/modules/location/services/LocationTaskService.kt
 +++ b/android/src/main/java/expo/modules/location/services/LocationTaskService.kt
 @@ -48,10 +48,16 @@ class LocationTaskService : Service() {
@@ -44,15 +44,29 @@ index 0019485f58ba2a6f33ca227a40c37355adabf0c6..911b366010ea5c873e4211c53ef1fc2f
    override fun onTaskRemoved(rootIntent: Intent) {
      if (mKillService) {
        super.onTaskRemoved(rootIntent)
-@@ -62,6 +68,7 @@ class LocationTaskService : Service() {
+@@ -62,6 +68,21 @@ class LocationTaskService : Service() {
    fun startForeground(serviceOptions: Bundle) {
      val notification = buildServiceNotification(serviceOptions)
      startForeground(mServiceId, notification)
 +    isForeground = true
++  }
++
++  /**
++   * Refreshes the notification of a service that is already in the foreground. Unlike a second startForeground()
++   * (which Android re-checks against the app state and may refuse from the background), notify() on the same id
++   * is always allowed. Never throws.
++   */
++  fun updateNotification(serviceOptions: Bundle) {
++    try {
++      val notification = buildServiceNotification(serviceOptions)
++      (getSystemService(NOTIFICATION_SERVICE) as? NotificationManager)?.notify(mServiceId, notification)
++    } catch (e: Exception) {
++      android.util.Log.w("expo-location", "Could not update the foreground service notification.", e)
++    }
    }
  
    //region private
-@@ -144,6 +151,14 @@ class LocationTaskService : Service() {
+@@ -144,6 +165,14 @@ class LocationTaskService : Service() {
  
    companion object {
      private var sServiceId = 481756
@@ -68,7 +82,7 @@ index 0019485f58ba2a6f33ca227a40c37355adabf0c6..911b366010ea5c873e4211c53ef1fc2f
        "expo.modules.location.foreground_service_icon"
    }
 diff --git a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
-index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..6308f3b0d9cd9842f46e3dbc4d2060404c63fecb 100644
+index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..e766f75a25cb4715de6b7327a6c0df8a5ca539ec 100644
 --- a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
 +++ b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
 @@ -178,10 +178,9 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
@@ -101,3 +115,40 @@ index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..6308f3b0d9cd9842f46e3dbc4d206040
        context.bindService(
          serviceIntent,
          object : ServiceConnection {
+@@ -219,7 +225,14 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+             mService = (service as? ServiceBinder)?.service
+             mService?.let {
+               it.setParentContext(context)
+-              it.startForeground(serviceOptions)
++              try {
++                it.startForeground(serviceOptions)
++              } catch (e: Exception) {
++                // Refused (e.g. started from the background without an exemption): don't leave a half-started service.
++                Log.w(TAG, "Could not enter the foreground", e)
++                it.stop()
++                mService = null
++              }
+             }
+           }
+ 
+@@ -231,8 +244,18 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+         Context.BIND_AUTO_CREATE
+       )
+     } else {
+-      // Restart the service with new service options.
+-      mService?.startForeground(options.getArguments(FOREGROUND_SERVICE_KEY).toBundle())
++      // Update the running service with new service options. Patched: from the background only the notification is
++      // refreshed (a second startForeground() can be refused there), and nothing may escape into registerTask.
++      val serviceOptions = options.getArguments(FOREGROUND_SERVICE_KEY).toBundle()
++      if (isBackgrounded) {
++        mService?.updateNotification(serviceOptions)
++      } else {
++        try {
++          mService?.startForeground(serviceOptions)
++        } catch (e: Exception) {
++          Log.w(TAG, "Could not update the foreground service", e)
++        }
++      }
+     }
+   }
+ 

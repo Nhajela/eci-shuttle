@@ -38,6 +38,9 @@ describe("expo-location native patch", () => {
     expect(patch).toContain("could not be started");
     // the service reports whether it is really foreground
     expect(patch).toContain("var isForeground");
+    // a background in-place update only refreshes the notification (no second startForeground that Android may refuse)
+    expect(patch).toContain("fun updateNotification");
+    expect(patch).toContain("mService?.updateNotification(serviceOptions)");
   });
 
   it("changes the native runtime, so the app version moved past 0.1.0 (old APKs keep getting 0.1.0 OTA only)", () => {
