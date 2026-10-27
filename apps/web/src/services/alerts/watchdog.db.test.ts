@@ -407,13 +407,31 @@ describe("runWatchdog", () => {
     expect(payload.buttons).toEqual([
       [
         { text: "Nudge phone", callbackData: `nudge:${device.id}` },
-        { text: "Silence 1h", callbackData: `sil1h:${device.id}` },
+        { text: "Mute alert 1h", callbackData: `mute:${device.id}:silent` },
       ],
       [{ text: "Open in admin", url: `http://localhost:3000/admin/live?w=${ws.slug}` }],
     ]);
+    // never the old "Silence 1h": that paused tracking
+    expect(JSON.stringify(payload.buttons)).not.toContain("sil1h");
 
     await runWatchdog(db(), new Date(NOW.getTime() + 60_000));
     expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(1);
+  });
+
+  it("low battery: Mute alert 1h plus a separately named Pause tracking 1h", async () => {
+    const ws = await makeWorkspace(db());
+    await makeAdmin(db(), ws.id);
+    const { device } = await makeAssignedDevice(db(), ws.id, { device: { battery: 8, charging: false } });
+    await runWatchdog(db(), NOW);
+    const [job] = await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id));
+    expect((job.payload as TelegramPayload).buttons).toEqual([
+      [
+        { text: "Nudge phone", callbackData: `nudge:${device.id}` },
+        { text: "Mute alert 1h", callbackData: `mute:${device.id}:low_battery` },
+      ],
+      [{ text: "Pause tracking 1h", callbackData: `pause1h:${device.id}` }],
+      [{ text: "Open in admin", url: `http://localhost:3000/admin/live?w=${ws.slug}` }],
+    ]);
   });
 
   it("one workspace failing does not stop the others", async () => {

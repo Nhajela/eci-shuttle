@@ -6,13 +6,14 @@
  * come from alerts/watchdog.
  */
 import { type AlertKind, formatIst, istDate, istHHMM } from "@eci-shuttle/shared";
-import { and, eq, gt, isNull, lte } from "drizzle-orm";
+import { and, eq, gt, isNull, lte, sql } from "drizzle-orm";
+import { z } from "zod";
 import type { Db } from "@/db";
 import { alertPrefs, auditLog, memberships, people, workspaces } from "@/db/schema";
 import { origin } from "@/lib/env";
 import { escapeHtml } from "@/lib/telegram/html";
 import { getInsights, listSuggestions } from "@/services/learning/insights";
-import { enqueue, systemActor, type TelegramButton } from "../kernel";
+import { type Actor, enqueue, mutate, parseInput, readable, systemActor, type TelegramButton } from "../kernel";
 import { DEFAULT_ALERT_KINDS, quietUntil } from "./prefs";
 
 export type AlertEvent = {
@@ -30,7 +31,78 @@ export type AlertEvent = {
    * "Open in admin" (<origin>/admin/<page>?w=<slug>). Destructive buttons always go through a confirm step.
    */
   buttons?: TelegramButton[][];
+  /** Which phone and problem kind a "Mute alert 1h" press snoozes (see muteAlert); omit for alerts about nothing mutable. */
+  mute?: { kind: string; deviceId: string };
 };
+
+/** How long "Mute alert 1h" snoozes an alert for the person who pressed it. */
+export const MUTE_MS = 3_600_000;
+const MUTE_ACTION = "alert.mute";
+/** Matches every alert kind of the phone (what an old "Silence 1h" button now does). */
+export const MUTE_ALL = "*";
+
+/** audit_log.entityId of a mute: `<problem kind | *>:<deviceId>`. */
+const muteEntity = (kind: string, deviceId: string) => `${kind}:${deviceId}`;
+
+/** The end of the person's running mute of this kind (or of all kinds) on the phone, null if none. */
+async function mutedUntil(
+  db: Db,
+  workspaceId: string,
+  personId: string,
+  mute: { kind: string; deviceId: string },
+  now: Date,
+): Promise<Date | null> {
+  const until = sql<string>`${auditLog.after}->>'until'`;
+  const rows = await db
+    .select({ until })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.workspaceId, workspaceId),
+        eq(auditLog.action, MUTE_ACTION),
+        eq(auditLog.entity, "alert"),
+        eq(auditLog.actorId, personId),
+        sql`${auditLog.entityId} in (${muteEntity(mute.kind, mute.deviceId)}, ${muteEntity(MUTE_ALL, mute.deviceId)})`,
+        sql`(${until})::timestamptz > ${now.toISOString()}::timestamptz`,
+      ),
+    )
+    .orderBy(sql`(${until})::timestamptz desc`)
+    .limit(1);
+  return rows[0] ? new Date(rows[0].until) : null;
+}
+
+/**
+ * viewer+ (a person). "Mute alert 1h": this person gets no alert of `kind` about that phone for an hour (kind "*"
+ * = every kind). Nothing about the phone changes: it keeps tracking. No schema of its own: the audit row
+ * (`alert.mute`, entityId `<kind>:<deviceId>`, after.until) is the record, queueAlert reads it. A repeat press
+ * while muted writes nothing (`already`).
+ */
+export async function muteAlert(
+  db: Db,
+  actor: Actor,
+  input: { workspaceId: string; deviceId: string; kind: string },
+  now: Date,
+): Promise<{ until: Date; already: boolean }> {
+  const p = parseInput(
+    z.object({ workspaceId: z.uuid(), deviceId: z.string().min(1), kind: z.string().min(1) }),
+    input,
+  );
+  readable(actor, p.workspaceId);
+  const running = await mutedUntil(db, p.workspaceId, actor.id, p, now);
+  if (running && running.getTime() - now.getTime() > MUTE_MS - 5 * 60_000) return { until: running, already: true };
+  const until = new Date(now.getTime() + MUTE_MS);
+  await mutate(
+    db,
+    actor,
+    { action: MUTE_ACTION, entity: "alert", entityId: muteEntity(p.kind, p.deviceId), workspaceId: p.workspaceId },
+    async () => ({
+      before: null,
+      after: { kind: p.kind, deviceId: p.deviceId, until: until.toISOString() },
+      result: null,
+    }),
+  );
+  return { until, already: false };
+}
 
 /** Telegram HTML escape for text people typed (labels, names). */
 
@@ -50,6 +122,7 @@ async function queueAlert(db: Db, event: AlertEvent, now: Date, skipPersonId?: s
   let queued = 0;
   for (const { person, prefs } of members) {
     if (person.id === skipPersonId || !(prefs?.kinds ?? DEFAULT_ALERT_KINDS).includes(event.kind)) continue;
+    if (event.mute && (await mutedUntil(db, event.workspaceId, person.id, event.mute, now))) continue;
     const held = quietUntil(prefs?.quietFrom ?? null, prefs?.quietTo ?? null, now.getTime());
     const job = await enqueue(db, {
       kind: "telegram",

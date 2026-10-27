@@ -1,11 +1,12 @@
 import { istToEpoch } from "@eci-shuttle/shared";
 import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { alertPrefs, auditLog, memberships, outbox } from "@/db/schema";
+import { adminActor } from "@/services/auth/actor";
 import { systemActor, type TelegramPayload } from "../kernel";
-import { alertAdminChanges, raiseAlert, sendDigest } from "./alerts";
+import { alertAdminChanges, muteAlert, raiseAlert, sendDigest } from "./alerts";
 
 // learning/insights is another task's module: fake its two reads
 vi.mock("@/services/learning/insights", () => ({
@@ -141,5 +142,66 @@ describe("sendDigest", () => {
       from: "2026-10-11",
       to: "2026-10-11",
     });
+  });
+});
+
+describe("muteAlert", () => {
+  const ev = (ws: string, deviceId: string, key: string, kind: "low_battery" | "silent" = "low_battery") => ({
+    workspaceId: ws,
+    kind,
+    key,
+    html: "<b>x</b>",
+    mute: { kind: "low_battery" as const, deviceId },
+  });
+
+  it("snoozes that alert kind on that phone for the person for an hour; others and other kinds still alert", async () => {
+    const ws = await makeWorkspace(db());
+    const { person: a } = await makeAdmin(db(), ws.id);
+    const { person: b } = await makeAdmin(db(), ws.id, "ops");
+    const actor = await adminActor(db(), { personId: a.id, workspaceId: ws.id, channel: "telegram" });
+
+    const r = await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: "d1", kind: "low_battery" }, NOW);
+    expect(r.until.getTime()).toBe(NOW.getTime() + 3_600_000);
+    const audits = await db()
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.action, "alert.mute"), eq(auditLog.workspaceId, ws.id)));
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({ workspaceId: ws.id, actorId: a.id, channel: "telegram", entity: "alert" });
+
+    // only b is told; a muted this phone's battery alerts
+    expect(await raiseAlert(db(), ev(ws.id, "d1", "low_battery:d1:1"), NOW)).toBe(1);
+    const [job] = await jobs(ws.id);
+    expect(job.dedupeKey).toBe(`alert:low_battery:d1:1:${b.id}`);
+    // another phone is not muted
+    expect(await raiseAlert(db(), ev(ws.id, "d2", "low_battery:d2:1"), NOW)).toBe(2);
+    // after the hour a is told again
+    const later = new Date(NOW.getTime() + 3_600_001);
+    expect(await raiseAlert(db(), ev(ws.id, "d1", "low_battery:d1:2"), later)).toBe(2);
+  });
+
+  it("kind * (an old Silence 1h button) mutes every alert kind of that phone", async () => {
+    const ws = await makeWorkspace(db());
+    const { person: a } = await makeAdmin(db(), ws.id);
+    const actor = await adminActor(db(), { personId: a.id, workspaceId: ws.id, channel: "telegram" });
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: "d1", kind: "*" }, NOW);
+    const e = { ...ev(ws.id, "d1", "k1"), mute: { kind: "update_failed" as const, deviceId: "d1" } };
+    expect(await raiseAlert(db(), e, NOW)).toBe(0);
+  });
+
+  it("is idempotent for a repeat press while muted (no second audit row)", async () => {
+    const ws = await makeWorkspace(db());
+    const { person: a } = await makeAdmin(db(), ws.id);
+    const actor = await adminActor(db(), { personId: a.id, workspaceId: ws.id, channel: "telegram" });
+    const input = { workspaceId: ws.id, deviceId: "d1", kind: "low_battery" as const };
+    await muteAlert(db(), actor, input, NOW);
+    const again = await muteAlert(db(), actor, input, new Date(NOW.getTime() + 60_000));
+    expect(again.already).toBe(true);
+    expect(
+      await db()
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.action, "alert.mute"), eq(auditLog.workspaceId, ws.id))),
+    ).toHaveLength(1);
   });
 });

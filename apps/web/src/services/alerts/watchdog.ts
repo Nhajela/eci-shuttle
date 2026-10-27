@@ -232,15 +232,25 @@ async function stampEpisodes(db: Db, workspaceId: string, found: Problem[], now:
 /** The admin pref that gates a problem (update_pending has no AlertKind of its own yet). */
 const alertKindOf = (k: Problem["kind"]): AlertKind => (k === "update_pending" ? "update_failed" : k);
 
+/** Problems where pausing the phone's tracking for an hour is a sensible thing to want (a parked or charging phone). */
+const PAUSABLE = new Set<Problem["kind"]>(["low_battery", "off_route"]);
+
 async function alertProblems(db: Db, id: string, found: Problem[], now: Date): Promise<number> {
   let alerted = 0;
   for (const p of found) {
     const buttons = [[await adminButton(db, id, p.vehicleId ? "live" : "phones")]];
-    if (p.deviceId)
+    if (p.deviceId) {
+      // Mute only snoozes this alert for the admin who pressed it. Pausing tracking (the phone goes idle, GPS off)
+      // is a separate, clearly named button, only where an admin could mean it: not when the phone is already silent.
+      if (PAUSABLE.has(p.kind))
+        buttons.unshift([
+          { text: "Pause tracking 1h", callbackData: encodeCallback({ action: "pause1h", args: [p.deviceId] }) },
+        ]);
       buttons.unshift([
         { text: "Nudge phone", callbackData: encodeCallback({ action: "nudge", args: [p.deviceId] }) },
-        { text: "Silence 1h", callbackData: encodeCallback({ action: "sil1h", args: [p.deviceId] }) },
+        { text: "Mute alert 1h", callbackData: encodeCallback({ action: "mute", args: [p.deviceId, p.kind] }) },
       ]);
+    }
     // Vehicle problems follow the vehicle; phone problems follow the phone, so a swapped-in phone alerts afresh.
     const subject = p.kind === "silent" || p.kind === "off_route" ? p.vehicleId : p.deviceId;
     alerted += await raiseAlert(
@@ -251,6 +261,7 @@ async function alertProblems(db: Db, id: string, found: Problem[], now: Date): P
         key: `${p.kind}:${subject}:${p.since.getTime()}`,
         html: `<b>${escapeHtml(p.message)}</b>\nSince ${istHHMM(p.since)}`,
         buttons,
+        ...(p.deviceId && { mute: { kind: p.kind, deviceId: p.deviceId } }),
       },
       now,
     );
