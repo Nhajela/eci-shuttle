@@ -84,6 +84,7 @@ describe("statusView", () => {
       newApkUrl: null,
       problem: null,
       notice: null,
+      note: null,
     });
   });
 
@@ -184,5 +185,17 @@ describe("statusView: problem and notice", () => {
     for (const mode of ["killed", "revoked", "unpaired"] as const) {
       expect(statusView({ ...base, resolution: res({ mode, intervalS: null }), needsApp: true }).notice).toBeNull();
     }
+  });
+});
+
+describe("statusView: patch fallback note", () => {
+  const base = { appVersion: "0.1.1", lastSyncAt: NOW - 3 * MIN, now: NOW, config: config() };
+  it("tells the driver to open the app each day when background updates were refused", () => {
+    const v = statusView({ ...base, resolution: res({ until: at(16) }), degraded: true });
+    expect(v.note).toBe("Background tracking can't restart itself on this phone. Open the app before each run.");
+    expect(statusView({ ...base, resolution: res({}), degraded: false }).note).toBeNull();
+    expect(
+      statusView({ ...base, resolution: res({ mode: "killed", intervalS: null }), degraded: true }).note,
+    ).toBeNull();
   });
 });

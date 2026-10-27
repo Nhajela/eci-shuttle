@@ -3,7 +3,7 @@ import { Redirect, router } from "expo-router";
 import * as Updates from "expo-updates";
 import { useEffect, useState } from "react";
 import { Linking, StyleSheet, Text, View } from "react-native";
-import { appVersion, refresh, resume, useDevice } from "../src/screens/device";
+import { appVersion, nativeVersion, refresh, resume, useDevice } from "../src/screens/device";
 import { statusView } from "../src/screens/status";
 import { Button, colors, Screen, s } from "../src/screens/ui";
 import { serverNow } from "../src/sync/sync";
@@ -40,6 +40,7 @@ export default function Status() {
     now: serverTime,
     lastError: d.runtime.lastError,
     needsApp: d.runtime.needsApp,
+    degraded: d.runtime.degradedAt !== null && d.runtime.degradedAt === nativeVersion(),
   });
   const tone = TONE[v.tone];
 
@@ -59,6 +60,8 @@ export default function Status() {
           </Text>
         </View>
       )}
+
+      {v.note && <Text style={s.muted}>{v.note}</Text>}
 
       {v.showResume && (
         <Button

@@ -59,6 +59,8 @@ export type StatusInput = {
   lastError?: string | null;
   /** tracking should be running but only opening the app can start it */
   needsApp?: boolean;
+  /** a patched build's background update was refused on this phone (it works like the unpatched build) */
+  degraded?: boolean;
 };
 
 export type StatusView = {
@@ -74,6 +76,8 @@ export type StatusView = {
   problem: string | null;
   /** "Open the app to start tracking" when the app is needed to start the location task, or null */
   notice: string | null;
+  /** longer-lived explanation under the notice, or null */
+  note: string | null;
 };
 
 /** Everything the status screen shows, as text. */
@@ -85,6 +89,7 @@ export function statusView({
   now,
   lastError = null,
   needsApp = false,
+  degraded = false,
 }: StatusInput): StatusView {
   const until = r.until === null ? "" : ` until ${formatIst(r.until, now)}`;
   const headline =
@@ -122,5 +127,9 @@ export function statusView({
     problem: syncProblem(lastError),
     // only while tracking is wanted: a killed or unpaired phone must not be told to start it
     notice: needsApp && (r.mode === "active" || r.mode === "idle") ? "Open the app to start tracking" : null,
+    note:
+      degraded && (r.mode === "active" || r.mode === "idle")
+        ? "Background tracking can't restart itself on this phone. Open the app before each run."
+        : null,
   };
 }

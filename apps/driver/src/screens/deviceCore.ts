@@ -22,7 +22,7 @@ export type ScreenSnapshot = {
   /** for serverNow() and the last-sync line */
   sync: SyncState;
   /** written by the runtime next to the sync state */
-  runtime: { lastError: string | null; needsApp: boolean };
+  runtime: { lastError: string | null; needsApp: boolean; degradedAt: string | null };
 };
 
 export type PhoneInfo = { model: string; appVersion: string; updateId: string | null };
@@ -50,9 +50,15 @@ export function createScreenDevice(deps: {
         store.deviceConfig(),
         files.get(SYNC_KEY),
       ]);
-      const saved = parseJson(rawSync) as (Partial<SyncState> & { lastError?: string; needsApp?: boolean }) | null;
+      const saved = parseJson(rawSync) as
+        | (Partial<SyncState> & { lastError?: string; needsApp?: boolean; degradedAt?: string })
+        | null;
       const sync = { ...initialSyncState(deps.builtInOrigin), ...saved };
-      const runtime = { lastError: saved?.lastError ?? null, needsApp: saved?.needsApp ?? false };
+      const runtime = {
+        lastError: saved?.lastError ?? null,
+        needsApp: saved?.needsApp ?? false,
+        degradedAt: saved?.degradedAt ?? null,
+      };
       return { ...s, config: st.config, deviceConfig, sync, runtime };
     },
 
