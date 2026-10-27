@@ -27,6 +27,12 @@ export const runtime = createRuntime({
     const level = await Battery.getBatteryLevelAsync().catch(() => -1);
     return level < 0 ? null : Math.round(level * 100);
   },
+  async charging() {
+    const state = await Battery.getBatteryStateAsync().catch(() => Battery.BatteryState.UNKNOWN);
+    return state === Battery.BatteryState.UNKNOWN
+      ? null
+      : state === Battery.BatteryState.CHARGING || state === Battery.BatteryState.FULL;
+  },
   async telemetry() {
     const [state, permissions] = await Promise.all([
       Battery.getBatteryStateAsync().catch(() => Battery.BatteryState.UNKNOWN),

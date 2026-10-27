@@ -54,6 +54,10 @@ export type RuntimeDeps = {
   now: () => number;
   /** per-cycle deadline, default CYCLE_TIMEOUT_MS */
   cycleTimeoutMs?: number;
+  /** how long a ping waits for the battery reading before it is stamped null, default 2 s */
+  batteryTimeoutMs?: number;
+  /** true / false / null (unknown); lets an unpatched phone on a charger skip the overnight stop */
+  charging: () => Promise<boolean | null>;
   random?: () => number;
   /**
    * Put the native task (and the start reminder) in the state the plan wants, as far as this build and the app's
@@ -62,7 +66,7 @@ export type RuntimeDeps = {
   location: {
     apply: (
       r: ModeResolution,
-      cfg: { activeIntervalS: number; idleHeartbeatS: number },
+      cfg: { activeIntervalS: number; idleHeartbeatS: number; charging: boolean | null; clockOffsetMs: number },
       serverNow: number,
       prev: NativeState,
     ) => Promise<NativeState | undefined>;
@@ -102,16 +106,36 @@ export function createRuntime(deps: RuntimeDeps) {
   const savePersisted = (p: Persisted) => deps.files.set(SYNC_KEY, JSON.stringify(p));
 
   /**
-   * Resolve on server time and put the service in that state. A service that can't start must not stop the sync.
-   * Returns the persisted state with what the native side reported (key it started with, "open the app" flag).
+   * Merge `change` into what is on disk NOW and save (never a stale copy: a cut-off cycle and a newer one may overlap).
+   * A cycle that has been cut off writes nothing: returns null.
    */
-  async function apply(p: Persisted): Promise<{ r: ModeResolution; p: Persisted }> {
+  async function patch(change: Partial<Persisted>, cancelled: () => boolean): Promise<Persisted | null> {
+    const cur = await loadPersisted();
+    if (cancelled()) return null;
+    const next = { ...cur, ...change };
+    await savePersisted(next);
+    return next;
+  }
+
+  /**
+   * Resolve on server time and put the service in that state. A service that can't start must not stop the sync.
+   * Records what the native side reported (key it started with, "open the app" flag, patch fallback, reminder).
+   * A cut-off cycle makes no native call and saves nothing.
+   */
+  async function apply(p: Persisted, cancelled: () => boolean): Promise<{ r: ModeResolution; p: Persisted }> {
     const dc = await deps.store.deviceConfig();
     const serverNow = deps.now() + p.clockOffsetMs;
     const r = resolveMode(dc, serverNow);
     lastMode = r.mode;
-    const cfg = { activeIntervalS: dc?.activeIntervalS ?? 10, idleHeartbeatS: dc?.idleHeartbeatS ?? 900 };
     try {
+      const charging = await deps.charging().catch(() => null);
+      if (cancelled()) return { r, p };
+      const cfg = {
+        activeIntervalS: dc?.activeIntervalS ?? 10,
+        idleHeartbeatS: dc?.idleHeartbeatS ?? 900,
+        charging,
+        clockOffsetMs: p.clockOffsetMs,
+      };
       const prev: NativeState = {
         startedKey: p.nativeKey,
         needsApp: p.needsApp,
@@ -120,14 +144,16 @@ export function createRuntime(deps: RuntimeDeps) {
       };
       const res = await deps.location.apply(r, cfg, serverNow, prev);
       if (res && JSON.stringify(res) !== JSON.stringify(prev)) {
-        p = {
-          ...p,
-          nativeKey: res.startedKey,
-          needsApp: res.needsApp,
-          degradedAt: res.degradedAt,
-          reminderFor: res.reminderFor,
-        };
-        await savePersisted(p);
+        const saved = await patch(
+          {
+            nativeKey: res.startedKey,
+            needsApp: res.needsApp,
+            degradedAt: res.degradedAt,
+            reminderFor: res.reminderFor,
+          },
+          cancelled,
+        );
+        if (saved) p = saved;
       }
     } catch (e) {
       console.warn("location service", e instanceof Error ? e.message : e);
@@ -135,7 +161,20 @@ export function createRuntime(deps: RuntimeDeps) {
     return { r, p };
   }
 
-  async function cycle(fixes: Fix[], force: boolean, cancelled: () => boolean) {
+  /** `v`, or `fallback` if it rejects or takes longer than `ms`. */
+  async function bounded<T>(v: Promise<T>, ms: number, fallback: T): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    });
+    try {
+      return await Promise.race([v.catch(() => fallback), late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function cycle(fixes: Fix[], force: boolean, cancelled: () => boolean, progress: { synced: boolean }) {
     const now = deps.now();
     let p = await loadPersisted();
     const dc = await deps.store.deviceConfig();
@@ -143,19 +182,22 @@ export function createRuntime(deps: RuntimeDeps) {
     // Queue the fixes before anything that can hang (native calls, network): a cut-off cycle must not lose them.
     // gateFixes keeps fixes at the active cadence inside windows and drops the rest (idle polling, killed, revoked);
     // idle check-ins still sync, just without pings. Each fix is judged by its own (server) time.
+    // The battery stamp is bounded so a stuck reading can't hold the fixes back.
     const gated = gateFixes(fixes, dc, p.clockOffsetMs, p.lastKeptAt);
     if (gated.keep.length) {
-      const battery = await deps.battery();
+      const battery = await bounded(deps.battery(), deps.batteryTimeoutMs ?? 2_000, null);
       await deps.queue.push(
         gated.keep.flatMap((f) => toPing(f, battery) ?? []),
         now,
       );
-      p = { ...p, lastKeptAt: gated.lastKeptAt };
-      await savePersisted(p);
+      const saved = await patch({ lastKeptAt: gated.lastKeptAt }, cancelled);
+      if (saved) p = saved;
     }
-    const applied = await apply(p);
+    if (cancelled()) return;
+    const applied = await apply(p, cancelled);
     const r = applied.r;
     p = applied.p;
+    if (cancelled()) return;
 
     const [st, token, origins] = await Promise.all([deps.store.state(), deps.store.token(), deps.store.origins()]);
     if (!token) return;
@@ -171,16 +213,17 @@ export function createRuntime(deps: RuntimeDeps) {
       failures: p.failures,
     };
     const delay = nextSyncDelayMs(r, now + p.clockOffsetMs, state, (deps.random ?? Math.random)());
+    // a 429's Retry-After holds back every sync, forced ones included
     const rateLimited = p.retryAfterAt !== null && now < p.retryAfterAt;
     const due =
-      force ||
-      (delay !== null &&
-        !rateLimited &&
-        (p.lastAttemptAt === null || now - p.lastAttemptAt >= delay * DUE_SLACK || p.reportedMode !== r.mode));
+      !rateLimited &&
+      (force ||
+        (delay !== null &&
+          (p.lastAttemptAt === null || now - p.lastAttemptAt >= delay * DUE_SLACK || p.reportedMode !== r.mode)));
     if (!due) return;
 
     const [battery, rest, ota, pushToken] = await Promise.all([
-      deps.battery(),
+      bounded(deps.battery(), deps.batteryTimeoutMs ?? 2_000, null),
       deps.telemetry(),
       deps.ota.report(),
       deps.pushToken(),
@@ -200,30 +243,40 @@ export function createRuntime(deps: RuntimeDeps) {
     });
     // cut off while the request was out: a newer cycle owns the state now, and unacked pings are simply resent
     if (cancelled()) return;
-    p = { ...p, lastAttemptAt: now, reportedMode: r.mode, failures: out.state.failures };
+    const attempt = { lastAttemptAt: now, reportedMode: r.mode, failures: out.state.failures };
     if (!out.ok) {
-      await savePersisted({
-        ...p,
-        lastError: out.error,
-        retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
-      });
+      await patch(
+        {
+          ...attempt,
+          lastError: out.error,
+          retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
+        },
+        cancelled,
+      );
       return;
     }
+    // the server has the pings and answered: whatever is slow from here (disk, OTA) is not a failed sync
+    progress.synced = true;
     // re-paired while the request was out: this response belongs to the old token (its pings were cleared with it)
-    if ((await deps.store.token()) !== token) return;
+    if ((await deps.store.token()) !== token || cancelled()) return;
     await deps.store.applySync(out.response, { sentResume: state.resumePending });
+    if (cancelled()) return;
     await deps.queue.ack(pings.slice(0, out.sentPings));
-    p = {
-      ...p,
-      clockOffsetMs: out.state.clockOffsetMs,
-      lastSyncAt: out.state.lastSyncAt,
-      failures: 0,
-      lastError: null,
-      retryAfterAt: null,
-    };
-    await savePersisted(p);
-    await apply(p);
+    const saved = await patch(
+      {
+        ...attempt,
+        failures: 0,
+        clockOffsetMs: out.state.clockOffsetMs,
+        lastSyncAt: out.state.lastSyncAt,
+        lastError: null,
+        retryAfterAt: null,
+      },
+      cancelled,
+    );
+    if (!saved) return;
+    await apply(saved, cancelled);
     // last: applying an update reloads the JS
+    if (cancelled()) return;
     await deps.ota.reconcile(out.response.targetUpdateId);
   }
 
@@ -235,7 +288,8 @@ export function createRuntime(deps: RuntimeDeps) {
       const timeout = new Promise<"timeout">((resolve) => {
         timer = setTimeout(() => resolve("timeout"), deps.cycleTimeoutMs ?? CYCLE_TIMEOUT_MS);
       });
-      const work = cycle(fixes, force, () => cut).catch((e) => {
+      const progress = { synced: false };
+      const work = cycle(fixes, force, () => cut, progress).catch((e) => {
         console.warn("runtime cycle", e instanceof Error ? e.message : e);
       });
       const done = await Promise.race([work, timeout]);
@@ -243,6 +297,8 @@ export function createRuntime(deps: RuntimeDeps) {
       if (done !== "timeout") return;
       cut = true;
       console.warn("runtime cycle timed out");
+      // only a sync that never got an answer is a failed sync; a slow OTA step after a good one is not
+      if (progress.synced) return;
       const p = await loadPersisted();
       await savePersisted({ ...p, lastError: "timeout", failures: p.failures + 1 }).catch(() => {});
     });
