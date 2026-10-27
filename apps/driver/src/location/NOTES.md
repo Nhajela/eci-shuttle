@@ -111,10 +111,20 @@ and switches itself, except after a reboot/force-stop, which needs the app opene
 
 ## Reboot
 
-- Unpatched: expo-location has no boot receiver, so the task does not come back until the app is opened (a data-only
-  push only runs the sync, which cannot start the task from the background). The reminder notification is lost with
-  the pending alarms on some phones; opening the app restores everything.
-- Patched (0.1.1): the service is restored after reboot by the patch. Verify on a phone.
+- expo-task-manager already ships a boot receiver: `TaskBroadcastReceiver` listens for `BOOT_COMPLETED` and
+  `MY_PACKAGE_REPLACED` (expo-task-manager `AndroidManifest.xml`). Constructing `TaskService` restores the persisted
+  tasks (`TaskService.java:87-91`, `restoreTasks` `:550`), so `LocationTaskConsumer.didRegister` runs inside the
+  receiver and restarts the location updates.
+- Unpatched (0.1.0): expo-location then skips the foreground service because the app is not foregrounded
+  (`LocationTaskConsumer.kt:181`), leaving throttled background updates and no notification. Opening the app restores
+  everything. The reminder notification is lost with the pending alarms on some phones.
+- Patched (0.1.1): Android allows a `location` foreground service to start from `BOOT_COMPLETED` /
+  `MY_PACKAGE_REPLACED` (Android 15 forbids only dataSync, camera, mediaPlayback, phoneCall, mediaProjection and
+  microphone there; `location` needs `ACCESS_BACKGROUND_LOCATION`, which the driver grants). So no extra Kotlin
+  receiver is needed: `patches/expo-location@57.0.21.patch` makes the consumer attempt the service start instead of
+  bailing (and catches a refusal), and lets a background re-registration of a running task update it in place.
+- The restored notification text is whatever was last registered; it no longer contains a clock, so it stays accurate.
+- Reboot with nobody touching the phone must be verified on a phone with the 0.1.1 APK.
 
 ## What to check on the phones
 

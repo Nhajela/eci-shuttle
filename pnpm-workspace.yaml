@@ -1,8 +1,13 @@
 packages:
   - apps/*
   - packages/*
+
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+
 onlyBuiltDependencies:
   - esbuild
+
+patchedDependencies:
+  expo-location@57.0.21: patches/expo-location@57.0.21.patch
