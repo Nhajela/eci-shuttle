@@ -35,13 +35,14 @@ window gets closer.
 |---|---|---|---|---|
 | both | killed / revoked / unpaired | running | stop | stop |
 | both | killed / revoked / unpaired | not running | nothing | nothing |
-| both | any | running, same key | nothing | nothing |
+| both | any | running, same key, verified in this process | nothing | nothing |
+| both | active or idle | running, same key, NOT verified in this process (restored registry) | start (re-register) | nothing (cannot tell, cannot start) |
 | patched | active: High, `activeIntervalS` | running, other/unknown key | update in place | update in place (if refused: see below) |
 | patched | idle: Lowest, `idleHeartbeatS`, any distance to the next window | running, other/unknown key | update in place | update in place (if refused: see below) |
 | patched | active or idle | not running | start | nothing, `needsApp` |
-| unpatched | active, or idle with a window within 3 h: High, `activeIntervalS` (one key, so mode changes never touch it) | running, other/unknown key, or not running | start / update | nothing, `needsApp` (+ reminder) |
-| unpatched | idle, next window more than 3 h away or none | running | stop | stop (+ reminder) |
-| unpatched | idle, next window more than 3 h away or none | not running | nothing (+ reminder) | nothing (+ reminder) |
+| unpatched | active, or idle with a window within 3 h (16 h if charging): High, `activeIntervalS` (one key, so mode changes never touch it) | running, other/unknown key, or not running | start / update | nothing, `needsApp` (+ reminder) |
+| unpatched | idle, next window more than 3 h away (16 h if charging) or none | running | stop | stop (+ reminder) |
+| unpatched | idle, next window more than 3 h away (16 h if charging) or none | not running | nothing (+ reminder) | nothing (+ reminder) |
 
 Patched phones never stop for idle: idle uses `Accuracy.Lowest` at the heartbeat, which is cheap, and a background
 restart would be impossible. If a background in-place update is still refused (`ForegroundServiceStartNotAllowed`),
@@ -49,13 +50,30 @@ the phone records `degradedAt = <native version>` and behaves as unpatched from 
 open the app before each run). The record is ignored once the APK version changes. A refusal while foregrounded is
 not a patch failure: it is recorded as `needsApp` and retried.
 
+### "Running" does not mean "working": `verified`
+
+`hasStartedLocationUpdatesAsync` only reads expo-task-manager's registry, and the registry is rebuilt on every process
+start (reboot, OEM/low-memory kill, app open). On 0.1.0 that restore never starts the foreground service, and if
+location was off at restore no updates are requested at all. So a persisted key that matches proves nothing. `service.ts`
+keeps a module-level `verified` flag, false at every process start and reset by every `AppState` "active"
+(`forceReregister()`); the first foreground pass with `plan.run` registers the task again (in place, cheap) and only a
+successful foreground start sets it. In the background an unverified-but-matching task is left alone: we can't tell and
+can't start it, and a headless wake that gets fixes shows the task is delivering.
+
+`degradedAt` (patch fallback) is set only when a background in-place update of a task we registered in this process
+(`verified`) is refused. A refusal on a restored task just sets `needsApp`. A successful foreground start clears it.
+Consequence: a headless-only process never marks the patch as broken; it asks for the app instead.
+
 ### Why unpatched stops overnight
 
 A 10 s High-accuracy task left on through the ~11 h gap between ops hours (21:00) and the next window (08:00/09:00)
 drained a phone from full to dead mid-shift. So with no window within 3 h (`IDLE_STOP_AFTER_MS`) the task is stopped
 (allowed from the background), and `reminderAction` keeps one local notification pending, 15 min before the next
 window: "Shuttle tracking: open the app to start" (`expo-notifications`, fixed identifier so it is replaced, never
-stacked; skipped without notification permission; cancelled as soon as the task runs). Opening the app starts the
+stacked; skipped without notification permission; cancelled as soon as the task runs). Reminder times come from the server clock and are converted to the phone clock with the known skew. **On a charger
+the overnight stop is skipped** (window up to 16 h ahead): a missed reminder would otherwise mean no tracking all
+day, and GPS on a charger is harmless. Unplugged, the next cycle stops the task and schedules the reminder.
+Opening the app starts the
 task (an `AppState` listener syncs, with up to 3 retries 1.5 s apart while the native side catches up).
 
 ### The gate (JS, both builds)
@@ -69,7 +87,8 @@ The time of the last kept fix is persisted (`lastKeptAt`), because every deliver
 
 Pure and tested: `capabilityFor`, `locationPlan`, `planKey`, `nativeDecision`, `gateFixes`, `reminderTarget`,
 `reminderAction`, `isForegroundNotAllowed` in `plan.ts`. `apply.ts` does the native and reminder calls through
-injected interfaces. `service.ts` is only expo wiring. The runtime persists `nativeKey`, `needsApp`, `degradedAt`,
+injected interfaces. `service.ts` is only expo wiring. A cycle that timed out (`runtime.ts`) makes no native call and saves nothing, and every save merges into what is on
+disk. The runtime persists `nativeKey`, `needsApp`, `degradedAt`,
 `reminderFor` and `lastKeptAt` in `sync-state`, because module state is lost with the process. Keep
 `mayShowUserSettingsDialog: false`.
 
@@ -96,6 +115,8 @@ and switches itself, except after a reboot/force-stop, which needs the app opene
 
 ## What to check on the phones
 
+0. After a reboot or a low-memory kill (task registry restored, no service): open the app. Fixes must flow again;
+   the status screen must never show "all good" with a silent notification bar.
 1. 0.1.0: open the app once: the notification appears and fixes flow every ~10 s in a window.
 2. 0.1.0 overnight: after the last window ends, the task stops (no foreground notification), battery stays flat, and
    the reminder shows 15 min before the first window. Tapping it and opening the app starts tracking.
