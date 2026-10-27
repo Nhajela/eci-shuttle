@@ -318,9 +318,17 @@ describe("reminderAction: one local notification 'Shuttle tracking: open the app
     expect(reminderAction({ ...base, mode: "killed", target: null, reminderFor: 5 })).toEqual({ action: "cancel" });
     expect(reminderAction({ ...base, target: null, reminderFor: 5 })).toEqual({ action: "cancel" });
   });
-  it("patched phones never need it", () => {
+  it("patched phones: no reminder for a stopped-overnight task (they never stop), cancel a leftover", () => {
     expect(reminderAction({ ...base, capability: P })).toEqual({ action: "none" });
     expect(reminderAction({ ...base, capability: P, reminderFor: 5 })).toEqual({ action: "cancel" });
+  });
+  it("patched phones whose task needs the app (restored after a kill, refused update): schedule it too", () => {
+    const p = { ...base, capability: P, mode: "idle" as const, taskWanted: true, needsApp: true };
+    expect(reminderAction(p)).toEqual(sched);
+    expect(reminderAction({ ...p, mode: "active" })).toEqual(sched);
+    expect(reminderAction({ ...p, reminderFor: target.for })).toEqual({ action: "none" });
+    expect(reminderAction({ ...p, hasPermission: false })).toEqual({ action: "none" });
+    expect(reminderAction({ ...p, needsApp: false, reminderFor: 5 })).toEqual({ action: "cancel" });
   });
 });
 

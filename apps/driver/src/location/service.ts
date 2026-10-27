@@ -58,6 +58,13 @@ const native: NativeLocation = {
  * process start, which is exactly when expo-task-manager may have restored a registry without a service.
  */
 let verified = false;
+/**
+ * Called by the runtime once it has SAVED the key of a registration made by syncLocationService. Not before: a
+ * late, cut-off call whose key was refused must not mark the task verified (the next wake would see a key mismatch).
+ */
+export function confirmRegistered() {
+  verified = true;
+}
 /** A new foreground session: register again even if the registry looks right. */
 export function forceReregister() {
   verified = false;
@@ -94,7 +101,7 @@ export async function syncLocationService(
   now: number,
   prev: NativeState,
   version: string | null = nativeVersion(),
-): Promise<NativeState> {
+): Promise<NativeState & { registered: boolean }> {
   const capability = capabilityFor(version, prev.degradedAt !== null && prev.degradedAt === version);
   const plan = locationPlan(r, cfg, now, capability);
   const applied = await applyLocationPlan(plan, {
@@ -104,7 +111,6 @@ export async function syncLocationService(
     capability,
     verified,
   });
-  if (applied.registered) verified = true;
   if (!plan.run) verified = false;
   // set on a refused update of our own task; cleared by the next successful foreground start; ignored on a new APK
   const degradedAt = applied.degraded
@@ -124,5 +130,11 @@ export async function syncLocationService(
     hasPermission: await hasNotificationPermission(),
   });
   const reminderFor = await runReminder(action, reminder, prev.reminderFor, cfg.clockOffsetMs ?? 0);
-  return { startedKey: applied.startedKey, needsApp: applied.needsApp, degradedAt, reminderFor };
+  return {
+    startedKey: applied.startedKey,
+    needsApp: applied.needsApp,
+    degradedAt,
+    reminderFor,
+    registered: applied.registered,
+  };
 }

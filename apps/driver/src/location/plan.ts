@@ -138,9 +138,9 @@ export type ReminderAction =
   | { action: "schedule"; at: number; for: number };
 
 /**
- * One pending local notification at a time (replaced, or cancelled once the task runs). Only the unpatched build
- * needs it: when the task is stopped for the night or can't be started from the background, nothing else will
- * bring the driver to the app. `reminderFor` = the window start it is pending for (persisted), null = none.
+ * One pending local notification at a time (replaced, or cancelled once the task runs).
+ * needs it when the task is stopped for the night, and any build needs it when the task can't be fixed from the
+ * background (`needsApp`): nothing else will bring the driver to the app. `reminderFor` = the window start it is pending for (persisted), null = none.
  */
 export function reminderAction(i: {
   capability: Capability;
@@ -153,8 +153,10 @@ export function reminderAction(i: {
   hasPermission: boolean;
 }): ReminderAction {
   const cancel: ReminderAction = i.reminderFor !== null ? { action: "cancel" } : { action: "none" };
-  const needed =
-    i.capability === "unpatched" && i.target !== null && ((i.mode === "idle" && !i.taskWanted) || i.needsApp);
+  // needsApp, any build: only the app can fix the task (e.g. a patched phone's task restored after a kill with the
+  // wrong options). The overnight stop is unpatched-only: patched phones never stop for idle.
+  const stoppedForTheNight = i.capability === "unpatched" && i.mode === "idle" && !i.taskWanted;
+  const needed = i.target !== null && (stoppedForTheNight || i.needsApp);
   if (!needed || !i.hasPermission || !i.target) return cancel;
   if (i.reminderFor === i.target.for) return { action: "none" };
   return { action: "schedule", at: i.target.at, for: i.target.for };
