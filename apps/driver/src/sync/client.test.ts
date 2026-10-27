@@ -99,6 +99,40 @@ describe("syncOnce", () => {
     expect(out).toMatchObject({ ok: false, error: "network" });
   });
 
+  it("times out a stalled response body instead of hanging (the timer covers the body read)", async () => {
+    // headers arrive, the body never does, and this fetch ignores the abort signal
+    const fetch = vi.fn(
+      async () => new Response(new ReadableStream({ start() {} }), { status: 200 }),
+    ) as unknown as typeof globalThis.fetch;
+    const out = await syncOnce(() => state(), telemetry, [ping], deps(fetch));
+    expect(out).toMatchObject({ ok: false, error: "network", sentPings: 0 });
+  });
+
+  it("a stalled body on the first origin still falls through to the next", async () => {
+    const fetch = vi.fn(async (url: string) =>
+      url.startsWith(ORIGIN) ? new Response(new ReadableStream({ start() {} })) : json(body({ apiOrigin: OLD })),
+    );
+    const out = await syncOnce(() => state({ fallbackOrigin: OLD }), telemetry, [], deps(fetch as never));
+    expect(out.ok).toBe(true);
+  });
+
+  it("on 429 does not try the next origin and returns Retry-After (seconds)", async () => {
+    const fetch = vi.fn(async () => new Response("slow down", { status: 429, headers: { "retry-after": "120" } }));
+    const out = await syncOnce(() => state({ fallbackOrigin: OLD }), telemetry, [ping], deps(fetch as never));
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(out).toMatchObject({ ok: false, error: "http_429", retryAfterMs: 120_000, sentPings: 0 });
+  });
+
+  it("reads a Retry-After HTTP date, caps it at 10 minutes, and ignores junk", async () => {
+    const run = async (h: string) => {
+      const fetch = vi.fn(async () => new Response("", { status: 429, headers: { "retry-after": h } }));
+      return syncOnce(() => state(), telemetry, [], deps(fetch as never));
+    };
+    expect(await run(new Date(T + 30_000).toUTCString())).toMatchObject({ retryAfterMs: 30_000 });
+    expect(await run("86400")).toMatchObject({ retryAfterMs: 600_000 });
+    expect(await run("soon")).toMatchObject({ error: "http_429", retryAfterMs: undefined });
+  });
+
   it("falls through to the fallback when the current origin answers wrong (404, HTML)", async () => {
     for (const bad of [json({}, 404), new Response("<html>parked</html>", { status: 200 })]) {
       const fetch = vi.fn(async (url: string) =>
