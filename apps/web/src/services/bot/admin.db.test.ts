@@ -5,7 +5,7 @@ import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@/db";
-import { memberships, workspaces } from "@/db/schema";
+import { devices, memberships, workspaces } from "@/db/schema";
 import type { Notice, Person, Workspace } from "@/db/types";
 import { detectProblems } from "@/services/alerts/watchdog";
 import { adminActor, resolveWorkspace } from "@/services/auth/actor";
@@ -520,6 +520,9 @@ describe("phone buttons", () => {
   it("a killed Telegram phone gets a Resume button after the kill; pressing it (admin only) calls resumePhone", async () => {
     const { ws, ctx } = await setup("admin");
     const tg = await makeDevice(db(), ws.id, { appVersion: "telegram" });
+    const ask = await onAdminCallback(ctx, cb("kill", tg.id), query("x"));
+    expect(ask.edit?.html).toContain("the shuttle team resumes it");
+    expect(ask.edit?.html).not.toContain("driver taps Resume");
     const ok = await onAdminCallback(ctx, cb("killok", tg.id), query("x"));
     expect(datas(ok.edit?.buttons)).toEqual([`resume:${tg.id}`]);
     expect(ok.edit?.html).toContain("Resume tracking");
@@ -529,11 +532,21 @@ describe("phone buttons", () => {
     expect(vi.mocked(resumePhone).mock.calls[0][2]).toEqual({ workspaceId: ws.id, deviceId: killedTg.id });
     expect(done.edit?.html).toContain("is resumed");
 
+    // a double tap: the service fake lifts the kill like the real one, the second press finds it lifted
+    const dbl = await makeDevice(db(), ws.id, { appVersion: "telegram", killedAt: new Date(+NOW - 60_000) });
+    vi.mocked(resumePhone).mockImplementationOnce(async (d) => {
+      await d.update(devices).set({ killedAt: null }).where(eq(devices.id, dbl.id));
+      return 1;
+    });
+    const both = await Promise.all([1, 2].map(() => onAdminCallback(ctx, cb("resume", dbl.id), query("x"))));
+    expect(resumePhone).toHaveBeenCalledTimes(2);
+    expect(both.map((r) => r.answerCallback?.text).sort()).toEqual(["Not killed.", "Resumed."]);
+
     const ops = await setup("ops");
     const opsTg = await makeDevice(db(), ops.ws.id, { appVersion: "telegram", killedAt: new Date(+NOW - 60_000) });
     const refused = await onAdminCallback(ops.ctx, cb("resume", opsTg.id), query("x"));
     expect(refused.answerCallback).toMatchObject({ text: "This needs the admin role.", showAlert: true });
-    expect(resumePhone).toHaveBeenCalledTimes(1);
+    expect(resumePhone).toHaveBeenCalledTimes(2);
   });
 
   it("Resume does nothing for an app phone (the driver does it) or a phone that isn't killed", async () => {

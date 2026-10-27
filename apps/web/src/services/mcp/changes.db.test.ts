@@ -8,6 +8,7 @@ import {
   auditLog,
   deviceAssignments,
   devices,
+  directives,
   notices,
   routes,
   serviceExceptions,
@@ -245,7 +246,7 @@ describe("describeChange", () => {
     expect(await d()).toBe("Lift the pause on phone 'Ravi's Redmi' (Bus 1) now: it tracks again in its shift");
     await db().update(devices).set({ appVersion: "telegram", killedAt: NOW }).where(eq(devices.id, phone.id));
     expect(await d()).toBe(
-      "Resume phone 'Ravi's Redmi' (Bus 1) after its kill: it has no app to resume itself, so tracking restarts at its next update",
+      "Resume phone 'Ravi's Redmi' (Bus 1) after its kill: it has no app to resume itself, so tracking restarts at its next update (an admin's confirm lifts the kill; ops lifts only its pauses)",
     );
   });
 
@@ -522,6 +523,31 @@ describe("applyChange", () => {
       .from(serviceExceptions)
       .where(and(eq(serviceExceptions.serviceId, s.service.id), eq(serviceExceptions.date, DAY)));
     expect(ex).toMatchObject({ kind: "cancel_departure", departure: "10:20" });
+  });
+
+  it("phone.resume confirmed by ops lifts the pause of a killed Telegram phone and leaves the kill; admin lifts both", async () => {
+    const until = new Date(Date.now() + 3_600_000); // resumePhone uses the real clock
+    const mk = async (role: "ops" | "admin") => {
+      const s = await setup(role);
+      await db().update(devices).set({ appVersion: "telegram", killedAt: NOW }).where(eq(devices.id, s.phone.id));
+      await db()
+        .insert(directives)
+        .values({ workspaceId: s.ws.id, deviceId: s.phone.id, kind: "silence_until", endsAt: until });
+      return s;
+    };
+    const resume = (s: Awaited<ReturnType<typeof setup>>) =>
+      applyChange(db(), s.actor, s.ws.id, { kind: "phone.resume", deviceId: s.phone.id }, NOW);
+    const killed = async (id: string) => (await db().select().from(devices).where(eq(devices.id, id)))[0].killedAt;
+
+    const ops = await mk("ops");
+    await resume(ops);
+    expect(await killed(ops.phone.id)).toBeInstanceOf(Date);
+    const [d] = await db().select().from(directives).where(eq(directives.deviceId, ops.phone.id));
+    expect(d.cancelledAt).toBeInstanceOf(Date);
+
+    const admin = await mk("admin");
+    await resume(admin);
+    expect(await killed(admin.phone.id)).toBeNull();
   });
 
   it("is refused by the service for a role that's too low", async () => {
