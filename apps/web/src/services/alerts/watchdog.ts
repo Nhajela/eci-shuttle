@@ -13,6 +13,7 @@ import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { desiredConfig } from "@/services/devices/config";
 import { isOutsideApp } from "@/services/devices/phones";
 import { refreshPhases } from "@/services/ingest/ingest";
+import { PARKED_MS } from "@/services/public/sight";
 import { adminButton, alertAdminChanges, raiseAlert } from "./alerts";
 import { LOW_BATTERY_PCT, SILENT_AFTER_MS } from "./thresholds";
 
@@ -37,7 +38,8 @@ export type Problem = {
 
 /**
  * Open problems of a workspace at `now` (no actor: callers check access):
- * silent (inside its tracking window, last ping > SILENT_AFTER_MS ago), off_route (vehicle_state.off_route),
+ * silent (inside its tracking window, last ping > SILENT_AFTER_MS ago; PARKED_MS for a Telegram live-location phone
+ * whose last fix was inside a stop), off_route (vehicle_state.off_route),
  * low_battery (< LOW_BATTERY_PCT and not charging, since devices.low_battery_since), permission_lost (location
  * not "always", or notifications off, since devices.permission_lost_since; both since `now` until the watchdog
  * stamps them), mode_mismatch (on its current config, reported mode ≠ what it was told at its last sync while that is
@@ -98,7 +100,10 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     const resting = v !== null && onBreak.has(v.id);
     if (v && !resting && !flagged.has(`silent:${v.id}`) && duty.mode === "active" && dutyStart) {
       const last = s?.lastPingAt && s.lastPingAt > dutyStart ? s.lastPingAt : dutyStart;
-      if (t - last.getTime() > SILENT_AFTER_MS) {
+      // Telegram live location sends nothing while the phone is stationary, so a shuttle parked at a stop is
+      // quiet by design: give it the parked limit (the same one the public page uses) instead of 5 min.
+      const parked = d.appVersion === "telegram" && (s?.phase === "at_spot" ? s.spotId : s?.geofence?.insideSpotId);
+      if (t - last.getTime() > (parked ? PARKED_MS : SILENT_AFTER_MS)) {
         add("silent", last, `${v.name} has been silent`, true);
         flagged.add(`silent:${v.id}`);
       }

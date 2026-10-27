@@ -386,6 +386,43 @@ describe("detectProblems", () => {
   });
 });
 
+describe("detectProblems: Telegram live-location phones parked at a stop", () => {
+  const inside = (spotId: string) => ({
+    insideSpotId: spotId,
+    enteredAt: ago(30).getTime(),
+    candidateSpotId: null,
+    candidateSince: null,
+    lastFixAt: ago(8).getTime(),
+  });
+  const silentFor = async (opts: { appVersion: string; min: number; geofence?: object | null; phase?: "offline" }) => {
+    const ws = await makeWorkspace(db());
+    const { device } = await makeAssignedDevice(db(), ws.id, {
+      device: { appVersion: opts.appVersion },
+      state: {
+        lastPingAt: ago(opts.min),
+        phase: opts.phase ?? "offline",
+        geofence: (opts.geofence ?? null) as never,
+      },
+    });
+    schedules.set(device.id, activeSince(60));
+    return (await detectProblems(db(), ws.id, NOW)).filter((p) => p.kind === "silent");
+  };
+  const spot = "11111111-1111-4111-8111-111111111111";
+
+  it("not silent until 15 min when its last fix was inside a stop (it sends nothing while stationary)", async () => {
+    expect(await silentFor({ appVersion: "telegram", min: 8, geofence: inside(spot) })).toEqual([]);
+    expect(await silentFor({ appVersion: "telegram", min: 14, geofence: inside(spot) })).toEqual([]);
+    expect(await silentFor({ appVersion: "telegram", min: 16, geofence: inside(spot) })).toHaveLength(1);
+  });
+
+  it("still silent after 5 min when the last fix was between stops, or for the Android app / Traccar", async () => {
+    expect(await silentFor({ appVersion: "telegram", min: 8 })).toHaveLength(1);
+    expect(await silentFor({ appVersion: "telegram", min: 8, geofence: inside(null as never) })).toHaveLength(1);
+    expect(await silentFor({ appVersion: "1.4.0", min: 8, geofence: inside(spot) })).toHaveLength(1);
+    expect(await silentFor({ appVersion: "traccar", min: 8, geofence: inside(spot) })).toHaveLength(1);
+  });
+});
+
 describe("runWatchdog", () => {
   it("refreshes phases, alerts each problem once per episode with buttons, and admin changes", async () => {
     const ws = await makeWorkspace(db());
