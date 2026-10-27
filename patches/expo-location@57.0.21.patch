@@ -82,10 +82,40 @@ index 0019485f58ba2a6f33ca227a40c37355adabf0c6..3cafb301b527424c4849848d20b9c609
        "expo.modules.location.foreground_service_icon"
    }
 diff --git a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
-index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..e766f75a25cb4715de6b7327a6c0df8a5ca539ec 100644
+index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..694d4c8c796d9297dd712761a7482fc827b5f371 100644
 --- a/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
 +++ b/android/src/main/java/expo/modules/location/taskConsumers/LocationTaskConsumer.kt
-@@ -178,10 +178,9 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+@@ -1,5 +1,6 @@
+ package expo.modules.location.taskConsumers
+ 
++import android.Manifest
+ import android.app.PendingIntent
+ import android.app.job.JobParameters
+ import android.app.job.JobService
+@@ -7,12 +8,14 @@ import android.content.ComponentName
+ import android.content.Context
+ import android.content.Intent
+ import android.content.ServiceConnection
++import android.content.pm.PackageManager
+ import android.location.Location
+ import android.os.Build
+ import android.os.Bundle
+ import android.os.IBinder
+ import android.os.PersistableBundle
+ import android.util.Log
++import androidx.core.app.ActivityCompat
+ import com.google.android.gms.location.FusedLocationProviderClient
+ import com.google.android.gms.location.LocationRequest
+ import com.google.android.gms.location.LocationResult
+@@ -37,6 +40,7 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+   private var mTask: TaskInterface? = null
+   private var mPendingIntent: PendingIntent? = null
+   private var mService: LocationTaskService? = null
++  private var mServiceConnection: ServiceConnection? = null
+   private var mLocationRequest: LocationRequest? = null
+   private var mLastReportedLocation: Location? = null
+   private var mDeferredDistance = 0.0
+@@ -178,10 +182,9 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
        return
      }
@@ -99,11 +129,27 @@ index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..e766f75a25cb4715de6b7327a6c0df8a
      val task = mTask ?: run {
        Log.w(TAG, "Location task is null")
        return
-@@ -211,7 +210,14 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
+@@ -211,28 +214,66 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
        extras.putString("taskName", task.name)
        extras.putBoolean("killService", serviceOptions.getBoolean("killServiceOnDestroy", false))
        serviceIntent.putExtras(extras)
 -      context.startForegroundService(serviceIntent)
+-      context.bindService(
+-        serviceIntent,
+-        object : ServiceConnection {
+-          override fun onServiceConnected(name: ComponentName, service: IBinder) {
+-            mService = (service as? ServiceBinder)?.service
+-            mService?.let {
+-              it.setParentContext(context)
++      // Patched: from the background Android 14+ throws SecurityException from startForeground() for a location-type
++      // service unless ACCESS_BACKGROUND_LOCATION is granted, and that cannot be recovered once the service was started
++      // with startForegroundService(). So don't start it at all (location updates keep running as before).
++      if (isBackgrounded && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
++        ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED
++      ) {
++        Log.w(TAG, "Foreground service not started from the background: background location permission is not granted")
++        return
++      }
 +      try {
 +        context.startForegroundService(serviceIntent)
 +      } catch (e: Exception) {
@@ -112,28 +158,43 @@ index b4f6c06ab28e48d377e7ae7e63f334792b2c9633..e766f75a25cb4715de6b7327a6c0df8a
 +        Log.w(TAG, "Foreground service could not be started" + (if (isBackgrounded) " from the background" else ""), e)
 +        return
 +      }
-       context.bindService(
-         serviceIntent,
-         object : ServiceConnection {
-@@ -219,7 +225,14 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
-             mService = (service as? ServiceBinder)?.service
-             mService?.let {
-               it.setParentContext(context)
--              it.startForeground(serviceOptions)
++      val connection = object : ServiceConnection {
++        override fun onServiceConnected(name: ComponentName, service: IBinder) {
++          mService = (service as? ServiceBinder)?.service
++          mService?.let {
++            it.setParentContext(context)
++            try {
+               it.startForeground(serviceOptions)
++            } catch (e: Exception) {
++              // Last resort only; the checks above are meant to prevent this. A refusal here cannot be fully recovered:
++              // the service was started with startForegroundService(), so Android may still crash the app for not
++              // entering the foreground in time. We just drop the connection so a later attempt doesn't bind twice.
++              Log.w(TAG, "Could not enter the foreground", e)
++              mService = null
++              mServiceConnection = null
 +              try {
-+                it.startForeground(serviceOptions)
-+              } catch (e: Exception) {
-+                // Refused (e.g. started from the background without an exemption): don't leave a half-started service.
-+                Log.w(TAG, "Could not enter the foreground", e)
-+                it.stop()
-+                mService = null
++                context.unbindService(this)
++              } catch (unbindError: Exception) {
++                Log.w(TAG, "Could not unbind the location service", unbindError)
 +              }
              }
            }
++        }
  
-@@ -231,8 +244,18 @@ class LocationTaskConsumer(context: Context, taskManagerUtils: TaskManagerUtilsI
-         Context.BIND_AUTO_CREATE
-       )
+-          override fun onServiceDisconnected(name: ComponentName) {
+-            mService?.stop()
+-            mService = null
+-          }
+-        },
+-        Context.BIND_AUTO_CREATE
+-      )
++        override fun onServiceDisconnected(name: ComponentName) {
++          mService?.stop()
++          mService = null
++        }
++      }
++      mServiceConnection = connection
++      context.bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
      } else {
 -      // Restart the service with new service options.
 -      mService?.startForeground(options.getArguments(FOREGROUND_SERVICE_KEY).toBundle())
