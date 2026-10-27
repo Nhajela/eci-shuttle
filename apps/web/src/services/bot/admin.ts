@@ -512,15 +512,22 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
       if (dev.killedAt) return toast(q, "Already killed.");
       return editTo(
         q,
-        `<b>Kill ${esc(dev.label)}?</b>\nIt stops sharing location until the driver taps Resume in the app.`,
+        `<b>Kill ${esc(dev.label)}?</b>\nIt stops sharing location until ${
+          outside ? "the shuttle team resumes it (it has no app)" : "the driver taps Resume in the app"
+        }.`,
         [[btn("Yes, kill", "killok", dev.id), btn("Cancel", "noop")]],
       );
     case "resume":
       requireRole(actor, dev.workspaceId, "admin");
       if (!dev.killedAt) return toast(q, "Not killed.");
       if (!outside) return toast(q, "Only the driver can resume this phone, with Resume in the app.");
-      await resumePhone(ctx.db, actor, input);
-      return editTo(q, `${esc(dev.label)} is resumed. It tracks again from its next update.`, [], "Resumed.");
+      // a repeat press (double tap, Telegram retry) waits for the first and finds the phone no longer killed
+      return locked(ctx, `resume:${dev.id}`, async (db) => {
+        const [cur] = await db.select({ killedAt: devices.killedAt }).from(devices).where(eq(devices.id, dev.id));
+        if (!cur?.killedAt) return toast(q, "Not killed.");
+        await resumePhone(db, actor, input);
+        return editTo(q, `${esc(dev.label)} is resumed. It tracks again from its next update.`, [], "Resumed.");
+      });
     default: // killok
       if (dev.killedAt) return editTo(q, killed, killedButtons, "Already killed.");
       await killPhone(ctx.db, actor, input);

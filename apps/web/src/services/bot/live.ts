@@ -4,11 +4,12 @@
  * (message.location with live_period, then edited_message.location) becomes one ping through the normal
  * devices/sync path, like the Traccar adapter (app/api/device/traccar).
  */
-import type { Ping, SyncRequest } from "@eci-shuttle/shared";
+import { type Ping, resolveMode, type SyncRequest } from "@eci-shuttle/shared";
 import { and, eq, isNull, max, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { auditLog, deviceAssignments, devices, vehicles } from "@/db/schema";
 import { escapeHtml } from "@/lib/telegram/html";
+import { desiredConfig } from "../devices/config";
 import { pairDevice } from "../devices/pairing";
 import { syncDevice } from "../devices/sync";
 import { type Actor, mutate } from "../kernel";
@@ -116,7 +117,7 @@ export function isLiveStop(msg: TgMessage): boolean {
  * A message or edited_message from anyone. Not a paired sender, or no location → nothing. A static location →
  * a hint to share it live. A live one → syncDevice as an always-on, up-to-date phone (it can't take our config).
  * The first live message gets a confirmation; updates get no reply, except once each (tellOnce) when the phone is
- * killed, revoked or on no vehicle (nothing is tracked), or when sharing has stopped (how to restart). The final
+ * killed, revoked or on no vehicle (nothing is tracked), or when sharing stopped during a tracking window (how to restart). The final
  * stop edit is still synced: it is the last real position, and sync drops it for a killed/revoked phone.
  */
 export async function onLocation(db: Db, msg: TgMessage, now: Date): Promise<BotReply> {
@@ -150,7 +151,6 @@ export async function onLocation(db: Db, msg: TgMessage, now: Date): Promise<Bot
   await syncDevice(db, actor, input, now);
 
   const share = `${msg.chat.id}:${msg.message_id}`; // one live share = one message; its edits share the key
-  if (isLiveStop(msg)) return tellOnce(db, actor, msg.chat.id, `ended:${share}`, STOPPED);
   const [open] = await db
     .select({ id: deviceAssignments.id })
     .from(deviceAssignments)
@@ -165,6 +165,13 @@ export async function onLocation(db: Db, msg: TgMessage, now: Date): Promise<Bot
       .from(deviceAssignments)
       .where(eq(deviceAssignments.deviceId, d.id));
     return tellOnce(db, actor, msg.chat.id, `unassigned:${last ? +last : "never"}:${share}`, UNASSIGNED);
+  }
+  if (isLiveStop(msg)) {
+    // ending a share off shift is normal (end of the day): only prompt a restart while the server wants fixes
+    const config = await desiredConfig(db, d.id, now);
+    return resolveMode(config, now.getTime()).mode === "active"
+      ? tellOnce(db, actor, msg.chat.id, `ended:${share}`, STOPPED)
+      : NONE;
   }
   return msg.edit_date ? NONE : say(msg.chat.id, "Got your live location 📍 Keep sharing while you drive.");
 }

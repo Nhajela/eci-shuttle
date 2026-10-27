@@ -2,7 +2,7 @@ import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { auditLog, deviceAssignments, devices, vehicles } from "@/db/schema";
+import { auditLog, deviceAssignments, devices, directives, vehicles } from "@/db/schema";
 import type { Person } from "@/db/types";
 import { createPairingCode } from "../devices/pairing";
 import { syncDevice } from "../devices/sync";
@@ -85,7 +85,14 @@ describe("onPair (/pair 123456)", () => {
 
 const assign = async (d: { id: string; workspaceId: string }) => {
   const [v] = await db().insert(vehicles).values({ workspaceId: d.workspaceId, name: "Bus 1" }).returning();
-  await db().insert(deviceAssignments).values({ workspaceId: d.workspaceId, deviceId: d.id, vehicleId: v.id });
+  await db()
+    .insert(deviceAssignments)
+    .values({
+      workspaceId: d.workspaceId,
+      deviceId: d.id,
+      vehicleId: v.id,
+      startsAt: new Date(NOW.getTime() - 86_400_000), // already running at the test's NOW (desiredConfig reads it)
+    });
   return v;
 };
 const unassign = (deviceId: string, at: Date) =>
@@ -253,7 +260,8 @@ describe("onLocation: tells the driver once why nothing is tracked", () => {
 });
 
 describe("onLocation: sharing ended", () => {
-  const setup = async () => {
+  /** assigned, and inside a tracking window now unless `onShift` is false (the windows come from desiredConfig) */
+  const setup = async (onShift = true) => {
     const person = await makePerson(db());
     const ws = await makeWorkspace(db());
     await onPair(await ctxFor(person), await codeIn(ws.id));
@@ -262,28 +270,67 @@ describe("onLocation: sharing ended", () => {
       .from(devices)
       .where(eq(devices.tokenHash, `telegram:${person.telegramId}`));
     await assign(device);
+    if (onShift)
+      await db()
+        .insert(directives)
+        .values({
+          workspaceId: ws.id,
+          deviceId: device.id,
+          kind: "force_active",
+          startsAt: new Date(NOW.getTime() - 3_600_000),
+          endsAt: new Date(NOW.getTime() + 3_600_000),
+        });
     return { person, device };
   };
+  const expired = (person: Person, id = 5) =>
+    locMsg(person.telegramId, { message_id: id, date: SEC - 28800, edit_date: SEC }, { live_period: 28800 });
+  const dropped = (person: Person, id = 5) =>
+    locMsg(person.telegramId, { message_id: id, edit_date: SEC - 1 }, { live_period: undefined });
 
-  it("an edit that reaches date + live_period is the end: how to restart, once, ping still kept", async () => {
+  it("on shift, an edit that reaches date + live_period is the end: how to restart, once, ping still kept", async () => {
     const { person, device } = await setup();
-    const msg = locMsg(person.telegramId, { date: SEC - 28800, edit_date: SEC }, { live_period: 28800 });
-    const reply = await onLocation(db(), msg, NOW);
+    const reply = await onLocation(db(), expired(person), NOW);
     expect(html(reply)).toMatch(/stopped/);
     expect(html(reply)).toMatch(/Share My Live Location/);
     expect(vi.mocked(syncDevice).mock.calls[0][2].pings[0]).toMatchObject({ recordedAt: SEC * 1000, lat: 15.67 });
-    expect((await onLocation(db(), msg, NOW)).send).toEqual([]);
+    expect((await onLocation(db(), expired(person), NOW)).send).toEqual([]);
     expect(await notices(device.id)).toHaveLength(1);
   });
 
-  it("an edit whose location lost live_period is the end too; a new share message can end again", async () => {
+  it("on shift, an edit whose location lost live_period is the end too; a new share message can end again", async () => {
     const { person } = await setup();
-    const stop = (id: number) =>
-      locMsg(person.telegramId, { message_id: id, edit_date: SEC - 1 }, { live_period: undefined });
-    expect(html(await onLocation(db(), stop(5), NOW))).toMatch(/Share My Live Location/);
-    expect((await onLocation(db(), stop(5), NOW)).send).toEqual([]);
-    expect(html(await onLocation(db(), stop(6), NOW))).toMatch(/Share My Live Location/);
+    expect(html(await onLocation(db(), dropped(person, 5), NOW))).toMatch(/Share My Live Location/);
+    expect((await onLocation(db(), dropped(person, 5), NOW)).send).toEqual([]);
+    expect(html(await onLocation(db(), dropped(person, 6), NOW))).toMatch(/Share My Live Location/);
     expect(vi.mocked(syncDevice)).toHaveBeenCalledTimes(3);
+  });
+
+  it("off shift (no tracking window now), ending the share is normal: no restart prompt, ping still synced", async () => {
+    const { person, device } = await setup(false);
+    expect((await onLocation(db(), expired(person), NOW)).send).toEqual([]);
+    expect((await onLocation(db(), dropped(person), NOW)).send).toEqual([]);
+    expect(syncDevice).toHaveBeenCalledTimes(2);
+    expect(await notices(device.id)).toHaveLength(0);
+  });
+
+  it("a killed phone's stop edit says paused, not 'start again'", async () => {
+    const { person, device } = await setup();
+    await db()
+      .update(devices)
+      .set({ killedAt: new Date(NOW.getTime() - 60_000) })
+      .where(eq(devices.id, device.id));
+    const reply = await onLocation(db(), dropped(person), NOW);
+    expect(html(reply)).toBe("The shuttle team has paused your tracking.");
+    expect((await onLocation(db(), dropped(person), NOW)).send).toEqual([]);
+  });
+
+  it("a revoked or unassigned phone's stop edit gets that notice, not the restart prompt", async () => {
+    const a = await setup();
+    await unassign(a.device.id, new Date(NOW.getTime() - 1000));
+    expect(html(await onLocation(db(), dropped(a.person), NOW))).toMatch(/isn't on a shuttle yet/);
+    const b = await setup();
+    await db().update(devices).set({ revokedAt: NOW }).where(eq(devices.id, b.device.id));
+    expect(html(await onLocation(db(), dropped(b.person), NOW))).toMatch(/removed from the shuttle/);
   });
 
   it("an ordinary update (inside its period, live_period kept) says nothing", async () => {

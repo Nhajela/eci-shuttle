@@ -349,7 +349,7 @@ export async function describeChange(db: Db, workspaceId: string, change: McpCha
       const [dev] = await db.select().from(devices).where(eq(devices.id, c.deviceId));
       // a killed Telegram/Traccar phone can't press Resume: this is how it gets back (admin only, checked on apply)
       if (dev?.killedAt && isOutsideApp(dev))
-        return `Resume ${p.full} after its kill: it has no app to resume itself, so tracking restarts at its next update`;
+        return `Resume ${p.full} after its kill: it has no app to resume itself, so tracking restarts at its next update (an admin's confirm lifts the kill; ops lifts only its pauses)`;
       return `Lift the pause on ${p.full} now: it tracks again in its shift`;
     }
     case "phone.force_active":

@@ -135,7 +135,9 @@ export function PhoneCard({
               <dd>
                 {istWhen(d.killedAt, now)} ·{" "}
                 {outsideApp
-                  ? "this phone has no app, so use Resume tracking below"
+                  ? isAdmin
+                    ? "this phone has no app, so use Resume tracking below"
+                    : "this phone has no app, so an admin resumes it here"
                   : "only the driver's Resume clears it"}
               </dd>
             </>

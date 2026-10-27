@@ -309,14 +309,33 @@ describe("directives", () => {
       expect((await device(phone.id)).killedAt).toBeNull();
     });
 
-    it("ops may not lift a kill (kill is admin only), and nothing changes", async () => {
+    it("ops lifts only the silences of a killed Telegram phone: the kill stays, no error, one audit row", async () => {
       const { ws, actor, phone } = await setup("admin", { appVersion: "telegram" });
-      await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
       const { actor: ops } = await makeAdmin(db(), ws.id, "ops");
-      await expect(resumePhone(db(), ops, { workspaceId: ws.id, deviceId: phone.id })).rejects.toMatchObject({
-        code: "FORBIDDEN",
-      });
+      await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+      await killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id });
+      expect(await resumePhone(db(), ops, { workspaceId: ws.id, deviceId: phone.id })).toBe(1);
       expect((await device(phone.id)).killedAt).toBeInstanceOf(Date);
+      const [row] = await resumed(phone.id);
+      expect(row.after).not.toHaveProperty("killedAt");
+      expect((await killAlerts(ws.id)).filter((h) => h.includes("resumed"))).toHaveLength(0);
+      // nothing but the kill left: ops has nothing to do, and that is not an error
+      expect(await resumePhone(db(), ops, { workspaceId: ws.id, deviceId: phone.id })).toBe(0);
+      expect(await resumed(phone.id)).toHaveLength(1);
+      expect((await device(phone.id)).killedAt).toBeInstanceOf(Date);
+    });
+
+    it("an admin's kill that lands while ops lifts a pause is never cleared by ops", async () => {
+      for (let i = 0; i < 5; i++) {
+        const { ws, actor, phone } = await setup("admin", { appVersion: "telegram" });
+        const { actor: ops } = await makeAdmin(db(), ws.id, "ops");
+        await silencePhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id, until: later() });
+        await Promise.all([
+          resumePhone(db(), ops, { workspaceId: ws.id, deviceId: phone.id }),
+          killPhone(db(), actor, { workspaceId: ws.id, deviceId: phone.id }),
+        ]);
+        expect((await device(phone.id)).killedAt).toBeInstanceOf(Date);
+      }
     });
 
     it.each([null, "1.4.0"])(
