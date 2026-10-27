@@ -233,9 +233,10 @@ describe("request timeout", () => {
     const spy = vi.spyOn(AbortSignal, "timeout");
     const t = fakeTelegram();
     const seen: unknown[] = [];
-    const f = ((u: RequestInfo | URL, init?: RequestInit) => (
-      seen.push(init?.signal), t.fetchImpl(u, init)
-    )) as typeof fetch;
+    const f = (async (u: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(init?.signal);
+      return t.fetchImpl(u, init);
+    }) as typeof fetch;
     await callTelegram("getMe", {}, f);
     expect(spy).toHaveBeenCalledWith(10_000);
     expect(seen[0]).toBeInstanceOf(AbortSignal);
