@@ -71,6 +71,13 @@
       "when": 1792127423227,
       "tag": "0009_subscription_every_min",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793169583705,
+      "tag": "0010_no_signal_legs",
+      "breakpoints": true
     }
   ]
 }

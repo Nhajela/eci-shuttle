@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { createRoute, updateRoute } from "@/services/catalog/routes";
 import { type Actor, isServiceError, userMessage } from "@/services/kernel";
+import { setLegNoSignal } from "@/services/signal/dead-zones";
 
 export type ActionState = { ok: boolean; message: string } | null;
 
@@ -15,19 +16,21 @@ const num = (fd: FormData, k: string) => (fd.has(k) ? Number(fd.get(k)) : undefi
 
 async function run(
   fd: FormData,
-  done: string,
+  done: string | ((result: unknown) => string),
   fn: (actor: Actor, workspaceId: string) => Promise<unknown>,
+  minRole: "ops" | "admin" = "ops",
 ): Promise<ActionState> {
+  let result: unknown;
   try {
-    const { actor, workspace } = await requireAdmin({ w: str(fd, "w") || null, minRole: "ops" });
-    await fn(actor, workspace.id);
+    const { actor, workspace } = await requireAdmin({ w: str(fd, "w") || null, minRole });
+    result = await fn(actor, workspace.id);
   } catch (e) {
     unstable_rethrow(e); // requireAdmin's redirects
     if (!isServiceError(e)) console.error("admin-routes action failed", e);
     return { ok: false, message: userMessage(e) };
   }
   revalidatePath("/admin/routes");
-  return { ok: true, message: done };
+  return { ok: true, message: typeof done === "function" ? done(result) : done };
 }
 
 export async function createRouteAction(_: ActionState, fd: FormData): Promise<ActionState> {
@@ -36,9 +39,17 @@ export async function createRouteAction(_: ActionState, fd: FormData): Promise<A
   );
 }
 
+/** "Route saved.", plus how many hand-made "no signal" marks the new stops could not keep. */
+const savedMessage = (r: unknown) => {
+  const n = (r as { droppedNoSignalLegs?: number } | null)?.droppedNoSignalLegs ?? 0;
+  return n
+    ? `Route saved. ${n} "no signal" ${n === 1 ? "mark was" : "marks were"} removed because ${n === 1 ? "that stretch is" : "those stretches are"} no longer on the route. Check the legs below.`
+    : "Route saved.";
+};
+
 export async function updateRouteAction(_: ActionState, fd: FormData): Promise<ActionState> {
   const waits = parseWaits(fd);
-  return run(fd, "Route saved.", (actor, workspaceId) =>
+  return run(fd, savedMessage, (actor, workspaceId) =>
     updateRoute(db(), actor, {
       workspaceId,
       routeId: str(fd, "routeId"),
@@ -67,5 +78,23 @@ export async function regeneratePathAction(_: ActionState, fd: FormData): Promis
       version: num(fd, "version"),
       regeneratePath: true,
     }),
+  );
+}
+
+/** Admin only: mark (noSignal=1) or unmark (noSignal=0) a whole leg as "no signal on this stretch". */
+export async function setLegNoSignalAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const noSignal = str(fd, "noSignal") === "1";
+  return run(
+    fd,
+    noSignal ? "Marked as no signal." : "Signal restored.",
+    (actor, workspaceId) =>
+      setLegNoSignal(db(), actor, {
+        workspaceId,
+        routeId: str(fd, "routeId"),
+        version: num(fd, "version"),
+        legIndex: Number(fd.get("legIndex")),
+        noSignal,
+      }),
+    "admin",
   );
 }

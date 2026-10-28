@@ -2,17 +2,29 @@
 /** A one-line picture of the loop: the stops on a line, the live vans gliding between them. Pure CSS, no map needed. */
 import { cn } from "cn";
 import type { PublicMap } from "@/services/public/positions";
+import { isEstimated, type MapVehicle } from "./map/estimate";
 
 export type StripLayout = {
   stops: { id: string; name: string; x: number }[];
-  vans: { id: string; name: string; x: number; dir: 1 | -1; onBreak: boolean; atSpot: string | null }[];
+  vans: {
+    id: string;
+    name: string;
+    x: number;
+    dir: 1 | -1;
+    onBreak: boolean;
+    atSpot: string | null;
+    estimated: boolean;
+  }[];
 };
 
 /**
  * The route serving `spotId` (first one), its distinct stops spread 0..1 in route order, and each van on it at
  * its place along the strip. A van whose place is unknown is left out rather than drawn somewhere wrong.
  */
-export function stripLayout(map: Pick<PublicMap, "spots" | "routes" | "vehicles">, spotId: string): StripLayout | null {
+export function stripLayout(
+  map: Pick<PublicMap, "spots" | "routes"> & { vehicles: MapVehicle[] },
+  spotId: string,
+): StripLayout | null {
   const route = map.routes.find((r) => r.spotIds.includes(spotId));
   if (!route) return null;
   const ids = [...new Set(route.spotIds)];
@@ -34,6 +46,7 @@ export function stripLayout(map: Pick<PublicMap, "spots" | "routes" | "vehicles"
         dir: 1,
         onBreak: v.onBreak,
         atSpot: spotById.get(v.atSpotId)?.shortName ?? null,
+        estimated: isEstimated(v),
       });
       continue;
     }
@@ -48,6 +61,7 @@ export function stripLayout(map: Pick<PublicMap, "spots" | "routes" | "vehicles"
       dir: to >= from ? 1 : -1,
       onBreak: v.onBreak,
       atSpot: null,
+      estimated: isEstimated(v),
     });
   }
   return { stops, vans };
@@ -72,11 +86,19 @@ export function VanStrip({ layout, className }: { layout: StripLayout; className
       {layout.vans.map((v) => (
         <div
           key={v.id}
-          className="absolute top-1 flex -translate-x-1/2 flex-col items-center transition-[left] duration-[4000ms] ease-linear motion-reduce:transition-none"
+          className={cn(
+            "absolute top-1 flex -translate-x-1/2 flex-col items-center transition-[left] duration-[4000ms] ease-linear motion-reduce:transition-none",
+            // an estimate (no signal): see-through with a dashed ring, so it is not colour alone
+            v.estimated && "opacity-50",
+          )}
           style={{ left: `calc(12px + (100% - 24px) * ${v.x})` }}
         >
           <span
-            className={cn("text-2xl leading-none drop-shadow-sm", !v.atSpot && "van-bob")}
+            className={cn(
+              "text-2xl leading-none drop-shadow-sm",
+              !v.atSpot && "van-bob",
+              v.estimated && "rounded-full border border-dashed border-ink px-0.5",
+            )}
             style={{ transform: v.dir === 1 ? "scaleX(-1)" : undefined }}
           >
             🚐

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PublicMap, PublicVehicle } from "@/services/public/positions";
+import type { MapVehicle } from "./map/estimate";
 import { stripLayout } from "./van-strip";
 
 const riva = { id: "riva", name: "Riva Beach Resort", shortName: "Riva", lat: 15.6553, lng: 73.7152 };
@@ -15,7 +16,7 @@ const loop: PublicMap["routes"][number] = {
   lengthM: 2000,
   legS: [],
 };
-const van = (over: Partial<PublicVehicle>): PublicVehicle => ({
+const van = (over: Partial<MapVehicle>): PublicVehicle => ({
   id: "v",
   name: "Shuttle 1",
   colour: null,
@@ -53,7 +54,9 @@ describe("stripLayout: the little van between the stops", () => {
 
   it("puts a van a quarter of the way out on the way to Circle, and three quarters back on the return leg", () => {
     const out = stripLayout({ spots: [riva, circle], routes: [loop], vehicles: [van({})] }, "riva");
-    expect(out?.vans).toEqual([{ id: "v", name: "Shuttle 1", x: 0.25, dir: 1, onBreak: false, atSpot: null }]);
+    expect(out?.vans).toEqual([
+      { id: "v", name: "Shuttle 1", x: 0.25, dir: 1, onBreak: false, atSpot: null, estimated: false },
+    ]);
     const back = stripLayout(
       {
         spots: [riva, circle],
@@ -81,5 +84,28 @@ describe("stripLayout: the little van between the stops", () => {
     const other = van({ routeId: "other" });
     const lost = van({ legIndex: null, legFraction: null, atSpotId: null });
     expect(stripLayout({ spots: [riva, circle], routes: [loop], vehicles: [other, lost] }, "riva")?.vans).toEqual([]);
+  });
+});
+
+describe("stripLayout estimates", () => {
+  it("flags a van whose place is an estimate", () => {
+    const map = {
+      spots: [riva, circle],
+      routes: [loop],
+      vehicles: [
+        van({
+          id: "a",
+          legIndex: 0,
+          legFraction: 0.5,
+          estimate: { reason: "no_signal", lastSeenAt: "2026-10-28T05:00:00.000Z" },
+        }),
+        van({ id: "b", legIndex: 0, legFraction: 0.2 }),
+      ],
+    };
+    const l = stripLayout(map, "riva");
+    expect(l?.vans.map((x) => [x.id, x.estimated])).toEqual([
+      ["a", true],
+      ["b", false],
+    ]);
   });
 });

@@ -3,6 +3,7 @@
  * unchanged. Never lateness: no "late", "delay", "behind" (SPEC §6a.2).
  */
 import type { AnswerLine } from "@eci-shuttle/shared";
+import { isPredictedLine } from "@/services/public/sight";
 
 export type Mood = { emoji: string; text: string };
 
@@ -33,7 +34,10 @@ export function dayPart(hour: number): DayPart {
  */
 export function mood(line: AnswerLine, ageS: number, hour: number): Mood {
   const part = dayPart(hour);
-  const stale = line.kind === "live" && line.lastSeenS !== null && line.lastSeenS + ageS > STALE_S;
+  const stale =
+    line.kind === "live" && !isPredictedLine(line) && line.lastSeenS !== null && line.lastSeenS + ageS > STALE_S;
+  if (isPredictedLine(line))
+    return { emoji: "📡", text: "No phone signal on this stretch, so this is our best guess. It's on its way." };
   if (line.kind === "live" && !stale) {
     if (line.minutes === null) return { emoji: "🛣️", text: "Taking the scenic route. It's out there." };
     if (line.minutes === 0) return { emoji: "🚐", text: "Shuttle's here! Hop on." };

@@ -4,6 +4,7 @@ import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { auditLog, outbox, subscriptions } from "@/db/schema";
+import { predictedPhase } from "../public/sight";
 import { spotAnswer } from "../public/status";
 import {
   ARRIVAL_ALERT_MAX_MS,
@@ -152,6 +153,19 @@ describe("runArrivalAlerts", () => {
     expect(html).toContain("about <b>4 min</b>");
     expect(html).toContain("Riva");
     expect(html).not.toMatch(/late|behind/i);
+  });
+
+  it("never fires on an estimate through a no-signal stretch (a guess is not 'time to wander over')", async () => {
+    const { ws, riva, actor } = await setup();
+    const sub = await subscribeArrival(db(), actor, { workspaceId: ws.id, spotId: riva.id }, NOW);
+    answer.mockResolvedValue([line({ minutes: 1, approx: true, phaseText: predictedPhase("Riva") })]);
+    expect(await runArrivalAlerts(db(), { workspaceId: ws.id }, later(60_000))).toEqual({ fired: 0, expired: 0 });
+    expect(await jobsFor(ws.id)).toHaveLength(0);
+    // still armed: the first real fix within the lead time fires it
+    answer.mockResolvedValue([line({ minutes: 3, approx: true })]);
+    expect(await runArrivalAlerts(db(), { workspaceId: ws.id }, later(120_000))).toEqual({ fired: 1, expired: 0 });
+    const [row] = await db().select().from(subscriptions).where(eq(subscriptions.id, sub.id));
+    expect(row.firedAt).toEqual(later(120_000));
   });
 
   it("only counts the subscribed service's line when set", async () => {

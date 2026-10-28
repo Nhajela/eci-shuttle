@@ -7,13 +7,17 @@
  * the text does. "parked" (last seen inside a stop 5-15 min ago, "may still be there") is a guess, not a position,
  * so it is deliberately not drawn; neither are lost or hidden vehicles, off duty, between shifts or retired ones
  * (a driver going home must not be on the map). No lateness anywhere.
+ * Exception, still only for those same on-shift vehicles: a vehicle that went silent in a leg known to have no
+ * mobile signal (sight "predicted") is drawn at its estimated place on the route, with `estimate` set, until the
+ * prediction expires (sight.ts); the client shows it faded with "No signal · estimated". A guess on a break is not drawn.
  */
-import { istDate, type LatLng, pathLengthM } from "@eci-shuttle/shared";
+import { istDate, istHHMM, type LatLng, pathLengthM } from "@eci-shuttle/shared";
 import { legOf } from "@eci-shuttle/shared/geo/legOf";
 import { and, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import {
+  legStats,
   routes,
   serviceExceptions,
   services,
@@ -25,9 +29,12 @@ import {
 } from "@/db/schema";
 import { activeBreaks } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
+import { loadDeadZones } from "../signal/dead-zones";
+import { predictLegS, routeLegs } from "./leg-estimate";
 import { headingAlongPath, legFraction } from "./map-geo";
+import { pointAtAlong, predictRoute } from "./predict";
 import { addDays, serviceDaysInPlay } from "./service-days";
-import { sight } from "./sight";
+import { type PredictRoute, sight } from "./sight";
 
 const Id = z.uuid();
 const LatLngZ = z.object({ lat: z.number(), lng: z.number() });
@@ -75,6 +82,11 @@ export const PublicVehicle = z.object({
   headingDeg: z.number().min(0).max(360).nullable(),
   /** metres along its route's path (the map glides it along the road); null when off the route */
   alongM: z.number().nonnegative().nullable(),
+  /**
+   * Set when this is a guess, not a fix: the vehicle is in a stretch with no mobile signal and (lat, lng, alongM,
+   * legFraction) are estimated from its last fix. The client draws it faded, "No signal · estimated".
+   */
+  estimate: z.object({ reason: z.literal("no_signal"), lastSeenAt: z.iso.datetime() }).optional(),
   /** when it got to its stop / left its last one (ISO): the page shows a waiting shuttle's next departure from it */
   since: z.iso.datetime(),
   lastSeenS: z.number().int().nonnegative(),
@@ -162,6 +174,16 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
     legS: r.spotIds.slice(1).map((_, i) => r.typicalLegS[i] ?? 0),
   }));
 
+  const zones = await loadDeadZones(db, workspaceId);
+  const stats = zones.length ? await db.select().from(legStats).where(eq(legStats.workspaceId, workspaceId)) : [];
+  const hour = Number(istHHMM(nowMs).slice(0, 2));
+  const predictBy = new Map<string, PredictRoute>();
+  for (const r of routeRows) {
+    const svc = svcs.find((x) => x.routeId === r.id);
+    // the same leg times as the answer's ETA, so the van and the minutes agree and expire together
+    const p = predictRoute(r, zones, svc ? predictLegS(routeLegs(stats, svc, r, hour)) : []);
+    if (p) predictBy.set(r.id, p);
+  }
   const onBreak = await activeBreaks(db, workspaceId, now);
   const rows = await db
     .select({ serviceId: serviceVehicles.serviceId, vehicle: vehicles, state: vehicleState })
@@ -185,7 +207,36 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
   for (const r of rows) {
     if (r.state.serviceId !== r.serviceId) continue;
     // live per sight(): a fix ≤ 5 min old; an "offline" state is rebuilt to the stop or leg it had at its last ping
-    const seen = sight(r.state, nowMs);
+    const routeId = svcById.get(r.serviceId)?.routeId ?? "";
+    const seen = sight(r.state, nowMs, predictBy.get(routeId));
+    if (seen.kind === "predicted") {
+      const route = routeById.get(routeId);
+      const e = seen.estimate;
+      const at = route && pointAtAlong(route.path, e.alongM);
+      if (!route || !at || onBreak.has(r.vehicle.id) || out.some((v) => v.id === r.vehicle.id)) continue;
+      const lastAt = seen.last.at;
+      out.push({
+        id: r.vehicle.id,
+        name: r.vehicle.name,
+        colour: r.vehicle.colour,
+        lat: at.lat,
+        lng: at.lng,
+        phase: "en_route",
+        onBreak: false,
+        routeId: route.id,
+        atSpotId: null,
+        nextSpotId: e.toSpotId,
+        nextSpotName: spotById.get(e.toSpotId)?.shortName ?? null,
+        legIndex: e.legIndex,
+        legFraction: legFraction(route, e.legIndex, e.alongM),
+        headingDeg: headingAlongPath(route.path, e.alongM),
+        alongM: e.alongM,
+        estimate: { reason: "no_signal", lastSeenAt: new Date(lastAt).toISOString() },
+        since: new Date(seen.state.since.getTime() > 0 ? seen.state.since.getTime() : lastAt).toISOString(),
+        lastSeenS: Math.max(0, Math.round(seen.ageMs / 1000)),
+      });
+      continue;
+    }
     if (seen.kind !== "live") continue;
     const s = seen.state;
     if (s.phase !== "at_spot" && s.phase !== "en_route") continue;

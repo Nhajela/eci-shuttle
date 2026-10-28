@@ -4,13 +4,13 @@
  * (resume.watchResume). Null until the first answer; keeps the last good one; an older answer never replaces a newer.
  */
 import { useEffect, useState } from "react";
-import type { PublicMap } from "@/services/public/positions";
 import { browserTargets, latestOnly, watchResume } from "../resume";
+import type { ClientMap } from "./estimate";
 
 const POLL_MS = 10_000;
 
-export function usePositions(slug: string | null, enabled = true): PublicMap | null {
-  const [data, setData] = useState<PublicMap | null>(null);
+export function usePositions(slug: string | null, enabled = true): ClientMap | null {
+  const [data, setData] = useState<ClientMap | null>(null);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
@@ -23,7 +23,7 @@ export function usePositions(slug: string | null, enabled = true): PublicMap | n
           async () => {
             const res = await fetch(url, { cache: "no-store" });
             if (!res.ok) throw new Error(String(res.status));
-            return (await res.json()) as PublicMap;
+            return (await res.json()) as ClientMap;
           },
           (next) => {
             if (alive) setData(next);

@@ -1,0 +1,1 @@
+ALTER TABLE "routes" ADD COLUMN "no_signal_legs" jsonb DEFAULT '[]'::jsonb NOT NULL;

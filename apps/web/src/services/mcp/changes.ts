@@ -60,6 +60,7 @@ import {
 import { vehicleStates } from "../ingest/ingest";
 import { type Actor, getInWorkspace, inWorkspace, ServiceError } from "../kernel";
 import { createNotice, endNotice } from "../notices/notices";
+import { estimateVehicles } from "../public/estimates";
 
 /** Minimum role per change kind (SPEC §7a Roles; matches each service's own requireRole). */
 export const CHANGE_ROLE: Record<McpChangeKind, Role> = {
@@ -664,24 +665,59 @@ export const actorFor =
   (workspaceId: string): Promise<Actor> =>
     adminActor(ctx.db, { personId: ctx.personId, workspaceId, channel: "mcp", client: ctx.client });
 
+/**
+ * `estimate` is set only for a vehicle silent in a leg with no mobile signal (public/sight "predicted"): `state` is
+ * its last real fix; the estimated place and arrival are a guess, for ops, never shown to attendees as a fix.
+ */
+export type LiveBoardRow = {
+  vehicle: Vehicle;
+  state: VehicleState | null;
+  onBreakUntil: string | null;
+  estimate?: {
+    reason: "no_signal";
+    lat: number;
+    lng: number;
+    alongM: number;
+    toSpotId: string;
+    lastSeenAt: string;
+    /** IST HH:MM it usually gets to toSpotId */
+    usuallyArrivesAt: string;
+  };
+};
+
 /** viewer+. Every vehicle (active first) with its live state, null if it never reported (shuttle_status). */
 export async function liveBoard(
   db: Db,
   actor: Actor,
   input: { workspaceId: string },
   now: Date,
-): Promise<{ vehicle: Vehicle; state: VehicleState | null; onBreakUntil: string | null }[]> {
+): Promise<LiveBoardRow[]> {
   // listVehicles checks the viewer role before vehicleStates (which takes no actor) is read
   const list = await listVehicles(db, actor, input);
   const states = await vehicleStates(db, input.workspaceId);
   const breaks = await activeBreaks(db, input.workspaceId, now);
+  const guesses = await estimateVehicles(db, input.workspaceId, states, now);
   // an off-duty vehicle keeps a position only inside ops hours (ingest/refreshPhases drop it outside them)
   return list.map((vehicle) => {
     const b = breaks.get(vehicle.id);
     const end = b && breakEnd(b);
+    const g = guesses.get(vehicle.id);
     return {
       vehicle,
       state: states.find((x) => x.vehicleId === vehicle.id) ?? null,
+      ...(g
+        ? {
+            estimate: {
+              reason: "no_signal" as const,
+              lat: g.lat,
+              lng: g.lng,
+              alongM: g.alongM,
+              toSpotId: g.toSpotId,
+              lastSeenAt: g.lastSeenAt.toISOString(),
+              usuallyArrivesAt: istHHMM(g.arrivesAt.getTime()),
+            },
+          }
+        : {}),
       // driver's break: "13:20" IST, "until ended" when open-ended, null when working
       onBreakUntil: b ? (end ? istHHMM(end) : "until ended") : null,
     };

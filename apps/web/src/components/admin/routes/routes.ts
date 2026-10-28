@@ -11,21 +11,35 @@ export function formatLeg(seconds: number | null | undefined): string {
   return seconds < 60 ? "under 1 min" : `${Math.round(seconds / 60)} min`;
 }
 
-export type LegRow = { from: string; to: string; time: string; learned: boolean };
+export type LegRow = {
+  from: string;
+  to: string;
+  time: string;
+  learned: boolean;
+  /** no mobile signal on this leg: marked by an admin, found from late pings, or neither */
+  noSignal: "manual" | "detected" | null;
+};
 
 /**
  * One row per leg; typicalLegS[i] is the learned median for spotIds[i] → spotIds[i+1] (null = unknown), and
  * legSamples[i] how many trips it was learned from.
  */
 export function legRows(
-  route: { spotIds: string[]; typicalLegS: (number | null)[]; legSamples?: number[] },
+  route: {
+    spotIds: string[];
+    typicalLegS: (number | null)[];
+    legSamples?: number[];
+    noSignalLegs?: { legIndex: number; source: "manual" | "detected" }[];
+  },
   names: Names,
 ): LegRow[] {
   return route.spotIds.slice(1).map((to, i) => {
     const s = route.typicalLegS[i];
     const n = route.legSamples?.[i];
     const time = s != null && n ? `${formatLeg(s)} (${n} ${n === 1 ? "trip" : "trips"})` : formatLeg(s);
-    return { from: nameOf(names, route.spotIds[i]), to: nameOf(names, to), time, learned: s != null };
+    const here = (route.noSignalLegs ?? []).filter((e) => e.legIndex === i);
+    const noSignal = here.some((e) => e.source === "manual") ? "manual" : here.length ? "detected" : null;
+    return { from: nameOf(names, route.spotIds[i]), to: nameOf(names, to), time, learned: s != null, noSignal };
   });
 }
 

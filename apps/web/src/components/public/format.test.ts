@@ -1,5 +1,6 @@
 import type { AnswerLine } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
+import { NO_SIGNAL_STRETCH } from "@/services/public/sight";
 import { ageSeconds, answerParts, contextText, pickSpot, scheduleWindow, spotCookieName } from "./format";
 
 const line = (over: Partial<AnswerLine> = {}): AnswerLine => ({
@@ -251,5 +252,35 @@ describe("scheduleWindow", () => {
     const w = scheduleWindow(rows(24, 6), { showEarlier: true, showLater: true });
     expect(w.visible).toHaveLength(24);
     expect(w).toMatchObject({ earlier: 0, later: 0 });
+  });
+});
+
+describe("a shuttle estimated through a no-signal stretch (sight.ts predicted) is not 'stale'", () => {
+  const guess = (over: Partial<AnswerLine> = {}) =>
+    line({
+      kind: "live",
+      minutes: 4,
+      rangeLo: 3,
+      rangeHi: 6,
+      approx: true,
+      lastSeenS: 400,
+      phaseText: `on its way to Namaka · ${NO_SIGNAL_STRETCH}`,
+      ...over,
+    });
+  it("shows the approximate ETA, not 'Running now', however long ago the last fix was", () => {
+    expect(answerParts(guess(), true, 0)).toEqual({
+      label: "Shuttle will be here in",
+      value: "about 4 min",
+      range: "3–6",
+    });
+    expect(answerParts(guess({ lastSeenS: 1200 }), true, 30).value).toBe("about 4 min");
+  });
+  it("says what it is, with the last seen time", () => {
+    expect(contextText(guess(), 0)).toBe(`on its way to Namaka · ${NO_SIGNAL_STRETCH} · last seen 7 min ago`);
+  });
+  it("an ordinary live line that old is still stale", () => {
+    expect(
+      answerParts(line({ kind: "live", minutes: 4, lastSeenS: 400, phaseText: "on the way" }), true, 0).value,
+    ).toBe("Running now");
   });
 });
