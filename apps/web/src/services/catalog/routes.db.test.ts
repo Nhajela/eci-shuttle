@@ -192,6 +192,31 @@ describe("updateRoute", () => {
     expect(u.typicalLegS).toEqual([]);
   });
 
+  it("no-signal legs: new stops drop them all, a new path drops the detected metres only, a rename keeps them", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
+    const legs = [
+      { legIndex: 0, source: "manual" as const },
+      { legIndex: 0, source: "detected" as const, startAlongM: 10, endAlongM: 300, trips: 4, days: 2 },
+    ];
+    await db().update(routes).set({ noSignalLegs: legs }).where(eq(routes.id, r.id));
+    const renamed = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, name: "R2" }, offline);
+    expect(renamed.noSignalLegs).toEqual(legs);
+    const path = [
+      { lat: 15.63, lng: 73.73 },
+      { lat: 15.64, lng: 73.72 },
+    ];
+    const repathed = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, path }, offline);
+    expect(repathed.noSignalLegs).toEqual([{ legIndex: 0, source: "manual" }]);
+    const respotted = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [riva.id, party.id] },
+      offline,
+    );
+    expect(respotted.noSignalLegs).toEqual([]);
+  });
+
   it("a hand-edited path wins over regeneration and is marked manual, with spot indexes recomputed", async () => {
     const { ws, actor, riva, circle } = await setup();
     const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);

@@ -166,6 +166,7 @@ export async function updateRoute(
     let g: GeneratedPath | null = null;
     if (points && path) g = { path, source: "manual", spotPathIdx: spotIndexes(path, points) };
     else if (points) g = await generatePath(points, deps?.fetch);
+    const newStops = !!spotIds && spotIds.join() !== before.spotIds.join();
     const [after] = await tx
       .update(routes)
       .set({
@@ -173,6 +174,11 @@ export async function updateRoute(
         spotIds: ids,
         // typical_leg_s is one learned median per leg; new stops make the old legs meaningless
         ...(spotIds && spotIds.join() !== before.spotIds.join() && { typicalLegS: [] }),
+        // no-signal legs are leg indexes (manual) and path metres (detected): new stops invalidate both, a new
+        // path only the metres (the next nightly detection finds them again)
+        ...(newStops
+          ? { noSignalLegs: [] }
+          : g && { noSignalLegs: before.noSignalLegs.filter((e) => e.source === "manual") }),
         ...(g && { path: g.path, pathSource: g.source, spotPathIdx: g.spotPathIdx }),
         plannedDwellS: plan,
         version: before.version + 1,
