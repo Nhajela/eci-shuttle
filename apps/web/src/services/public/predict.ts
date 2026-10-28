@@ -44,6 +44,8 @@ export function predictRoute(
     spotAlongM: along,
     legS: route.spotIds.slice(1).map((_, i) => legS[i] ?? route.typicalLegS[i] ?? null),
     zones: mine,
+    spotPathIdx: route.spotPathIdx,
+    path: route.path,
     legPaths: route.spotIds.slice(1).map((_, i) => {
       const a = route.spotPathIdx[i];
       const b = route.spotPathIdx[i + 1];

@@ -13,6 +13,7 @@
  * geofence.insideSpotId (arrival in enteredAt) and its leg in spotId / nextSpotId, so the phase is rebuilt.
  */
 import { istDate, istHHMM, type LatLng, projectOntoPath } from "@eci-shuttle/shared";
+import { legOf } from "@eci-shuttle/shared/geo/legOf";
 import type { VehicleState } from "@/db/types";
 import type { DeadZone } from "../signal/dead-zones";
 
@@ -46,7 +47,8 @@ export const PREDICT_ARRIVAL_MARGIN_M = 150;
  * - legS[i]: the learned or baseline travel time of leg i in seconds (null = unknown), the fallback for a zone
  *   without its own `typicalLegS`;
  * - zones: the dead zones of this route (others are ignored);
- * - legPaths[i]: the sub-path of leg i, to check that the last fix was really on that leg.
+ * - legPaths[i]: the sub-path of leg i, to check that the last fix was really on that leg;
+ * - spotPathIdx / path: the route's geometry, for the shared `legOf` to tell apart the passes of a repeated stop.
  */
 export type PredictRoute = {
   routeId: string;
@@ -55,6 +57,8 @@ export type PredictRoute = {
   legS: (number | null)[];
   zones: DeadZone[];
   legPaths: (LatLng[] | null)[];
+  spotPathIdx: number[];
+  path: LatLng[];
 };
 
 /** Where a predicted vehicle probably is. alongM is the estimate; lastAlongM is the real last fix. */
@@ -141,17 +145,13 @@ function predictedFix(s: VehicleState, ageMs: number, p: PredictRoute): Predicte
   const { spotIds, spotAlongM } = p;
   if (spotAlongM.length !== spotIds.length) return null;
   const along = s.alongM;
-  // the leg: spotIds[k] → spotIds[k + 1] with the stops it left and heads to
-  const fits = (k: number, withFrom: boolean) =>
-    spotIds[k + 1] === s.nextSpotId && (!withFrom || !s.spotId || spotIds[k] === s.spotId);
-  const legs = (withFrom: boolean) =>
-    spotIds.map((_, k) => k).filter((k) => k < spotIds.length - 1 && fits(k, withFrom));
-  const cands = legs(true).length ? legs(true) : legs(false);
-  const k =
-    cands.find(
-      (c) => along >= (spotAlongM[c] as number) - PREDICT_START_SLACK_M && along <= (spotAlongM[c + 1] as number),
-    ) ?? cands[0];
-  if (k === undefined) return null;
+  // the leg it is on (shared with status / positions): the pair it left and heads to, then where along the route
+  // for a pair the route passes twice. legOf may fall back to the stop it left alone; this one needs the heading.
+  const k = legOf(
+    { spotIds, spotPathIdx: p.spotPathIdx, path: p.path },
+    { spotId: s.spotId, nextSpotId: s.nextSpotId, alongM: along },
+  );
+  if (k < 0 || spotIds[k + 1] !== s.nextSpotId) return null;
   const legStartM = spotAlongM[k] as number;
   const legEndM = spotAlongM[k + 1] as number;
   const lengthM = legEndM - legStartM;
