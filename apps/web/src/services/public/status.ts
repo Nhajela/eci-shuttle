@@ -244,18 +244,23 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
       const first = rs[0] as Running;
       // a route that passes the stop twice (out and back) serves it at both passes
       const passes = departIds(first.route).flatMap((id, i) => (id === spot.id ? [i] : []));
-      const times = rs
-        .flatMap((r) => r.departures.flatMap((at) => passes.map((k) => at + (r.offsetMs[k] ?? 0))))
-        .sort((a, b) => a - b);
-      for (const at of times)
+      const timed = rs
+        .flatMap((r) => r.departures.flatMap((at) => passes.map((k) => ({ at: at + (r.offsetMs[k] ?? 0), k }))))
+        .sort((a, b) => a.at - b.at);
+      const times = timed.map((t) => t.at);
+      for (const { at, k } of timed) {
+        // each pass says where it goes, so a rider at a stop passed twice knows which one to wait for. ScheduleRow.label
+        // is HH:MM by contract, so the direction rides on serviceName ("Loop · to Namaka"; status-view splits it)
+        const to = passes.length > 1 ? spotById.get(first.route.spotIds[k + 1] ?? "")?.shortName : undefined;
         rows.push({
           serviceId: svcId,
-          serviceName: first.svc.name,
+          serviceName: to ? `${first.svc.name}${TO_SEP}${to}` : first.svc.name,
           at: iso(at),
           label: istHHMM(at),
           past: at < nowMs,
           next: false,
         });
+      }
       const everyMin = first.svc.pattern.kind === "loop" ? cycleMin(first, live.assigned.get(svcId) ?? 1) : null;
       if (everyMin) loops.push({ serviceId: svcId, serviceName: first.svc.name, everyMin });
       answers.push(
@@ -302,6 +307,9 @@ export async function spotAnswer(db: Db, workspaceId: string, spotId: string, no
   const s = await publicStatus(db, workspaceId, now);
   return s.spots.find((x) => x.spotId === spotId)?.answers ?? [];
 }
+
+/** Joins a service name and the stop one pass of a repeated stop goes to (ScheduleRow.serviceName). */
+const TO_SEP = " · to ";
 
 /** Spots a shuttle departs from: every spot but a one-way route's terminus (a loop's last spot is its first). */
 const departIds = (r: Route) => (r.spotIds.length > 1 ? r.spotIds.slice(0, -1) : r.spotIds);

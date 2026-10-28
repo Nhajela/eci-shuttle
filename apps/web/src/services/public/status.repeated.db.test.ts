@@ -105,4 +105,28 @@ describe("public status for a van on the way back of an out-and-back route", () 
     const names = status.spots.map((s) => s.shortName);
     expect(new Set(names).size).toBe(names.length);
   });
+
+  it("each pass of a repeated stop says where it goes; a stop passed once keeps the plain time", async () => {
+    const { w, status } = await withVan(
+      (w) => ({ phase: "at_spot", spotId: w.id.nanu, nextSpotId: w.id.riva, alongM: 0 }),
+      "times",
+    );
+    const rows = (id: string) => status.spots.find((s) => s.spotId === id)?.schedule.rows ?? [];
+    // Circle: out to Namaka about +10.8 min, back to Riva about +21.6 min (legs 144 s, dwells 3 min)
+    expect(rows(w.id.circle).map((r) => `${r.label} ${r.serviceName}`)).toEqual([
+      "09:10 Loop · to Namaka",
+      "09:21 Loop · to Riva",
+      "09:50 Loop · to Namaka",
+      "10:01 Loop · to Riva",
+    ]);
+    expect(rows(w.id.riva).every((r) => /^Loop · to (Circle|Nanu)$/.test(r.serviceName))).toBe(true);
+    // a stop passed once keeps its plain service name
+    expect(rows(w.id.namaka).every((r) => r.serviceName === "Loop")).toBe(true);
+    expect(rows(w.id.nanu).every((r) => r.serviceName === "Loop")).toBe(true);
+    expect(
+      rows(w.id.circle)
+        .map((r) => `${r.label} ${r.serviceName}`)
+        .join(" "),
+    ).not.toMatch(/late|behind|delay/i);
+  });
 });
