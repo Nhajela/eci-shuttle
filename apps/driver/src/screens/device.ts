@@ -15,7 +15,8 @@ import { createScreenDevice, type ScreenSnapshot } from "./deviceCore";
 
 const builtInOrigin: string = Constants.expoConfig?.extra?.apiOrigin ?? "https://eci-shuttle.positivesumcompany.com";
 
-const syncNow = () => runtime.sync();
+// every caller here is a driver's own action (Resume, pairing, finishing setup): it may bypass a Retry-After
+const syncNow = () => runtime.sync({ userInitiated: true });
 
 const device = createScreenDevice({ store, files: fileKV, syncNow, fetch: (u, i) => fetch(u, i), builtInOrigin });
 

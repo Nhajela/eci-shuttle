@@ -405,7 +405,26 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T, battery: null })]);
   });
 
-  it("a forced sync (Resume, push, app opened) still waits out a Retry-After", async () => {
+  it("a user-initiated sync (Resume, pairing) bypasses a Retry-After once; a new 429 holds it back again", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T + 10_000);
+    await s.rt.sync({ userInitiated: true });
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(s.files.dump()["sync-state"]).retryAfterAt).toBeNull();
+    // the bypass is per call: if the server says 429 again, the next automatic sync waits
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    s.at(T + 20_000);
+    await s.rt.sync({ userInitiated: true });
+    expect(s.fetch).toHaveBeenCalledTimes(3);
+    s.at(T + 30_000);
+    await s.rt.sync();
+    await s.rt.wake([fix(T + 30_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("a forced sync that is not user-initiated (push, app opened) still waits out a Retry-After", async () => {
     const s = await setup();
     s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
     await s.rt.sync();

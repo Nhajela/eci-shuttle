@@ -183,7 +183,13 @@ export function createRuntime(deps: RuntimeDeps) {
     }
   }
 
-  async function cycle(fixes: Fix[], force: boolean, cancelled: () => boolean, progress: { synced: boolean }) {
+  async function cycle(
+    fixes: Fix[],
+    force: boolean,
+    userInitiated: boolean,
+    cancelled: () => boolean,
+    progress: { synced: boolean },
+  ) {
     const now = deps.now();
     let p = await loadPersisted();
     const dc = await deps.store.deviceConfig();
@@ -222,8 +228,9 @@ export function createRuntime(deps: RuntimeDeps) {
       failures: p.failures,
     };
     const delay = nextSyncDelayMs(r, now + p.clockOffsetMs, state, (deps.random ?? Math.random)());
-    // a 429's Retry-After holds back every sync, forced ones included
-    const rateLimited = p.retryAfterAt !== null && now < p.retryAfterAt;
+    // a 429's Retry-After holds back every automatic sync, forced ones included; only a driver's own tap (Resume,
+    // pairing) goes through, once (a new 429 sets a new deadline)
+    const rateLimited = !userInitiated && p.retryAfterAt !== null && now < p.retryAfterAt;
     const due =
       !rateLimited &&
       (force ||
@@ -290,7 +297,7 @@ export function createRuntime(deps: RuntimeDeps) {
   }
 
   /** One cycle with a deadline. On timeout the queue moves on and the late cycle is told to stand down. */
-  const run = (fixes: Fix[], force: boolean) =>
+  const run = (fixes: Fix[], force: boolean, userInitiated = false) =>
     one(async () => {
       let cut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -298,7 +305,7 @@ export function createRuntime(deps: RuntimeDeps) {
         timer = setTimeout(() => resolve("timeout"), deps.cycleTimeoutMs ?? CYCLE_TIMEOUT_MS);
       });
       const progress = { synced: false };
-      const work = cycle(fixes, force, () => cut, progress).catch((e) => {
+      const work = cycle(fixes, force, userInitiated, () => cut, progress).catch((e) => {
         console.warn("runtime cycle", e instanceof Error ? e.message : e);
       });
       const done = await Promise.race([work, timeout]);
@@ -315,8 +322,8 @@ export function createRuntime(deps: RuntimeDeps) {
   return {
     /** The location task's delivery: fixes while active, an empty clock tick while idle. Never throws. */
     wake: (fixes: Fix[]) => run(fixes, false),
-    /** Sync now (push, Resume, pairing, app opened). Never throws. */
-    sync: () => run([], true),
+    /** Sync now (push, Resume, pairing, app opened). `userInitiated` (Resume, pairing) ignores a Retry-After. Never throws. */
+    sync: (opts?: { userInitiated?: boolean }) => run([], true, opts?.userInitiated === true),
     /** Sync only if one is due (foreground timer when the location service isn't running). Never throws. */
     tick: () => run([], false),
     /** true while the plan wants tracking and only opening the app can start it (read by native.ts to retry) */
