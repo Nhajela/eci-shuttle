@@ -1,12 +1,14 @@
 import { PublicStatus } from "@eci-shuttle/shared";
-import { makeWorkspace } from "@tests/factories/core";
+import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { routes, services, serviceVehicles, spots, vehicleBreaks, vehicleState, vehicles } from "@/db/schema";
+import { liveBoard } from "../mcp/changes";
 import type { DeadZone } from "../signal/dead-zones";
 import { PublicMap, publicPositions } from "./positions";
 import { NO_SIGNAL_STRETCH } from "./sight";
+import { staffMap } from "./staff-map";
 import { CANT_SEE, publicStatus } from "./status";
 
 const zonesNow = vi.hoisted(() => ({ list: [] as unknown[] }));
@@ -249,5 +251,47 @@ describe("a shuttle that drives into the no-signal stretch between Circle and Na
     // retired
     await db().update(vehicles).set({ active: false }).where(eq(vehicles.id, v.id));
     expect((await mapOf(w.id, at("19:06"))).vehicles).toEqual([]);
+  });
+});
+
+describe("ops views show the same estimate, clearly marked", () => {
+  it("staff map: estimated marker at the guessed place (live ones unmarked); live board: estimate beside the last real fix", async () => {
+    const { w, namaka, svc, along } = await world();
+    const { actor } = await makeAdmin(db(), w.id, "viewer");
+    const v = await shuttle(w, svc.id, {
+      spotId: (await db().select().from(spots).where(eq(spots.shortName, "Circle")))[0]?.id,
+      nextSpotId: namaka.id,
+      alongM: (along[2] as number) + 100,
+      lat: 15.6201,
+      lng: 73.7,
+      lastPingAt: at("19:00"),
+      since: at("18:59"),
+    });
+    // 19:03: live: a plain marker, no estimate
+    let m = await staffMap(db(), actor, { workspaceId: w.id }, at("19:03"));
+    expect(m.markers).toEqual([
+      { id: v.id, name: "Van 1", colour: "#286c71", lat: 15.6201, lng: 73.7, problem: false },
+    ]);
+    expect((await liveBoard(db(), actor, { workspaceId: w.id }, at("19:03")))[0]).not.toHaveProperty("estimate");
+
+    // 19:06: the estimated place, flagged; the board keeps the real last fix in `state`
+    m = await staffMap(db(), actor, { workspaceId: w.id }, at("19:06"));
+    expect(m.markers).toHaveLength(1);
+    expect(m.markers[0]).toMatchObject({ id: v.id, name: "Van 1", estimated: true, problem: false });
+    expect(m.markers[0]?.lat).toBeGreaterThan(15.6201);
+    const row = (await liveBoard(db(), actor, { workspaceId: w.id }, at("19:06")))[0];
+    expect(row?.state?.lat).toBe(15.6201);
+    expect(row?.estimate).toMatchObject({
+      reason: "no_signal",
+      toSpotId: namaka.id,
+      lastSeenAt: at("19:00").toISOString(),
+      lat: m.markers[0]?.lat,
+    });
+    expect(row?.estimate?.usuallyArrivesAt).toMatch(/^19:\d\d$/);
+
+    // after the expiry (19:16): no estimate, and the last fix is too old for a pin
+    const late = await liveBoard(db(), actor, { workspaceId: w.id }, at("19:16"));
+    expect(late[0]).not.toHaveProperty("estimate");
+    expect((await staffMap(db(), actor, { workspaceId: w.id }, at("19:16"))).markers).toEqual([]);
   });
 });

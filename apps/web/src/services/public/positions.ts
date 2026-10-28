@@ -29,13 +29,11 @@ import { activeBreaks } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { loadDeadZones } from "../signal/dead-zones";
 import { headingAlongPath, legFraction } from "./map-geo";
-import { pointAtAlong, predictRoute, spotAlongM } from "./predict";
+import { baselineLegS, pointAtAlong, predictRoute } from "./predict";
 import { addDays, serviceDaysInPlay } from "./service-days";
 import { type PredictRoute, sight } from "./sight";
 
 const Id = z.uuid();
-/** with no learned time for a leg: its length at this speed (as status.ts) */
-const BASELINE_MPS = 25 / 3.6;
 const LatLngZ = z.object({ lat: z.number(), lng: z.number() });
 
 export const PublicMapSpot = z.object({
@@ -176,16 +174,7 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
   const zones = await loadDeadZones(db, workspaceId);
   const predictBy = new Map<string, PredictRoute>();
   for (const r of routeRows) {
-    const along = spotAlongM(r);
-    const p = predictRoute(
-      r,
-      zones,
-      r.spotIds
-        .slice(1)
-        .map((_, i) =>
-          along ? Math.round(((along[i + 1] as number) - (along[i] as number)) / BASELINE_MPS) || null : null,
-        ),
-    );
+    const p = predictRoute(r, zones, baselineLegS(r));
     if (p) predictBy.set(r.id, p);
   }
   const onBreak = await activeBreaks(db, workspaceId, now);

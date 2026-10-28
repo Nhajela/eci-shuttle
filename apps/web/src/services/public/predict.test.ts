@@ -1,7 +1,7 @@
 import { distanceM, pathLengthM } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
 import type { DeadZone } from "../signal/dead-zones";
-import { pointAtAlong, predictRoute, spotAlongM } from "./predict";
+import { BASELINE_MPS, baselineLegS, pointAtAlong, predictRoute, spotAlongM } from "./predict";
 
 const A = "a";
 const B = "b";
@@ -37,6 +37,17 @@ describe("spotAlongM", () => {
   it("is null when the path is not indexed to the spots", () => {
     expect(spotAlongM({ ...route, spotPathIdx: [0, 2] })).toBeNull();
     expect(spotAlongM({ ...route, path: [] })).toBeNull();
+  });
+});
+
+describe("baselineLegS", () => {
+  it("each leg's length at 25 km/h, in seconds", () => {
+    const m = spotAlongM(route) as number[];
+    expect(baselineLegS(route)).toEqual([
+      Math.round((m[1] as number) / BASELINE_MPS),
+      Math.round(((m[2] as number) - (m[1] as number)) / BASELINE_MPS),
+    ]);
+    expect(baselineLegS({ ...route, spotPathIdx: [0] })).toEqual([null, null]);
   });
 });
 
