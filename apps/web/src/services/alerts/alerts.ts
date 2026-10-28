@@ -6,10 +6,10 @@
  * come from alerts/watchdog.
  */
 import { type AlertKind, formatIst, istDate, istHHMM } from "@eci-shuttle/shared";
-import { and, eq, gt, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
-import { alertPrefs, auditLog, memberships, people, workspaces } from "@/db/schema";
+import { alertPrefs, auditLog, deviceAssignments, memberships, people, workspaces } from "@/db/schema";
 import { origin } from "@/lib/env";
 import { escapeHtml } from "@/lib/telegram/html";
 import { getInsights, listSuggestions } from "@/services/learning/insights";
@@ -32,7 +32,7 @@ export type AlertEvent = {
    */
   buttons?: TelegramButton[][];
   /** Which phone and problem kind a "Mute alert 1h" press snoozes (see muteAlert); omit for alerts about nothing mutable. */
-  mute?: { kind: string; deviceId: string };
+  mute?: { kind: string; deviceId: string; vehicleId?: string | null };
 };
 
 /** How long "Mute alert 1h" snoozes an alert for the person who pressed it. */
@@ -41,17 +41,26 @@ const MUTE_ACTION = "alert.mute";
 /** Matches every alert kind of the phone (what an old "Silence 1h" button now does). */
 export const MUTE_ALL = "*";
 
-/** audit_log.entityId of a mute: `<problem kind | *>:<deviceId>`. */
+/** Problem kinds whose subject is the vehicle (whichever phone it is attributed to): their mutes cover the vehicle. */
+const VEHICLE_KINDS = new Set(["silent", "off_route"]);
+
+/**
+ * audit_log.entityId of a mute: `<problem kind | *>:<deviceId>` (phone problems, and every mute before vehicle
+ * mutes existed), or `<vehicle kind>:vehicle:<vehicleId>` for a silent / off_route mute.
+ */
 const muteEntity = (kind: string, deviceId: string) => `${kind}:${deviceId}`;
+const vehicleMuteEntity = (kind: string, vehicleId: string) => `${kind}:vehicle:${vehicleId}`;
 
 /** The end of the person's running mute of this kind (or of all kinds) on the phone, null if none. */
 async function mutedUntil(
   db: Db,
   workspaceId: string,
   personId: string,
-  mute: { kind: string; deviceId: string },
+  mute: { kind: string; deviceId: string; vehicleId?: string | null },
   now: Date,
 ): Promise<Date | null> {
+  const entities = [muteEntity(mute.kind, mute.deviceId), muteEntity(MUTE_ALL, mute.deviceId)];
+  if (mute.vehicleId && VEHICLE_KINDS.has(mute.kind)) entities.push(vehicleMuteEntity(mute.kind, mute.vehicleId));
   const until = sql<string>`${auditLog.after}->>'until'`;
   const rows = await db
     .select({ until })
@@ -62,7 +71,7 @@ async function mutedUntil(
         eq(auditLog.action, MUTE_ACTION),
         eq(auditLog.entity, "alert"),
         eq(auditLog.actorId, personId),
-        sql`${auditLog.entityId} in (${muteEntity(mute.kind, mute.deviceId)}, ${muteEntity(MUTE_ALL, mute.deviceId)})`,
+        inArray(auditLog.entityId, entities),
         sql`(${until})::timestamptz > ${now.toISOString()}::timestamptz`,
       ),
     )
@@ -71,10 +80,28 @@ async function mutedUntil(
   return rows[0] ? new Date(rows[0].until) : null;
 }
 
+/** The vehicle the phone is in now (open assignment); null for a phone with none or an id that is no phone. */
+async function vehicleOf(db: Db, workspaceId: string, deviceId: string): Promise<string | null> {
+  if (!z.uuid().safeParse(deviceId).success) return null;
+  const [row] = await db
+    .select({ vehicleId: deviceAssignments.vehicleId })
+    .from(deviceAssignments)
+    .where(
+      and(
+        eq(deviceAssignments.workspaceId, workspaceId),
+        eq(deviceAssignments.deviceId, deviceId),
+        isNull(deviceAssignments.endsAt),
+      ),
+    );
+  return row?.vehicleId ?? null;
+}
+
 /**
  * viewer+ (a person). "Mute alert 1h": this person gets no alert of `kind` about that phone for an hour (kind "*"
- * = every kind). Nothing about the phone changes: it keeps tracking. No schema of its own: the audit row
- * (`alert.mute`, entityId `<kind>:<deviceId>`, after.until) is the record, queueAlert reads it. A repeat press
+ * = every kind). A silent / off_route mute covers the phone's whole vehicle (those problems belong to the vehicle,
+ * whichever phone they are attributed to); other kinds stay per phone. Nothing about the phone changes: it keeps
+ * tracking. No schema of its own: the audit row (`alert.mute`, entityId `<kind>:<deviceId>` or
+ * `<kind>:vehicle:<vehicleId>`, after.until) is the record, queueAlert reads it. A repeat press
  * while muted writes nothing (`already`).
  */
 export async function muteAlert(
@@ -88,19 +115,18 @@ export async function muteAlert(
     input,
   );
   readable(actor, p.workspaceId);
-  const running = await mutedUntil(db, p.workspaceId, actor.id, p, now);
+  // silent / off_route belong to the vehicle, and the problem can be attributed to any of its phones: key the mute
+  // to the phone's current vehicle. A phone without one (or an unknown id) mutes per device, like phone problems.
+  const vehicleId = VEHICLE_KINDS.has(p.kind) ? await vehicleOf(db, p.workspaceId, p.deviceId) : null;
+  const entityId = vehicleId ? vehicleMuteEntity(p.kind, vehicleId) : muteEntity(p.kind, p.deviceId);
+  const running = await mutedUntil(db, p.workspaceId, actor.id, { ...p, vehicleId }, now);
   if (running && running.getTime() - now.getTime() > MUTE_MS - 5 * 60_000) return { until: running, already: true };
   const until = new Date(now.getTime() + MUTE_MS);
-  await mutate(
-    db,
-    actor,
-    { action: MUTE_ACTION, entity: "alert", entityId: muteEntity(p.kind, p.deviceId), workspaceId: p.workspaceId },
-    async () => ({
-      before: null,
-      after: { kind: p.kind, deviceId: p.deviceId, until: until.toISOString() },
-      result: null,
-    }),
-  );
+  await mutate(db, actor, { action: MUTE_ACTION, entity: "alert", entityId, workspaceId: p.workspaceId }, async () => ({
+    before: null,
+    after: { kind: p.kind, deviceId: p.deviceId, ...(vehicleId && { vehicleId }), until: until.toISOString() },
+    result: null,
+  }));
   return { until, already: false };
 }
 

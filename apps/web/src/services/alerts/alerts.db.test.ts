@@ -1,9 +1,10 @@
 import { istToEpoch } from "@eci-shuttle/shared";
+import { makeAssignedDevice, makeDevice } from "@tests/factories/alerts";
 import { makeAdmin, makePerson, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { alertPrefs, auditLog, memberships, outbox } from "@/db/schema";
+import { alertPrefs, auditLog, deviceAssignments, memberships, outbox } from "@/db/schema";
 import { adminActor } from "@/services/auth/actor";
 import { systemActor, type TelegramPayload } from "../kernel";
 import { alertAdminChanges, muteAlert, raiseAlert, sendDigest } from "./alerts";
@@ -203,5 +204,102 @@ describe("muteAlert", () => {
         .from(auditLog)
         .where(and(eq(auditLog.action, "alert.mute"), eq(auditLog.workspaceId, ws.id))),
     ).toHaveLength(1);
+  });
+});
+
+describe("muteAlert: vehicle problems follow the vehicle", () => {
+  // a vehicle with two phones: the problem can be attributed to either
+  async function setup() {
+    const ws = await makeWorkspace(db());
+    const { person: a } = await makeAdmin(db(), ws.id);
+    const { person: b } = await makeAdmin(db(), ws.id, "ops");
+    const actor = await adminActor(db(), { personId: a.id, workspaceId: ws.id, channel: "telegram" });
+    const { vehicle, device: phone1 } = await makeAssignedDevice(db(), ws.id);
+    const phone2 = await makeDevice(db(), ws.id, { label: "Backup" });
+    await db().insert(deviceAssignments).values({ workspaceId: ws.id, deviceId: phone2.id, vehicleId: vehicle.id });
+    const event = (kind: "silent" | "low_battery", deviceId: string, key: string) => ({
+      workspaceId: ws.id,
+      kind,
+      key,
+      html: "<b>x</b>",
+      mute: { kind, deviceId, vehicleId: vehicle.id },
+    });
+    return { ws, a, b, actor, vehicle, phone1, phone2, event };
+  }
+
+  it("a silent mute pressed via one phone also covers the alert attributed to the vehicle's other phone", async () => {
+    const { ws, b, actor, phone1, phone2, event } = await setup();
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: phone1.id, kind: "silent" }, NOW);
+    expect(await raiseAlert(db(), event("silent", phone2.id, "silent:v:1"), NOW)).toBe(1);
+    const [job] = await jobs(ws.id);
+    expect(job.dedupeKey).toBe(`alert:silent:v:1:${b.id}`);
+  });
+
+  it("a mute of a vehicle problem does not mute that vehicle's phone problems, nor another vehicle", async () => {
+    const { ws, actor, phone1, phone2, event } = await setup();
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: phone1.id, kind: "silent" }, NOW);
+    expect(await raiseAlert(db(), event("low_battery", phone2.id, "low_battery:p2:1"), NOW)).toBe(2);
+    const other = await makeAssignedDevice(db(), ws.id, { vehicle: { name: "Bus 2" } });
+    const e = {
+      ...event("silent", other.device.id, "silent:v2:1"),
+      mute: { kind: "silent", deviceId: other.device.id, vehicleId: other.vehicle.id },
+    };
+    expect(await raiseAlert(db(), e, NOW)).toBe(2);
+  });
+
+  it("phone problems stay per device: a low_battery mute on one phone leaves the vehicle's other phone alerting", async () => {
+    const { ws, actor, phone1, phone2, event } = await setup();
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: phone1.id, kind: "low_battery" }, NOW);
+    expect(await raiseAlert(db(), event("low_battery", phone2.id, "low_battery:p2:1"), NOW)).toBe(2);
+    expect(await raiseAlert(db(), event("low_battery", phone1.id, "low_battery:p1:1"), NOW)).toBe(1);
+  });
+
+  it("a repeat press via the vehicle's other phone is already muted (one audit row); expires after the hour", async () => {
+    const { ws, actor, phone1, phone2, event } = await setup();
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: phone1.id, kind: "silent" }, NOW);
+    const again = await muteAlert(
+      db(),
+      actor,
+      { workspaceId: ws.id, deviceId: phone2.id, kind: "silent" },
+      new Date(NOW.getTime() + 60_000),
+    );
+    expect(again.already).toBe(true);
+    expect(
+      await db()
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.action, "alert.mute"), eq(auditLog.workspaceId, ws.id))),
+    ).toHaveLength(1);
+    const later = new Date(NOW.getTime() + 3_600_001);
+    expect(await raiseAlert(db(), event("silent", phone2.id, "silent:v:2"), later)).toBe(2);
+  });
+
+  it("a mute row written by an old button (keyed to the device) still applies, and a phone with no vehicle mutes per device", async () => {
+    const { ws, actor, phone1, event } = await setup();
+    const loose = await makeDevice(db(), ws.id, { label: "Loose" });
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: loose.id, kind: "silent" }, NOW);
+    const e = {
+      workspaceId: ws.id,
+      kind: "silent" as const,
+      key: "silent:loose",
+      html: "x",
+      mute: { kind: "silent", deviceId: loose.id },
+    };
+    expect(await raiseAlert(db(), e, NOW)).toBe(1);
+    // old-style row: entityId `<kind>:<deviceId>` written by an earlier release
+    await db()
+      .insert(auditLog)
+      .values({
+        workspaceId: ws.id,
+        actorKind: actor.kind,
+        actorId: actor.id,
+        channel: "telegram",
+        action: "alert.mute",
+        entity: "alert",
+        entityId: `silent:${phone1.id}`,
+        before: null,
+        after: { kind: "silent", deviceId: phone1.id, until: new Date(NOW.getTime() + 600_000).toISOString() },
+      } as never);
+    expect(await raiseAlert(db(), event("silent", phone1.id, "silent:v:3"), NOW)).toBe(1);
   });
 });

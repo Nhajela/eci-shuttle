@@ -5,8 +5,10 @@ import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deviceAssignments, devices, outbox, vehicleBreaks } from "@/db/schema";
+import { adminActor } from "@/services/auth/actor";
 import { refreshPhases } from "@/services/ingest/ingest";
 import type { TelegramPayload } from "../kernel";
+import { muteAlert } from "./alerts";
 import { detectProblems, runWatchdog } from "./watchdog";
 
 // Other tasks' modules (config, resolveMode, ingest, bot callbacks) are faked to their documented contracts.
@@ -453,6 +455,22 @@ describe("runWatchdog", () => {
 
     await runWatchdog(db(), new Date(NOW.getTime() + 60_000));
     expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(1);
+  });
+
+  it("a silent mute pressed via either phone of the vehicle silences the alert whichever phone it is attributed to", async () => {
+    const ws = await makeWorkspace(db());
+    const { person } = await makeAdmin(db(), ws.id);
+    const a = await makeAssignedDevice(db(), ws.id, { state: { lastPingAt: ago(20) } });
+    const b = await makeDevice(db(), ws.id, { label: "Backup", permissions: OK });
+    await db().insert(deviceAssignments).values({ workspaceId: ws.id, deviceId: b.id, vehicleId: a.vehicle.id });
+    schedules.set(a.device.id, activeSince(30));
+    schedules.set(b.id, activeSince(30));
+    const [problem] = await detectProblems(db(), ws.id, NOW);
+    const other = problem.deviceId === a.device.id ? b.id : a.device.id;
+    const actor = await adminActor(db(), { personId: person.id, workspaceId: ws.id, channel: "telegram" });
+    await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: other, kind: "silent" }, NOW);
+    await runWatchdog(db(), NOW);
+    expect(await db().select().from(outbox).where(eq(outbox.workspaceId, ws.id))).toHaveLength(0);
   });
 
   it("low battery: Mute alert 1h plus a separately named Pause tracking 1h", async () => {
