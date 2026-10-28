@@ -12,7 +12,7 @@
  * sentence is picked from a small pool by the minute of `now` (`pick`), so updates don't read like a machine
  * yet the same minute always gives the same words (deterministic, testable). The facts never vary.
  */
-import { type AnswerLine, istHHMM, type PublicSpot } from "@eci-shuttle/shared";
+import { type AnswerLine, istDate, istHHMM, type PublicSpot } from "@eci-shuttle/shared";
 import { spotIndexOf } from "@eci-shuttle/shared/geo/legOf";
 import { escapeHtml as esc } from "@/lib/telegram/html";
 import { renderAnswer } from "../bot/attendee";
@@ -29,6 +29,11 @@ export type ShuttleState =
   | { kind: "off_route" }
   /** a driver's break, since it started; until null = open-ended */
   | { kind: "break"; until: number | null; since: number }
+  /**
+   * silent in a stretch with no mobile signal, on its way to toSpotId; its place and time are an estimate
+   * (public/sight.ts predicted; the ETA comes from the stop's answer line). Not "lost": we know where it is going.
+   */
+  | { kind: "predicted"; toSpotId: string; fromSpotId: string | null; since: number; last: LastSeen }
   /** last seen inside a stop 5–15 min ago: it might still be there */
   | { kind: "parked"; spotId: string; last: LastSeen }
   /** out of sight for 5–30 min (sight.ts lost) */
@@ -211,6 +216,17 @@ function paragraph(ctx: Ctx, s: ShuttleNow, salt: number): string {
         ago(st.seenAgoMs),
       );
     }
+    case "predicted": {
+      const to = esc(name(st.toSpotId));
+      const l = lineFor(st.toSpotId);
+      const seen = istDate(st.last.at) === istDate(now) ? ` I last saw it at ${istHHMM(st.last.at)}.` : "";
+      return lines(
+        `🚐 <b>${who} is on its way to ${to}</b> through a stretch with no phone signal.`,
+        l?.minutes != null
+          ? `I can't see it, so this is an estimate: it should be there in about ${etaText(l, now)}.${seen}`
+          : `I can't see it, so I can't say when it will arrive.${seen}`,
+      );
+    }
     case "off_route":
       return lines(`🚐 ${who} is taking the scenic route right now. 🌴`, hint(ctx.focus, [s.serviceId], now, "around"));
     case "break": {
@@ -305,6 +321,9 @@ export function storyKey(shuttles: ShuttleNow[], focusSpotId: string | null): st
         return "seen";
       case "break":
         return "break";
+      // told once when it goes quiet in the dead zone; the prediction expiring is "unseen", the next fix "seen"
+      case "predicted":
+        return "estimated";
       default:
         return UNSEEN;
     }

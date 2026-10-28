@@ -17,6 +17,7 @@ import { escapeHtml } from "@/lib/telegram/html";
 import { adminButton, raiseAlert } from "../alerts/alerts";
 import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, readable, ServiceError } from "../kernel";
+import { isPredictedLine } from "../public/sight";
 import { publicStatus, spotAnswer } from "../public/status";
 import {
   type AlertVehicle,
@@ -236,7 +237,8 @@ export async function runPickups(
     const key = `${sub.workspaceId}:${spotId}`;
     if (!answers.has(key)) answers.set(key, spotAnswer(db, sub.workspaceId, spotId, now));
     const live = ((await answers.get(key)) ?? [])
-      .filter((l) => l.kind === "live" && l.minutes != null)
+      // an estimate through a no-signal stretch never says "here" or "on its way" (the first real fix will)
+      .filter((l) => l.kind === "live" && !isPredictedLine(l) && l.minutes != null)
       .sort((a, b) => (a.minutes ?? 0) - (b.minutes ?? 0));
     if (live[0]?.minutes === 0) {
       if (

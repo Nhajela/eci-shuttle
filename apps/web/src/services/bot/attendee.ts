@@ -7,6 +7,7 @@ import { spots } from "@/db/schema";
 import { escapeHtml } from "@/lib/telegram/html";
 import { attendeeActor } from "../auth/actor";
 import { findInWorkspace, isServiceError, type TelegramButton, userMessage } from "../kernel";
+import { isPredictedLine } from "../public/sight";
 import { publicStatus } from "../public/status";
 import { myPickup } from "../subscriptions/need";
 import { DEFAULT_LEAD_MIN, subscribeArrival, subscribeNotices, unsubscribe } from "../subscriptions/subscriptions";
@@ -104,7 +105,8 @@ function lineText(l: AnswerLine): string {
     if (l.minutes === 0) return "<b>here now</b> · live";
     const range =
       l.rangeLo != null && l.rangeHi != null && l.rangeLo !== l.rangeHi ? ` (${l.rangeLo}–${l.rangeHi})` : "";
-    return `here in <b>${l.approx ? "about " : ""}${l.minutes} min</b>${range} · live`;
+    // an estimate through a no-signal stretch says so instead of "live"
+    return `here in <b>${l.approx ? "about " : ""}${l.minutes} min</b>${range} · ${isPredictedLine(l) ? esc(l.phaseText) : "live"}`;
   }
   if (l.kind === "timetable" && l.nextAtLabel) return `next scheduled ${l.nextAtLabel} · ${esc(l.phaseText)}`;
   return esc(l.phaseText);

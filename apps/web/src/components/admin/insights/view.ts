@@ -1,6 +1,7 @@
 /** admin-insights: pure view helpers for the Insights page (range, heatmap grid, formatting). */
 import { type IsoDate, istDate } from "@eci-shuttle/shared";
 import type { Insights } from "@/services/learning/insights";
+import type { DeadZone } from "@/services/signal/dead-zones";
 
 type Param = string | string[] | undefined;
 type SlotCell = Insights["delayBySlot"][number];
@@ -43,4 +44,16 @@ export function fmtDuration(s: number | null): string {
   if (s < 60) return `${Math.round(s)} s`;
   const m = Math.round(s / 60);
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+/** One line per stretch without mobile signal (Insights): where, how long, and how it was found. */
+export function deadZoneLines(zones: DeadZone[], spotNames: Map<string, string>): string[] {
+  return zones.map((z) => {
+    const leg = `${spotNames.get(z.fromSpotId) ?? "Unknown spot"} → ${spotNames.get(z.toSpotId) ?? "Unknown spot"}`;
+    const length =
+      z.startAlongM != null && z.endAlongM != null ? ` for about ${Math.round(z.endAlongM - z.startAlongM)} m` : "";
+    const how = z.source === "manual" ? "marked by an admin" : "found from late phone uploads";
+    const typical = z.typicalLegS != null ? `, typically ${fmtDuration(z.typicalLegS)}` : "";
+    return `${leg}: no signal${length} (${how}${typical})`;
+  });
 }

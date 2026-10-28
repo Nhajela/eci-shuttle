@@ -192,6 +192,90 @@ describe("updateRoute", () => {
     expect(u.typicalLegS).toEqual([]);
   });
 
+  it("no-signal legs: new stops drop them all, a new path drops the detected metres only, a rename keeps them", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);
+    const legs = [
+      { legIndex: 0, source: "manual" as const },
+      { legIndex: 0, source: "detected" as const, startAlongM: 10, endAlongM: 300, trips: 4, days: 2 },
+    ];
+    await db().update(routes).set({ noSignalLegs: legs }).where(eq(routes.id, r.id));
+    const renamed = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, name: "R2" }, offline);
+    expect(renamed.noSignalLegs).toEqual(legs);
+    const path = [
+      { lat: 15.63, lng: 73.73 },
+      { lat: 15.64, lng: 73.72 },
+    ];
+    const repathed = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, path }, offline);
+    expect(repathed.noSignalLegs).toEqual([{ legIndex: 0, source: "manual" }]);
+    const respotted = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [riva.id, party.id] },
+      offline,
+    );
+    expect(respotted.noSignalLegs).toEqual([]);
+  });
+
+  it("new stops keep the manual no-signal marks whose stop pair is still a leg (remapped to its new index), and say how many went", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id, party.id] },
+      offline,
+    );
+    await db()
+      .update(routes)
+      .set({
+        noSignalLegs: [
+          { legIndex: 0, source: "manual" },
+          { legIndex: 1, source: "manual" },
+          { legIndex: 1, source: "detected", startAlongM: 10, endAlongM: 300, trips: 4, days: 2 },
+        ],
+      })
+      .where(eq(routes.id, r.id));
+    // Circle → Party is now the first leg; Riva → Circle is gone
+    const u = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [circle.id, party.id, riva.id] },
+      offline,
+    );
+    expect(u.noSignalLegs).toEqual([{ legIndex: 0, source: "manual" }]);
+    expect(u.droppedNoSignalLegs).toBe(1);
+    // nothing to drop: no count
+    const same = await updateRoute(db(), actor, { workspaceId: ws.id, routeId: r.id, name: "R3" }, offline);
+    expect(same.droppedNoSignalLegs).toBeUndefined();
+  });
+
+  it("a stop pair the route passes twice: the n-th mark follows the n-th pass", async () => {
+    const { ws, actor, riva, circle } = await setup();
+    const there = [riva.id, circle.id, riva.id, circle.id];
+    const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: there }, offline);
+    await db()
+      .update(routes)
+      .set({ noSignalLegs: [{ legIndex: 2, source: "manual" }] })
+      .where(eq(routes.id, r.id));
+    const longer = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [circle.id, ...there] },
+      offline,
+    );
+    // the second Riva → Circle moved from leg 2 to leg 3
+    expect(longer.noSignalLegs).toEqual([{ legIndex: 3, source: "manual" }]);
+    const shorter = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, version: longer.version, spotIds: [riva.id, circle.id, riva.id] },
+      offline,
+    );
+    // only one Riva → Circle pass left
+    expect(shorter.noSignalLegs).toEqual([]);
+    expect(shorter.droppedNoSignalLegs).toBe(1);
+  });
+
   it("a hand-edited path wins over regeneration and is marked manual, with spot indexes recomputed", async () => {
     const { ws, actor, riva, circle } = await setup();
     const r = await createRoute(db(), actor, { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id] }, offline);

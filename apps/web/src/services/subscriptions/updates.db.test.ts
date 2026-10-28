@@ -15,6 +15,7 @@ import {
   vehicleState,
   vehicles,
 } from "@/db/schema";
+import { predictedPhase } from "../public/sight";
 import { publicStatus } from "../public/status";
 import { unsubscribe } from "./subscriptions";
 import { runUpdates, setUpdateEvery, subscribeUpdates, UPDATE_EVERY_MS } from "./updates";
@@ -247,6 +248,41 @@ describe("runUpdates: what the shuttle is doing", () => {
     await put({ phase: "en_route", spotId: riva.id, nextSpotId: circle.id, since: later(5), lastPingAt: later(36) });
     expect(await runUpdates(db(), later(21), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
     expect(await runUpdates(db(), later(36), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+  });
+
+  it("silent in a no-signal stretch: 'on its way … no phone signal' with an estimate, told once, never 'here'", async () => {
+    const { ws, riva, circle, svc, actor, put } = await onDutyWorld();
+    await subscribeUpdates(db(), actor, { workspaceId: ws.id, spotId: circle.id }, NOW);
+    // last fix 7 min ago, leaving Riva; the status (which knows the dead zones) estimates it
+    await put({ phase: "offline", spotId: riva.id, nextSpotId: circle.id, since: later(-9), lastPingAt: later(-7) });
+    status.mockResolvedValue(
+      world([
+        {
+          spotId: circle.id,
+          name: "Circle",
+          lines: [
+            line({
+              serviceId: svc.id,
+              serviceName: "Shuttle",
+              vehicleName: "Shuttle 1",
+              minutes: 3,
+              approx: true,
+              rangeLo: 2,
+              rangeHi: 4,
+              phaseText: predictedPhase("Circle"),
+            }),
+          ],
+        },
+      ]),
+    );
+    expect(await runUpdates(db(), later(15), { workspaceId: ws.id })).toEqual({ sent: 1, ended: 0 });
+    const html = (await sent(ws.id))[0].payload as { html: string };
+    expect(html.html).toContain("on its way to Circle</b> through a stretch with no phone signal.");
+    expect(html.html).toContain("this is an estimate: it should be there in about <b>3 min</b>");
+    expect(html.html).not.toMatch(/here now|is at Circle|lost sight|late|behind/i);
+    // the same story is not repeated at the next minute; and there is no "it just left" GIF for a guess
+    expect(await runUpdates(db(), later(16), { workspaceId: ws.id })).toEqual({ sent: 0, ended: 0 });
+    expect((await sent(ws.id))[0].payload).not.toHaveProperty("animation");
   });
 
   it("on a break or out of sight: says so calmly instead of a stale position", async () => {

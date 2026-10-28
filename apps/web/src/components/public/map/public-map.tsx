@@ -8,7 +8,7 @@ import { cn } from "cn";
 import { Expand, LocateFixed, Minimize2 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
-import type { PublicMap as Data } from "@/services/public/positions";
+import { type ClientMap as Data, summaryCopy } from "./estimate";
 
 const LiveMap = dynamic(() => import("./live-map").then((m) => m.LiveMap), { ssr: false });
 
@@ -118,12 +118,8 @@ export function PublicMapCard({
         />
       )}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-2 p-2">
-        <span className="pointer-events-auto rounded-full bg-paper/85 px-3 py-1.5 text-xs font-semibold text-ink shadow-sm backdrop-blur">
-          {vans === 0
-            ? "No shuttle in sight right now"
-            : vans === 1
-              ? "1 shuttle on the road"
-              : `${vans} shuttles on the road`}
+        <span className="pointer-events-auto max-w-[calc(100%-7rem)] rounded-full bg-paper/85 px-3 py-1.5 text-xs font-semibold text-ink shadow-sm backdrop-blur">
+          {summaryCopy(data.vehicles)}
         </span>
         <div className="pointer-events-auto flex gap-1.5">
           <button

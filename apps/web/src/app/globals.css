@@ -362,6 +362,14 @@
 .eci-van-label.is-break {
   background: var(--marigold-deep);
 }
+/* an estimate (no signal): paper with a dashed ink outline, so it differs by shape and words, not colour alone */
+.eci-van-label.is-estimated {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  border: 1.5px dashed var(--ink);
+  padding: 3.5px 7.5px;
+  box-shadow: none;
+}
 .maplibregl-ctrl-attrib {
   font-size: 10px;
 }

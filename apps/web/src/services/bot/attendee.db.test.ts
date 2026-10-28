@@ -82,6 +82,22 @@ describe("renderAnswer", () => {
     expect(html).not.toMatch(/late|behind/i);
   });
 
+  it("an estimate through a no-signal stretch says so instead of 'live'", () => {
+    expect(
+      renderAnswer("Namaka", [
+        line({
+          approx: true,
+          minutes: 7,
+          rangeLo: 5,
+          rangeHi: 10,
+          phaseText: "on its way to Namaka · no signal on this stretch",
+        }),
+      ]),
+    ).toBe(
+      "<b>Namaka</b>\nTo Circle: here in <b>about 7 min</b> (5–10) · on its way to Namaka · no signal on this stretch",
+    );
+  });
+
   it("approx, here now, and no lines", () => {
     expect(renderAnswer("Riva", [line({ approx: true, rangeLo: 6, rangeHi: 6 })])).toContain(
       "here in <b>about 6 min</b> · live",
