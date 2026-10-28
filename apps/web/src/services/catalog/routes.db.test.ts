@@ -249,6 +249,33 @@ describe("updateRoute", () => {
     expect(same.droppedNoSignalLegs).toBeUndefined();
   });
 
+  it("'has signal' marks are carried by the remap like no-signal marks (and counted when dropped)", async () => {
+    const { ws, actor, riva, circle, party } = await setup();
+    const r = await createRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, name: "R", spotIds: [riva.id, circle.id, party.id] },
+      offline,
+    );
+    await db()
+      .update(routes)
+      .set({
+        noSignalLegs: [
+          { legIndex: 0, source: "manual", noSignal: false } as never,
+          { legIndex: 1, source: "manual", noSignal: false } as never,
+        ],
+      })
+      .where(eq(routes.id, r.id));
+    const u = await updateRoute(
+      db(),
+      actor,
+      { workspaceId: ws.id, routeId: r.id, spotIds: [circle.id, party.id, riva.id] },
+      offline,
+    );
+    expect(u.noSignalLegs).toEqual([{ legIndex: 0, source: "manual", noSignal: false }]);
+    expect(u.droppedNoSignalLegs).toBe(1);
+  });
+
   it("a stop pair the route passes twice: the n-th mark follows the n-th pass", async () => {
     const { ws, actor, riva, circle } = await setup();
     const there = [riva.id, circle.id, riva.id, circle.id];

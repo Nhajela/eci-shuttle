@@ -2,7 +2,7 @@
  * Nightly dead-zone detection (called from the learning job): projects the last WINDOW_DAYS of Android pings of
  * each trip onto its route leg, runs the pure detection (./detect) and stores the result as `detected` entries in
  * routes.no_signal_legs. Derived data like leg_stats: no audit row, no version bump (an open MCP proposal stays valid).
- * Manual entries are never touched.
+ * Manual entries are never touched; legs with an admin's "has signal" override get no detected stretch.
  */
 import { isDeepStrictEqual } from "node:util";
 import { type LatLng, pathLengthM, projectOntoPath } from "@eci-shuttle/shared";
@@ -10,6 +10,7 @@ import { and, between, eq, isNotNull, isNull, notInArray, or } from "drizzle-orm
 import type { Db } from "@/db";
 import { devices, type NoSignalLeg, pings, routes, trips } from "@/db/schema";
 import type { Route } from "@/db/types";
+import { isHasSignalMark } from "./dead-zones";
 import { type DetectLeg, type DetectPing, detectStretches } from "./detect";
 
 /** how far back pings are looked at (same window as the leg stats) */
@@ -125,6 +126,7 @@ export async function recomputeDeadZones(db: Db, workspaceId: string, now: Date)
         });
       }
     }
+    const hasSignal = new Set(route.noSignalLegs.filter(isHasSignalMark).map((e) => e.legIndex));
     const found: NoSignalLeg[] = geo
       ? detectStretches(
           evidence,
@@ -138,15 +140,18 @@ export async function recomputeDeadZones(db: Db, workspaceId: string, now: Date)
           days: s.days,
         }))
       : [];
-    total += found.length;
+    total += found.filter((e) => !hasSignal.has(e.legIndex)).length;
 
     // re-read under a row lock: an admin toggling a manual entry meanwhile must not be lost
     await db.transaction(async (tx) => {
       const [cur] = await tx.select().from(routes).where(eq(routes.id, route.id)).for("update");
       if (!cur) return;
-      const next = [...cur.noSignalLegs.filter((e) => e.source === "manual"), ...found].sort(
-        (a, b) => a.legIndex - b.legIndex || (a.startAlongM ?? 0) - (b.startAlongM ?? 0),
-      );
+      // an admin's "has signal" override on a leg: its detected stretches are not stored again
+      const clear = new Set(cur.noSignalLegs.filter(isHasSignalMark).map((e) => e.legIndex));
+      const next = [
+        ...cur.noSignalLegs.filter((e) => e.source === "manual"),
+        ...found.filter((e) => !clear.has(e.legIndex)),
+      ].sort((a, b) => a.legIndex - b.legIndex || (a.startAlongM ?? 0) - (b.startAlongM ?? 0));
       if (!sameLegs(cur.noSignalLegs, next))
         await tx.update(routes).set({ noSignalLegs: next }).where(eq(routes.id, route.id));
     });

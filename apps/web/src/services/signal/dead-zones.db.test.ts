@@ -5,13 +5,13 @@ import { describe, expect, it } from "vitest";
 import type { NoSignalLeg } from "@/db/schema";
 import { auditLog, routes, spots } from "@/db/schema";
 import { systemActor } from "@/services/kernel";
-import { loadDeadZones, setLegNoSignal } from "./dead-zones";
+import { loadDeadZones, type ManualLeg, setLegNoSignal } from "./dead-zones";
 
 const db = () => testDb();
 const NOW = new Date("2026-10-28T10:00:00Z");
 
 /** Nanu → Riva → Circle → Namaka → Circle → Riva → Nanu: 6 legs (0..5) */
-async function world(noSignalLegs: NoSignalLeg[] = [], typicalLegS: (number | null)[] = []) {
+async function world(noSignalLegs: (NoSignalLeg | ManualLeg)[] = [], typicalLegS: (number | null)[] = []) {
   const ws = await makeWorkspace(db());
   const names = ["Nanu", "Riva", "Circle", "Namaka"];
   const rows = await db()
@@ -99,9 +99,9 @@ describe("loadDeadZones", () => {
   });
 });
 
-describe("setLegNoSignal", () => {
-  const audits = (routeId: string) => db().select().from(auditLog).where(eq(auditLog.entityId, routeId));
+const audits = (routeId: string) => db().select().from(auditLog).where(eq(auditLog.entityId, routeId));
 
+describe("setLegNoSignal", () => {
   it("an admin marks a leg: stored, version bumped, exactly one audit row", async () => {
     const w = await world();
     const { actor } = await makeAdmin(db(), w.ws.id, "admin");
@@ -181,5 +181,95 @@ describe("setLegNoSignal", () => {
       NOW,
     );
     expect(r.noSignalLegs).toHaveLength(1);
+  });
+});
+
+const HAS_SIGNAL = (legIndex: number): ManualLeg => ({ legIndex, source: "manual", noSignal: false });
+
+describe("'has signal' override", () => {
+  it("suppresses detected stretches of that leg only; a no-signal mark on another leg still shows", async () => {
+    const w = await world([
+      { legIndex: 2, source: "detected", startAlongM: 100, endAlongM: 300, trips: 4, days: 2 },
+      HAS_SIGNAL(2),
+      { legIndex: 3, source: "detected", startAlongM: 900, endAlongM: 1100, trips: 4, days: 2 },
+      { legIndex: 4, source: "manual" },
+    ]);
+    const z = await loadDeadZones(db(), w.ws.id);
+    expect(z.map((x) => [x.legIndex, x.source])).toEqual([
+      [3, "detected"],
+      [4, "manual"],
+    ]);
+  });
+
+  it("is still one cheap query", async () => {
+    const w = await world([HAS_SIGNAL(0)]);
+    let n = 0;
+    const counted = new Proxy(db(), {
+      get(t, k, r) {
+        if (k === "select") n++;
+        return Reflect.get(t, k, r);
+      },
+    });
+    expect(await loadDeadZones(counted, w.ws.id)).toEqual([]);
+    expect(n).toBe(1);
+  });
+
+  it("setLegNoSignal mode has_signal: stores the marker, replaces a no-signal mark, one audit row each", async () => {
+    const w = await world([{ legIndex: 2, source: "detected", startAlongM: 1, endAlongM: 200, trips: 3, days: 2 }]);
+    const { actor } = await makeAdmin(db(), w.ws.id, "admin");
+    const input = { workspaceId: w.ws.id, routeId: w.route.id, legIndex: 2 };
+    const marked = await setLegNoSignal(db(), actor, { ...input, mode: "no_signal" }, NOW);
+    expect(marked.noSignalLegs.filter((e) => e.source === "manual")).toEqual([{ legIndex: 2, source: "manual" }]);
+    const clear = await setLegNoSignal(db(), actor, { ...input, mode: "has_signal" }, NOW);
+    expect(clear.noSignalLegs).toEqual([
+      HAS_SIGNAL(2),
+      { legIndex: 2, source: "detected", startAlongM: 1, endAlongM: 200, trips: 3, days: 2 },
+    ]);
+    expect(clear.version).toBe(w.route.version + 2);
+    expect(await loadDeadZones(db(), w.ws.id)).toEqual([]);
+    expect(await audits(w.route.id)).toHaveLength(2);
+    // idempotent: still one manual entry
+    const again = await setLegNoSignal(db(), actor, { ...input, mode: "has_signal" }, NOW);
+    expect(again.noSignalLegs.filter((e) => e.source === "manual")).toHaveLength(1);
+  });
+
+  it("mode auto removes the manual entry (either kind) and the detected stretch shows again", async () => {
+    const w = await world([
+      { legIndex: 2, source: "detected", startAlongM: 1, endAlongM: 200, trips: 3, days: 2 },
+      HAS_SIGNAL(2),
+    ]);
+    const { actor } = await makeAdmin(db(), w.ws.id, "admin");
+    const r = await setLegNoSignal(
+      db(),
+      actor,
+      { workspaceId: w.ws.id, routeId: w.route.id, legIndex: 2, mode: "auto" },
+      NOW,
+    );
+    expect(r.noSignalLegs.map((e) => e.source)).toEqual(["detected"]);
+    expect(await loadDeadZones(db(), w.ws.id)).toHaveLength(1);
+  });
+
+  it("legacy noSignal true/false still means no_signal / auto; missing both is INVALID", async () => {
+    const w = await world();
+    const { actor } = await makeAdmin(db(), w.ws.id, "admin");
+    const base = { workspaceId: w.ws.id, routeId: w.route.id, legIndex: 1 };
+    const on = await setLegNoSignal(db(), actor, { ...base, noSignal: true }, NOW);
+    expect(on.noSignalLegs).toEqual([{ legIndex: 1, source: "manual" }]);
+    const off = await setLegNoSignal(db(), actor, { ...base, noSignal: false }, NOW);
+    expect(off.noSignalLegs).toEqual([]);
+    await expect(setLegNoSignal(db(), actor, base, NOW)).rejects.toMatchObject({ code: "INVALID" });
+  });
+
+  it("is admin-only: ops, viewer and other workspaces are FORBIDDEN, nothing written", async () => {
+    const w = await world();
+    const other = await makeWorkspace(db());
+    const input = { workspaceId: w.ws.id, routeId: w.route.id, legIndex: 2, mode: "has_signal" as const };
+    for (const actor of [
+      (await makeAdmin(db(), w.ws.id, "ops")).actor,
+      (await makeAdmin(db(), w.ws.id, "viewer")).actor,
+      (await makeAdmin(db(), other.id, "admin")).actor,
+    ])
+      await expect(setLegNoSignal(db(), actor, input, NOW)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await audits(w.route.id)).toHaveLength(0);
   });
 });

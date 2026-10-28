@@ -70,7 +70,10 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
                             state={l.noSignal}
                           />
                         ) : (
-                          l.noSignal && <p className="text-xs text-muted-foreground">No signal on this stretch</p>
+                          l.noSignal &&
+                          l.noSignal !== "cleared" && (
+                            <p className="text-xs text-muted-foreground">No signal on this stretch</p>
+                          )
                         )}
                       </li>
                     ))}

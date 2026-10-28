@@ -81,19 +81,31 @@ export async function regeneratePathAction(_: ActionState, fd: FormData): Promis
   );
 }
 
-/** Admin only: mark (noSignal=1) or unmark (noSignal=0) a whole leg as "no signal on this stretch". */
+/**
+ * Admin only: set a leg's signal state. `mode` = auto | no_signal | has_signal (three-state control); the older
+ * `noSignal` 1/0 form still works (1 = no_signal, 0 = auto).
+ */
 export async function setLegNoSignalAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const raw = str(fd, "mode");
+  const mode = raw === "auto" || raw === "no_signal" || raw === "has_signal" ? raw : undefined;
   const noSignal = str(fd, "noSignal") === "1";
+  const effective = mode ?? (noSignal ? "no_signal" : "auto");
   return run(
     fd,
-    noSignal ? "Marked as no signal." : "Signal restored.",
+    effective === "no_signal"
+      ? "Marked as no signal."
+      : effective === "has_signal"
+        ? "Marked as having signal."
+        : mode
+          ? "Back to automatic."
+          : "Signal restored.",
     (actor, workspaceId) =>
       setLegNoSignal(db(), actor, {
         workspaceId,
         routeId: str(fd, "routeId"),
         version: num(fd, "version"),
         legIndex: Number(fd.get("legIndex")),
-        noSignal,
+        ...(mode ? { mode } : { noSignal }),
       }),
     "admin",
   );

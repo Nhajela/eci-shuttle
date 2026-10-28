@@ -147,6 +147,11 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
     typicalLegS: 600,
     ...over,
   });
+  /** a straight north-south line whose stops sit `alongs` metres from its start: the geometry legOf reads */
+  const line = (along: number[]) => ({
+    spotPathIdx: along.map((_, i) => i),
+    path: along.map((m) => ({ lat: 15.6 + m / 111_195, lng: 73.7 })),
+  });
   const ctx = (
     zones: DeadZone[] = [zone()],
     legS: (number | null)[] = [],
@@ -155,6 +160,7 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
     routeId: "r1",
     spotIds: ids,
     spotAlongM: alongs,
+    ...line(alongs),
     legS,
     zones,
     // every leg's sub-path runs east-west through the default test position (15.67, 73.71)
@@ -322,11 +328,26 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
     const twice = ctx([zone({ legIndex: 2, fromSpotId: RIVA, toSpotId: CIRCLE })], [], {
       spotIds: [RIVA, CIRCLE, RIVA, CIRCLE],
       spotAlongM: [0, 1000, 2000, 3000],
+      ...line([0, 1000, 2000, 3000]),
     });
     const second = silent(6, { spotId: RIVA, nextSpotId: CIRCLE, alongM: 2100 });
     expect(predicted(sight(second, NOW, twice)).estimate.legIndex).toBe(2);
     const first = silent(6, { spotId: RIVA, nextSpotId: CIRCLE, alongM: 100 });
     expect(sight(first, NOW, twice).kind).toBe("lost");
+  });
+
+  it("a repeated pair with no stop-it-left on record is told apart by where the vehicle is, and the heading must match", () => {
+    const twice = ctx([zone({ legIndex: 2, fromSpotId: RIVA, toSpotId: CIRCLE })], [], {
+      spotIds: [RIVA, CIRCLE, RIVA, CIRCLE],
+      spotAlongM: [0, 1000, 2000, 3000],
+      ...line([0, 1000, 2000, 3000]),
+    });
+    expect(
+      predicted(sight(silent(6, { spotId: null, nextSpotId: CIRCLE, alongM: 2100 }), NOW, twice)).estimate.legIndex,
+    ).toBe(2);
+    expect(sight(silent(6, { spotId: null, nextSpotId: CIRCLE, alongM: 100 }), NOW, twice).kind).toBe("lost");
+    // heading for a stop the route does not go to next from the stop it left: no leg, no guess
+    expect(sight(silent(6, { spotId: RIVA, nextSpotId: NAMAKA, alongM: 2100 }), NOW, twice).kind).toBe("lost");
   });
 
   it("the last fix must be on the leg: close to its path (60 m), and past the stop it left", () => {
