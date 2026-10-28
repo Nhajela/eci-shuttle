@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { requireAdmin } from "@/lib/session";
 import { createRoute, updateRoute } from "@/services/catalog/routes";
 import { type Actor, isServiceError, userMessage } from "@/services/kernel";
+import { setLegNoSignal } from "@/services/signal/dead-zones";
 
 export type ActionState = { ok: boolean; message: string } | null;
 
@@ -17,9 +18,10 @@ async function run(
   fd: FormData,
   done: string,
   fn: (actor: Actor, workspaceId: string) => Promise<unknown>,
+  minRole: "ops" | "admin" = "ops",
 ): Promise<ActionState> {
   try {
-    const { actor, workspace } = await requireAdmin({ w: str(fd, "w") || null, minRole: "ops" });
+    const { actor, workspace } = await requireAdmin({ w: str(fd, "w") || null, minRole });
     await fn(actor, workspace.id);
   } catch (e) {
     unstable_rethrow(e); // requireAdmin's redirects
@@ -67,5 +69,23 @@ export async function regeneratePathAction(_: ActionState, fd: FormData): Promis
       version: num(fd, "version"),
       regeneratePath: true,
     }),
+  );
+}
+
+/** Admin only: mark (noSignal=1) or unmark (noSignal=0) a whole leg as "no signal on this stretch". */
+export async function setLegNoSignalAction(_: ActionState, fd: FormData): Promise<ActionState> {
+  const noSignal = str(fd, "noSignal") === "1";
+  return run(
+    fd,
+    noSignal ? "Marked as no signal." : "Signal restored.",
+    (actor, workspaceId) =>
+      setLegNoSignal(db(), actor, {
+        workspaceId,
+        routeId: str(fd, "routeId"),
+        version: num(fd, "version"),
+        legIndex: Number(fd.get("legIndex")),
+        noSignal,
+      }),
+    "admin",
   );
 }
