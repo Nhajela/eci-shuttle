@@ -44,7 +44,15 @@ import { activeNotices } from "../notices/notices";
 import { loadDeadZones } from "../signal/dead-zones";
 import { predictRoute } from "./predict";
 import { addDays, serviceDaysInPlay } from "./service-days";
-import { FRESH_MS, type LastSeen, lastSeenText, type PredictedFix, type PredictRoute, sight } from "./sight";
+import {
+  FRESH_MS,
+  type LastSeen,
+  lastSeenText,
+  type PredictedFix,
+  type PredictRoute,
+  predictedPhase,
+  sight,
+} from "./sight";
 
 const MATCH_WINDOW_MS = 25 * 60_000;
 const MIN_SAMPLES = 5;
@@ -58,16 +66,6 @@ export const CANT_SEE = "can't see it right now";
 /** The freshest shuttle was last seen inside a stop 5–15 min ago: "last seen at Riva at 19:12 · may still be there". */
 export const MAY_STILL_BE_THERE = "may still be there";
 
-/**
- * A shuttle in a stretch with no mobile signal that we are estimating (sight.ts "predicted"): its live line ends with
- * this, "on its way to Namaka · no signal on this stretch". Consumers that must not act on a guess (arrival alerts,
- * pickup DMs) recognise the line by it: see isPredictedLine.
- */
-export const NO_SIGNAL_STRETCH = "no signal on this stretch";
-export const predictedPhase = (toName: string) => `on its way to ${toName} · ${NO_SIGNAL_STRETCH}`;
-/** A live line that is an estimate through a no-signal stretch (never "here", never an arrival alert). */
-export const isPredictedLine = (l: { kind: string; phaseText: string }) =>
-  l.kind === "live" && l.phaseText.endsWith(NO_SIGNAL_STRETCH);
 /** Range of a predicted ETA, as multiples of the estimate of the rest of the leg (p20 / p80 stand-ins). */
 const PREDICT_LO = 0.75;
 const PREDICT_HI = 1.5;

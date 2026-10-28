@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { routes, services, serviceVehicles, spots, vehicleBreaks, vehicleState, vehicles } from "@/db/schema";
 import type { DeadZone } from "../signal/dead-zones";
 import { PublicMap, publicPositions } from "./positions";
-import { CANT_SEE, NO_SIGNAL_STRETCH, publicStatus } from "./status";
+import { NO_SIGNAL_STRETCH } from "./sight";
+import { CANT_SEE, publicStatus } from "./status";
 
 const zonesNow = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("../signal/dead-zones", () => ({ loadDeadZones: vi.fn(async () => zonesNow.list) }));

@@ -75,6 +75,16 @@ export type PredictedFix = {
   zone: DeadZone;
 };
 
+/**
+ * A shuttle in a stretch with no mobile signal that we are estimating (sight.ts "predicted"): its live line ends with
+ * this, "on its way to Namaka · no signal on this stretch". Consumers that must not act on a guess (arrival alerts,
+ * pickup DMs) recognise the line by it: see isPredictedLine.
+ */
+export const NO_SIGNAL_STRETCH = "no signal on this stretch";
+export const predictedPhase = (toName: string) => `on its way to ${toName} · ${NO_SIGNAL_STRETCH}`;
+/** A live line that is an estimate through a no-signal stretch (never "here", never an arrival alert). */
+export const isPredictedLine = (l: { kind: string; phaseText: string }) =>
+  l.kind === "live" && l.phaseText.endsWith(NO_SIGNAL_STRETCH);
 /** Where a vehicle was at its last ping: inside a stop, or between two. */
 export type LastSeen = { at: number; atSpotId: string | null; fromSpotId: string | null; toSpotId: string | null };
 

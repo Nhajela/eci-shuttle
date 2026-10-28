@@ -448,3 +448,60 @@ describe("storyKey: what an update is about, so the job can tell whether anythin
     expect(allUnseen(storyKey([lost(), moving], null))).toBe(false);
   });
 });
+
+describe("storyText: a shuttle estimated through a stretch with no signal", () => {
+  const predictedLine = (minutes: number) =>
+    live(minutes, {
+      approx: true,
+      rangeLo: minutes,
+      rangeHi: minutes + 3,
+      phaseText: "on its way to Circle · no signal on this stretch",
+    });
+  const state: ShuttleNow["state"] = {
+    kind: "predicted",
+    toSpotId: CIRCLE,
+    fromSpotId: RIVA,
+    since: NOW - min(8),
+    last: { at: NOW - min(6), atSpotId: null, fromSpotId: RIVA, toSpotId: CIRCLE },
+  };
+
+  it("says it is on its way through a stretch with no signal, that this is an estimate, and when it was last seen", () => {
+    const spots = [
+      spot(RIVA, "Riva", [live(30)], RIVA_TIMES),
+      spot(CIRCLE, "Circle", [predictedLine(4)], CIRCLE_TIMES),
+    ];
+    const text = storyText({ shuttles: [shuttle(state)], spots, focusSpotId: CIRCLE, now: NOW });
+    expect(text).toBe(
+      [
+        "🚐 <b>The shuttle is on its way to Circle</b> through a stretch with no phone signal.",
+        "I can't see it, so this is an estimate: it should be there in about <b>4 min</b> (around 13:24). I last saw it at 13:14.",
+      ].join("\n"),
+    );
+    expect(text).not.toMatch(/late|behind|lost sight/i);
+    // no promise to message when it moves, no scheduled time for a moving shuttle
+    expect(text).not.toMatch(MOVE_PROMISE);
+    expect(text).not.toContain("As per the schedule");
+  });
+
+  it("a wide estimate is a range", () => {
+    const spots = [
+      spot(CIRCLE, "Circle", [
+        live(4, {
+          rangeLo: 3,
+          rangeHi: 9,
+          approx: true,
+          phaseText: "on its way to Circle · no signal on this stretch",
+        }),
+      ]),
+    ];
+    expect(storyText({ shuttles: [shuttle(state)], spots, focusSpotId: CIRCLE, now: NOW })).toContain(
+      "about <b>3–9 min</b>",
+    );
+  });
+
+  it("is news once (key 'estimated'), is not 'unseen', and never counts as a departure", () => {
+    expect(storyKey([shuttle(state)], null)).toBe("Shuttle%201=estimated");
+    expect(allUnseen(storyKey([shuttle(state)], null))).toBe(false);
+    expect(departedSince([shuttle(state)], 0)).toBe(false);
+  });
+});

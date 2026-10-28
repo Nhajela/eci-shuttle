@@ -23,7 +23,7 @@ import { encodeCallback } from "../bot/callbacks";
 import { type Gif, gifUrl } from "../bot/gifs";
 import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, ServiceError, type TelegramButton } from "../kernel";
-import { FRESH_MS, sight } from "../public/sight";
+import { FRESH_MS, isPredictedLine, sight } from "../public/sight";
 import { publicStatus } from "../public/status";
 import { allUnseen, departedSince, type ShuttleNow, storyKey, storyText } from "./update-text";
 
@@ -270,6 +270,11 @@ export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus,
       ),
     );
   const breaks = await activeBreaks(db, workspaceId, now);
+  // vehicles the public answer is estimating through a no-signal stretch (the status knows the dead zones)
+  const estimated = (r: { serviceId: string; vehicle: { name: string } }) =>
+    st.spots.some((s) =>
+      s.answers.some((l) => isPredictedLine(l) && l.serviceId === r.serviceId && l.vehicleName === r.vehicle.name),
+    );
   const paused = (name: string) =>
     st.spots.some((s) => s.answers.some((l) => l.vehicleName === name && l.phaseText === "stopped on the way"));
   const out: ShuttleNow[] = [];
@@ -285,6 +290,19 @@ export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus,
     const seenAgoMs = v.kind === "live" && v.ageMs > FRESH_MS ? v.ageMs : undefined;
     let state: ShuttleNow["state"];
     if (brk) state = { kind: "break", until: breakEnd(brk)?.getTime() ?? null, since: brk.startsAt.getTime() };
+    else if (v.kind !== "live" && s?.nextSpotId && s.phase !== "at_spot" && estimated(r))
+      state = {
+        kind: "predicted",
+        toSpotId: s.nextSpotId,
+        fromSpotId: s.spotId,
+        since: s.since.getTime(),
+        last: (v.kind === "hidden" || v.kind === "lost" ? v.last : null) ?? {
+          at: (s.lastPingAt as Date).getTime(),
+          atSpotId: null,
+          fromSpotId: s.spotId,
+          toSpotId: s.nextSpotId,
+        },
+      };
     else if (v.kind === "hidden") state = { kind: "hidden", last: v.last };
     else if (v.kind === "parked") state = { kind: "parked", spotId: v.spotId, last: v.last };
     else if (!live) state = { kind: "no_signal", last: v.kind === "lost" ? v.last : null };
