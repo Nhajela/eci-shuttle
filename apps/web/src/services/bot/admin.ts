@@ -21,7 +21,7 @@ import { devices, directives, people, services } from "@/db/schema";
 import type { Workspace } from "@/db/types";
 import { origin } from "@/lib/env";
 import { escapeHtml } from "@/lib/telegram/html";
-import { MUTE_ALL, muteAlert } from "@/services/alerts/alerts";
+import { MUTE_ALL, muteAlert, muteEntityFor } from "@/services/alerts/alerts";
 import { detectProblems } from "@/services/alerts/watchdog";
 import { adminActor, resolveWorkspace } from "@/services/auth/actor";
 import { setRole } from "@/services/catalog/people";
@@ -472,7 +472,9 @@ async function onPhoneButton(ctx: BotContext, cb: Callback, q: TgCallbackQuery):
       // "sil1h" is the old button on alerts already sent: it only mutes now (every kind of that phone), never pauses
       const kind = cb.action === "sil1h" ? MUTE_ALL : (cb.args[1] ?? MUTE_ALL);
       if (kind !== MUTE_ALL && !MUTABLE_KINDS.has(kind)) return expired(q);
-      return locked(ctx, `mute:${dev.id}:${kind}:${actor.id}`, async (db) => {
+      // lock on what the mute is keyed to (the vehicle for silent / off_route), so two phones of one vehicle can't race
+      const entity = await muteEntityFor(ctx.db, dev.workspaceId, dev.id, kind);
+      return locked(ctx, `mute:${entity}:${actor.id}`, async (db) => {
         const r = await muteAlert(db, actor, { ...input, kind }, ctx.now);
         const what = kind === MUTE_ALL ? "alerts" : `${KIND_WORDS[kind] ?? kind} alerts`;
         return toast(

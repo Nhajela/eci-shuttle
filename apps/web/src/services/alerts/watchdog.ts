@@ -266,7 +266,7 @@ async function alertProblems(db: Db, id: string, found: Problem[], now: Date): P
         key: `${p.kind}:${subject}:${p.since.getTime()}`,
         html: `<b>${escapeHtml(p.message)}</b>\nSince ${istHHMM(p.since)}`,
         buttons,
-        ...(p.deviceId && { mute: { kind: p.kind, deviceId: p.deviceId } }),
+        ...(p.deviceId && { mute: { kind: p.kind, deviceId: p.deviceId, vehicleId: p.vehicleId } }),
       },
       now,
     );

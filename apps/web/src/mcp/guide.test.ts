@@ -18,6 +18,12 @@ describe("shuttle_guide", () => {
     expect(guideFor("phones")).toContain("only while idle");
   });
 
+  it("kill: only an app phone waits for the driver's Resume; a Telegram or Traccar phone has no app, an admin resumes it", () => {
+    const text = guideFor("phones");
+    expect(text).toContain("has no app");
+    expect(text).toMatch(/Telegram or Traccar phone[^.]*has no app[^.]*admin[^.]*resume/i);
+  });
+
   it("explains ops tracking hours (workspace.update), admin only", () => {
     expect(changeKindsReference()).toContain("- `workspace.update` (admin): opsHoursStart*, opsHoursEnd*");
     for (const topic of ["changes", "phones", "roles"] as const)
