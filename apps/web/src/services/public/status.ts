@@ -22,6 +22,7 @@ import {
   type ServiceExceptionDef,
   withPlannedDwell,
 } from "@eci-shuttle/shared";
+import { legOf, spotIndexOf } from "@eci-shuttle/shared/geo/legOf";
 import { and, eq, gt, gte, inArray, isNull, lte } from "drizzle-orm";
 import type { Db } from "@/db";
 import {
@@ -241,8 +242,11 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
     for (const svcId of [...new Set(serving.map((r) => r.svc.id))]) {
       const rs = serving.filter((r) => r.svc.id === svcId);
       const first = rs[0] as Running;
-      const k = first.route.spotIds.indexOf(spot.id);
-      const times = rs.flatMap((r) => r.departures.map((at) => at + (r.offsetMs[k] ?? 0))).sort((a, b) => a - b);
+      // a route that passes the stop twice (out and back) serves it at both passes
+      const passes = departIds(first.route).flatMap((id, i) => (id === spot.id ? [i] : []));
+      const times = rs
+        .flatMap((r) => r.departures.flatMap((at) => passes.map((k) => at + (r.offsetMs[k] ?? 0))))
+        .sort((a, b) => a - b);
       for (const at of times)
         rows.push({
           serviceId: svcId,
@@ -577,16 +581,20 @@ function answerFor(
   };
 }
 
-/** Where the vehicle is on this service's route, for etaToSpot. */
+/**
+ * Where the vehicle is on this service's route, for etaToSpot. A stop the route passes twice is told apart by the
+ * stored (spot, next spot) pair and alongM, never by the first occurrence: on the way back from Namaka, "next =
+ * Circle" is the leg Namaka → Circle, not Riva → Circle.
+ */
 function etaVehicle(r: Running, s: VehicleState): EtaVehicle | null {
-  const ids = r.route.spotIds;
+  const route = r.route;
   if (s.phase === "at_spot") {
-    const k = s.spotId ? ids.indexOf(s.spotId) : -1;
+    const k = s.spotId ? spotIndexOf(route, s.spotId, { nextSpotId: s.nextSpotId ?? undefined, alongM: s.alongM }) : -1;
     return k < 0 ? null : { kind: "at_spot", spotIndex: k, since: s.since.getTime() };
   }
-  const i = s.nextSpotId ? ids.indexOf(s.nextSpotId, 1) - 1 : -1;
+  const i = s.nextSpotId ? legOf(route, { spotId: s.spotId, nextSpotId: s.nextSpotId, alongM: s.alongM }) : -1;
   if (i < 0) return null;
-  const pIdx = r.route.spotPathIdx;
-  const legStartM = pIdx.length === ids.length ? pathLengthM(r.route.path.slice(0, (pIdx[i] ?? 0) + 1)) : 0;
+  const pIdx = route.spotPathIdx;
+  const legStartM = pIdx.length === route.spotIds.length ? pathLengthM(route.path.slice(0, (pIdx[i] ?? 0) + 1)) : 0;
   return { kind: "en_route", legIndex: i, alongLegM: Math.max(0, (s.alongM ?? 0) - legStartM) };
 }
