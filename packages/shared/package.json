@@ -8,6 +8,7 @@
     "./contracts": "./src/contracts/index.ts",
     "./schedule": "./src/schedule/index.ts",
     "./geo": "./src/geo/index.ts",
+    "./geo/legOf": "./src/geo/legOf.ts",
     "./time": "./src/time/index.ts"
   },
   "scripts": {

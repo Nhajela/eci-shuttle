@@ -308,7 +308,13 @@ export async function shuttlesNow(db: Db, workspaceId: string, st: PublicStatus,
     else if (!live) state = { kind: "no_signal", last: v.kind === "lost" ? v.last : null };
     else if (live.offRoute) state = { kind: "off_route" };
     else if (live.phase === "at_spot" && live.spotId)
-      state = { kind: "waiting", spotId: live.spotId, since: live.since.getTime(), seenAgoMs };
+      state = {
+        kind: "waiting",
+        spotId: live.spotId,
+        nextSpotId: live.nextSpotId,
+        since: live.since.getTime(),
+        seenAgoMs,
+      };
     else if (live.phase === "en_route" && live.nextSpotId)
       state = {
         kind: "moving",

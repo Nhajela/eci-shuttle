@@ -28,6 +28,7 @@ import {
   type VehicleWindow,
   type Weekday,
 } from "@eci-shuttle/shared";
+import { spotCandidates } from "@eci-shuttle/shared/geo/legOf";
 import { and, asc, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import type { Db } from "@/db";
 import {
@@ -286,7 +287,7 @@ async function processVehicle(
           .insert(trips)
           .values({ workspaceId, vehicleId, serviceId, routeId: svc?.routeId, fromSpotId: e.spotId, departedAt: at })
           .returning();
-        if (svc) await matchDay(tx, svc, sched, e.spotId, e.at, now);
+        if (svc) await matchDay(tx, svc, sched, vehicleId, e.spotId, e.at, now);
       }
     }
   }
@@ -302,7 +303,7 @@ async function processVehicle(
   const phase: Phase = !serviceId ? "off_duty" : stale ? "offline" : atSpot ? "at_spot" : "en_route";
   const live =
     route && serviceId && spotId && phase !== "offline"
-      ? await routeProgress(tx, route, serviceId, spotId, atSpot, gf.enteredAt ?? lastAt, lastGood, now)
+      ? await routeProgress(tx, route, serviceId, vehicleId, spotId, atSpot, gf.enteredAt ?? lastAt, lastGood, now)
       : null;
   const since =
     phase === "offline"
@@ -393,28 +394,98 @@ async function offRouteStart(tx: Db, vehicleId: string, path: LatLng[], lastAt: 
   return run.current > OFF_ROUTE_MS ? run.start : null;
 }
 
+/** How many of the vehicle's latest dwells the route-position lookup reads (two laps of a 7-stop route). */
+const RECENT_VISITS = 14;
+
+/**
+ * The stops the vehicle visited most recently, oldest first, consecutive repeats collapsed. This is the dwell log
+ * (geofence events), so it is right even when vehicle_state was written by older code. Used to tell the two visits
+ * to a stop apart on a route that repeats it.
+ */
+async function recentVisits(db: Db, vehicleId: string): Promise<string[]> {
+  const rows = await db
+    .select({ spotId: dwells.spotId })
+    .from(dwells)
+    .where(eq(dwells.vehicleId, vehicleId))
+    .orderBy(desc(dwells.arrivedAt))
+    .limit(RECENT_VISITS);
+  const out: string[] = [];
+  for (const r of rows.reverse()) if (out.at(-1) !== r.spotId) out.push(r.spotId);
+  return out;
+}
+
+/**
+ * Which occurrence of `spotId` on the route the vehicle is at (or has left): `indexOf` would always say the first,
+ * putting every van on the way back of an out-and-back route onto the way out. The dwell log decides; if that
+ * leaves several (no history yet) an en-route vehicle goes to the leg its last fix lies on, else the first.
+ * Returns the index into route.spotIds, or -1 when the spot is not on the route.
+ */
+async function occurrenceOf(
+  db: Db,
+  route: Route,
+  vehicleId: string,
+  spotId: string,
+  atSpot: boolean,
+  fix: PingRow | undefined,
+): Promise<number> {
+  const ids = route.spotIds;
+  if (ids.indexOf(spotId) === ids.lastIndexOf(spotId)) return ids.indexOf(spotId);
+  const pool = spotCandidates(route, spotId, { recent: await recentVisits(db, vehicleId) });
+  const { path, spotPathIdx: idx } = route;
+  if (atSpot || !fix || path.length < 2 || idx.length !== ids.length) return pool[0] ?? -1;
+  const loop = ids[0] === ids[ids.length - 1];
+  /** how far the fix lies from the leg that leaves occurrence i (Infinity: no such leg) */
+  const offFrom = (i: number) => {
+    if (i === ids.length - 1 && !loop) return Number.POSITIVE_INFINITY; // no leg leaves a one-way route's last spot
+    const leg = i % (ids.length - 1); // a loop's last spot starts the next lap
+    const sub = path.slice(idx[leg], (idx[leg + 1] ?? 0) + 1);
+    return sub.length < 2 ? Number.POSITIVE_INFINITY : projectOntoPath(sub, fix).offsetM;
+  };
+  // several passes left by the dwell log: the one the fix lies on; one pass: that one, unless the van is clearly
+  // not on its leg but is on another pass's (ops turned round, or ran the same stretch twice)
+  let best = pool[0] ?? -1;
+  let bestOff = best < 0 ? Number.POSITIVE_INFINITY : offFrom(best);
+  for (const i of pool.length > 1 ? pool : []) {
+    const off = offFrom(i);
+    if (off < bestOff - 1) [best, bestOff] = [i, off];
+  }
+  if (pool.length === 1 && bestOff > OFF_ROUTE_M) {
+    for (const i of ids.keys()) {
+      if (ids[i] !== spotId || i === pool[0]) continue;
+      const off = offFrom(i);
+      if (off <= OFF_ROUTE_M && off < bestOff) [best, bestOff] = [i, off];
+    }
+  }
+  return best;
+}
+
 /**
  * Next spot, metres along the path and ETA to the next spot, from the learned leg and dwell times
  * (learning.loadEstimates falls back to the day-1 baseline per leg until it has samples, and to the route's planned
- * wait at a spot until its learned dwell has enough).
+ * wait at a spot until its learned dwell has enough). The leg is resolved per occurrence (occurrenceOf): a stop the
+ * route visits twice is on two different legs.
  */
 async function routeProgress(
   db: Db,
   route: Route,
   serviceId: string,
+  vehicleId: string,
   spotId: string,
   atSpot: boolean,
   since: number,
   fix: PingRow | undefined,
   now: Date,
 ): Promise<{ nextSpotId: string | null; etaS: number | null; alongM: number | null }> {
-  const k = route.spotIds.indexOf(spotId);
-  const nextSpotId = k >= 0 ? (route.spotIds[k + 1] ?? null) : null;
   const { path, spotPathIdx: idx, spotIds } = route;
+  const loop = spotIds[0] === spotIds[spotIds.length - 1];
+  const i = await occurrenceOf(db, route, vehicleId, spotId, atSpot, fix);
+  // a loop's last spot is its first: leaving it starts leg 0 again
+  const k = loop && i === spotIds.length - 1 ? 0 : i;
+  const nextSpotId = k >= 0 ? (spotIds[k + 1] ?? null) : null;
   if (!nextSpotId || path.length < 2 || idx.length !== spotIds.length) return { nextSpotId, etaS: null, alongM: null };
   const nowMs = now.getTime();
-  const legPath = (i: number) => path.slice(idx[i], idx[i + 1] + 1);
-  const { legs, dwells } = await loadEstimates(
+  const legPath = (n: number) => path.slice(idx[n], idx[n + 1] + 1);
+  const { legs, dwells: dwellEst } = await loadEstimates(
     db,
     { workspaceId: route.workspaceId, routeId: route.id, serviceId },
     now,
@@ -425,10 +496,10 @@ async function routeProgress(
     : { kind: "en_route", legIndex: k, alongLegM };
   const eta = etaToSpot({
     legs,
-    dwells,
+    dwells: dwellEst,
     vehicle,
     targetSpotId: nextSpotId,
-    loop: spotIds[0] === spotIds[spotIds.length - 1],
+    loop,
     now: nowMs,
   });
   return {
@@ -438,10 +509,25 @@ async function routeProgress(
   };
 }
 
-/** After an actual departure from the route's first spot: re-match the service day(s) it can belong to. */
-async function matchDay(tx: Db, svc: Service, sched: Schedule, spotId: string, at: number, now: Date) {
+/**
+ * After an actual departure from the route's first spot: re-match the service day(s) it can belong to. A route
+ * that comes back to its first spot mid-route (not just as the end of a loop) has departures from it that are not
+ * timetable departures: those are told apart by the dwell log.
+ */
+async function matchDay(
+  tx: Db,
+  svc: Service,
+  sched: Schedule,
+  vehicleId: string,
+  spotId: string,
+  at: number,
+  now: Date,
+) {
   const route = sched.routes.get(svc.routeId);
   if (route?.spotIds[0] !== spotId) return;
+  const ids = route.spotIds;
+  const midRoute = ids.indexOf(spotId, 1) > 0 && ids.indexOf(spotId, 1) < ids.length - 1;
+  if (midRoute && !spotCandidates(route, spotId, { recent: await recentVisits(tx, vehicleId) }).includes(0)) return;
   // a departure after midnight may belong to the previous service day
   for (const date of new Set([istDate(at), istDate(at - DAY_MS)])) {
     const planned = expandServiceDepartures(serviceDef(svc), sched.exceptions, date);
