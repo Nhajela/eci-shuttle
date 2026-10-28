@@ -10,7 +10,7 @@ import {
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { z } from "zod";
 import type { Db } from "@/db";
-import { legStats, routes, spots } from "@/db/schema";
+import { legStats, type NoSignalLeg, routes, spots } from "@/db/schema";
 import type { Route } from "@/db/types";
 import {
   type Actor,
@@ -141,7 +141,7 @@ export async function updateRoute(
   actor: Actor,
   input: z.input<typeof UpdateRouteInput>,
   deps?: { fetch?: typeof fetch },
-): Promise<Route> {
+): Promise<Route & { droppedNoSignalLegs?: number }> {
   const { workspaceId, routeId, version, name, spotIds, path, regeneratePath, plannedDwellS } = parseInput(
     UpdateRouteInput,
     input,
@@ -167,6 +167,7 @@ export async function updateRoute(
     if (points && path) g = { path, source: "manual", spotPathIdx: spotIndexes(path, points) };
     else if (points) g = await generatePath(points, deps?.fetch);
     const newStops = !!spotIds && spotIds.join() !== before.spotIds.join();
+    const remapped = newStops ? remapManualLegs(before.spotIds, ids, before.noSignalLegs) : { kept: [], dropped: 0 };
     const [after] = await tx
       .update(routes)
       .set({
@@ -174,10 +175,10 @@ export async function updateRoute(
         spotIds: ids,
         // typical_leg_s is one learned median per leg; new stops make the old legs meaningless
         ...(spotIds && spotIds.join() !== before.spotIds.join() && { typicalLegS: [] }),
-        // no-signal legs are leg indexes (manual) and path metres (detected): new stops invalidate both, a new
-        // path only the metres (the next nightly detection finds them again)
+        // no-signal legs are leg indexes (manual) and path metres (detected): new stops invalidate the metres, a new
+        // path too (the next nightly detection finds them again). Manual marks follow their stop pair.
         ...(newStops
-          ? { noSignalLegs: [] }
+          ? { noSignalLegs: remapped.kept }
           : g && { noSignalLegs: before.noSignalLegs.filter((e) => e.source === "manual") }),
         ...(g && { path: g.path, pathSource: g.source, spotPathIdx: g.spotPathIdx }),
         plannedDwellS: plan,
@@ -186,8 +187,39 @@ export async function updateRoute(
       })
       .where(eq(routes.id, routeId))
       .returning();
-    return { before, after, result: after };
+    // the admin page says how many hand-made no-signal marks the new stops could not keep
+    return {
+      before,
+      after,
+      result: remapped.dropped ? { ...after, droppedNoSignalLegs: remapped.dropped } : after,
+    };
   });
+}
+
+/**
+ * Manual no-signal marks after the stops changed: a mark follows its (from, to) stop pair to the leg that now has
+ * it (the n-th pass of a pair that the route makes twice follows the n-th pass); marks whose pair is gone are
+ * dropped and counted. Detected stretches are path metres and always dropped (the nightly job finds them again).
+ */
+export function remapManualLegs(
+  oldIds: string[],
+  newIds: string[],
+  legs: NoSignalLeg[],
+): { kept: NoSignalLeg[]; dropped: number } {
+  const passes = (ids: string[], from: string, to: string) =>
+    ids.flatMap((id, k) => (id === from && ids[k + 1] === to ? [k] : []));
+  const kept: NoSignalLeg[] = [];
+  let dropped = 0;
+  for (const e of legs) {
+    if (e.source !== "manual") continue;
+    const from = oldIds[e.legIndex];
+    const to = oldIds[e.legIndex + 1];
+    const nth = from && to ? passes(oldIds, from, to).indexOf(e.legIndex) : -1;
+    const k = from && to && nth >= 0 ? passes(newIds, from, to)[nth] : undefined;
+    if (k === undefined) dropped++;
+    else if (!kept.some((x) => x.legIndex === k)) kept.push({ ...e, legIndex: k });
+  }
+  return { kept: kept.sort((a, b) => a.legIndex - b.legIndex), dropped };
 }
 
 /** typicalLegS[i] null = leg i not learned yet; legSamples[i] = all-day regular-service samples of leg i (0 = none). */

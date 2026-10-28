@@ -132,3 +132,20 @@ describe("setLegNoSignalAction", () => {
     expect(r).toEqual({ ok: false, message: "This needs the admin role." });
   });
 });
+
+describe("updateRouteAction says when no-signal marks were lost with the old stops", () => {
+  it("names how many; plain 'Route saved.' otherwise", async () => {
+    vi.mocked(updateRoute).mockResolvedValueOnce({ droppedNoSignalLegs: 2 } as never);
+    const r = await updateRouteAction(
+      null,
+      form({ w: "live", routeId: "r1", version: "3", name: "L", spotId: ["a", "b"] }),
+    );
+    expect(r).toMatchObject({ ok: true });
+    expect(r?.message).toMatch(/^Route saved\. 2 "no signal" marks were removed/);
+    vi.mocked(updateRoute).mockResolvedValueOnce({} as never);
+    expect(await updateRouteAction(null, form({ w: "live", routeId: "r1", version: "3", name: "L" }))).toEqual({
+      ok: true,
+      message: "Route saved.",
+    });
+  });
+});
