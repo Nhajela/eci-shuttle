@@ -7,6 +7,12 @@ import * as schema from "./schema";
 /** A database handle or an open transaction: services accept either, so they compose inside one transaction. */
 export type Db = PgDatabase<PostgresJsQueryResultHKT, typeof schema>;
 
+/** Pool size from DB_POOL_MAX (a whole number 1..500); anything else, or unset, is 10. The worker image sets 20 (start.sh). */
+export function poolMax(raw: string | undefined = process.env.DB_POOL_MAX): number {
+  const n = /^\d+$/.test(raw?.trim() ?? "") ? Number(raw?.trim()) : 0;
+  return n >= 1 && n <= 500 ? n : 10;
+}
+
 export function createDb(
   url: string,
   opts: { max?: number } = {},
@@ -21,7 +27,7 @@ function shared() {
   if (!handle) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is not set");
-    handle = createDb(url);
+    handle = createDb(url, { max: poolMax() });
   }
   return handle;
 }
