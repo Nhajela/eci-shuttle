@@ -12,7 +12,7 @@
  * ingest marks a vehicle "offline" 2 min after its last ping and resets `since`; the stop it was at survives in
  * geofence.insideSpotId (arrival in enteredAt) and its leg in spotId / nextSpotId, so the phase is rebuilt.
  */
-import { istDate, istHHMM } from "@eci-shuttle/shared";
+import { istDate, istHHMM, type LatLng, projectOntoPath } from "@eci-shuttle/shared";
 import type { VehicleState } from "@/db/types";
 import type { DeadZone } from "../signal/dead-zones";
 
@@ -27,8 +27,7 @@ export const PARKED_MS = 15 * MIN;
 export const HIDDEN_MS = 30 * MIN;
 
 /**
- * A prediction is believed for this many times the leg's travel time (or the time left on it at the last fix, if
- * that is longer) after the last fix; later than that the vehicle is simply lost / hidden again. 1.5 allows for a
+ * A prediction is believed for this many times the leg's travel time after the last fix; later than that the vehicle is simply lost / hidden again. 1.5 allows for a
  * slow drive through the stretch without keeping a guess on the map forever.
  */
 export const PREDICT_EXPIRY_FACTOR = 1.5;
@@ -36,6 +35,8 @@ export const PREDICT_EXPIRY_FACTOR = 1.5;
 export const PREDICT_MAX_MS = 60 * MIN;
 /** the last fix may be this far before the start of a partial no-signal stretch (the signal goes a little early) */
 export const PREDICT_START_SLACK_M = 400;
+/** the last fix must be this close to the leg's own path: a van on another road (or the same stop's other leg) is not in this dead zone */
+export const PREDICT_FIX_TOLERANCE_M = 60;
 /** a prediction stops this short of the end of the leg: only a real fix at the stop says "arrived" */
 export const PREDICT_ARRIVAL_MARGIN_M = 150;
 
@@ -44,7 +45,8 @@ export const PREDICT_ARRIVAL_MARGIN_M = 150;
  * - spotAlongM[i]: metres along the route path of spotIds[i] (same length as spotIds, non-decreasing);
  * - legS[i]: the learned or baseline travel time of leg i in seconds (null = unknown), the fallback for a zone
  *   without its own `typicalLegS`;
- * - zones: the dead zones of this route (others are ignored).
+ * - zones: the dead zones of this route (others are ignored);
+ * - legPaths[i]: the sub-path of leg i, to check that the last fix was really on that leg.
  */
 export type PredictRoute = {
   routeId: string;
@@ -52,6 +54,7 @@ export type PredictRoute = {
   spotAlongM: number[];
   legS: (number | null)[];
   zones: DeadZone[];
+  legPaths: (LatLng[] | null)[];
 };
 
 /** Where a predicted vehicle probably is. alongM is the estimate; lastAlongM is the real last fix. */
@@ -125,12 +128,12 @@ export function sight(s: VehicleState | null | undefined, nowMs: number, predict
  * 1. its last state was en route (a departure is en route too) on leg k, found from the stop it left and the one
  *    it heads to (the along-route position tells apart a pair the route passes twice), and leg k has a dead zone
  *    for this route whose stops still match the route's;
- * 2. the last fix was on the road (not off route) at or just before the start of the no-signal stretch
+ * 2. the last fix was on that leg (past the stop it left, within PREDICT_FIX_TOLERANCE_M of its path), not off route, at or just before the start of the no-signal stretch
  *    (PREDICT_START_SLACK_M) or inside it, not past its end;
  * 3. the leg's travel time is known: the zone's typicalLegS, else the leg estimate. pace = leg length / that;
  * 4. alongM = last alongM + silence × pace, held PREDICT_ARRIVAL_MARGIN_M short of the end of the leg and never
  *    behind the last fix. A prediction never says "arrived";
- * 5. believed while the silence is at most PREDICT_EXPIRY_FACTOR × max(leg time, time left at the last fix),
+ * 5. believed while the silence is at most PREDICT_EXPIRY_FACTOR × the leg time,
  *    capped by PREDICT_MAX_MS. Past that, null: the caller falls back to lost / hidden.
  */
 function predictedFix(s: VehicleState, ageMs: number, p: PredictRoute): PredictedFix | null {
@@ -153,6 +156,12 @@ function predictedFix(s: VehicleState, ageMs: number, p: PredictRoute): Predicte
   const legEndM = spotAlongM[k + 1] as number;
   const lengthM = legEndM - legStartM;
   if (!(lengthM > 0)) return null;
+  // a real position on this leg: past the stop it left (a van that went the other way is stored with its position
+  // clamped to that stop) and on the leg's own road
+  if (!(along > legStartM) || s.lat === null || s.lng === null) return null;
+  const legPath = p.legPaths[k];
+  if (!legPath || legPath.length < 2) return null;
+  if (projectOntoPath(legPath, { lat: s.lat, lng: s.lng }).offsetM > PREDICT_FIX_TOLERANCE_M) return null;
   const zone = p.zones.find(
     (z) => z.routeId === p.routeId && z.legIndex === k && z.fromSpotId === spotIds[k] && z.toSpotId === spotIds[k + 1],
   );
@@ -165,7 +174,7 @@ function predictedFix(s: VehicleState, ageMs: number, p: PredictRoute): Predicte
   if (legS === null || !(legS > 0)) return null;
   const paceMps = lengthM / legS;
   const leftAtFixS = Math.max(0, legEndM - along) / paceMps;
-  const expiryMs = Math.min(PREDICT_MAX_MS, Math.max(legS, leftAtFixS) * PREDICT_EXPIRY_FACTOR * 1000);
+  const expiryMs = Math.min(PREDICT_MAX_MS, legS * PREDICT_EXPIRY_FACTOR * 1000);
   if (ageMs > expiryMs) return null;
   const at = (s.lastPingAt as Date).getTime();
   const est = Math.max(along, Math.min(along + (ageMs / 1000) * paceMps, legEndM - PREDICT_ARRIVAL_MARGIN_M));

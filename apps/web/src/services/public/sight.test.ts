@@ -6,6 +6,7 @@ import {
   lastSeenText,
   PREDICT_ARRIVAL_MARGIN_M,
   PREDICT_EXPIRY_FACTOR,
+  PREDICT_FIX_TOLERANCE_M,
   PREDICT_MAX_MS,
   PREDICT_START_SLACK_M,
   type PredictRoute,
@@ -156,6 +157,11 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
     spotAlongM: alongs,
     legS,
     zones,
+    // every leg's sub-path runs east-west through the default test position (15.67, 73.71)
+    legPaths: ids.slice(1).map(() => [
+      { lat: 15.67, lng: 73.709 },
+      { lat: 15.67, lng: 73.712 },
+    ]),
     ...over,
   });
   /** left Circle 2.5 min before the last fix, 100 m into the leg, then silence for `silentMin` */
@@ -220,15 +226,11 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
     expect(sight(silent(5.01), NOW, ctx()).kind).toBe("predicted");
   });
 
-  it("expires after 1.5 × the leg time (and the time left at the last fix, whichever is longer)", () => {
+  it("expires after 1.5 × the leg time", () => {
     expect(PREDICT_EXPIRY_FACTOR).toBe(1.5);
     // leg 600 s → 900 s = 15 min
     expect(sight(silent(15), NOW, ctx()).kind).toBe("predicted");
     expect(sight(silent(15.01), NOW, ctx()).kind).toBe("lost");
-    // a fix that was just behind the leg start has more than a leg's time left: 1400 + ... → the longer one wins
-    const early = silent(16, { alongM: 1800 }); // 1700 m left at 2.5 m/s = 680 s > 600 s → 1020 s = 17 min
-    expect(sight(early, NOW, ctx()).kind).toBe("predicted");
-    expect(sight(silent(17.5, { alongM: 1800 }), NOW, ctx()).kind).toBe("lost");
   });
 
   it("past the expiry the old ladder takes over: lost, then hidden after 30 min", () => {
@@ -279,13 +281,13 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
   });
 
   it("a partial zone: the last fix at or just before its start, or inside it, is predicted", () => {
-    const part = ctx([zone({ startAlongM: 2400, endAlongM: 3300 })]);
+    const part = ctx([zone({ startAlongM: 2600, endAlongM: 3300 })]);
     // at the start, a little before (within the slack), inside
-    expect(sight(silent(6, { alongM: 2400 }), NOW, part).kind).toBe("predicted");
-    expect(sight(silent(6, { alongM: 2400 - PREDICT_START_SLACK_M }), NOW, part).kind).toBe("predicted");
+    expect(sight(silent(6, { alongM: 2600 }), NOW, part).kind).toBe("predicted");
+    expect(sight(silent(6, { alongM: 2600 - PREDICT_START_SLACK_M }), NOW, part).kind).toBe("predicted");
     expect(sight(silent(6, { alongM: 2900 }), NOW, part).kind).toBe("predicted");
     // too far before the zone: the signal was fine there, so the silence is not the dead zone
-    expect(sight(silent(6, { alongM: 2400 - PREDICT_START_SLACK_M - 1 }), NOW, part).kind).toBe("lost");
+    expect(sight(silent(6, { alongM: 2600 - PREDICT_START_SLACK_M - 1 }), NOW, part).kind).toBe("lost");
     // already past the end of the stretch: it had signal again, so no
     expect(sight(silent(6, { alongM: 3300 }), NOW, part).kind).toBe("lost");
   });
@@ -325,6 +327,23 @@ describe("sight: predicted (a shuttle in a stretch with no mobile signal)", () =
     expect(predicted(sight(second, NOW, twice)).estimate.legIndex).toBe(2);
     const first = silent(6, { spotId: RIVA, nextSpotId: CIRCLE, alongM: 100 });
     expect(sight(first, NOW, twice).kind).toBe("lost");
+  });
+
+  it("the last fix must be on the leg: close to its path (60 m), and past the stop it left", () => {
+    expect(PREDICT_FIX_TOLERANCE_M).toBe(60);
+    // 33 m off the leg's path: fine; 78 m: that is some other road
+    expect(sight(silent(6, { lat: 15.6703 }), NOW, ctx()).kind).toBe("predicted");
+    expect(sight(silent(6, { lat: 15.6707 }), NOW, ctx()).kind).toBe("lost");
+    expect(sight(silent(6, { lat: 15.7 }), NOW, ctx()).kind).toBe("lost");
+    expect(sight(silent(6, { lat: null, lng: null }), NOW, ctx()).kind).toBe("lost");
+    expect(sight(silent(6), NOW, ctx([zone()], [], { legPaths: [] })).kind).toBe("lost");
+  });
+
+  it("a van that left Circle the other way (stored with next = Namaka, along clamped to Circle) is not drawn in the dead leg", () => {
+    // along == the start of the leg: clamped, not a real position on it
+    expect(sight(silent(6, { alongM: 2000 }), NOW, ctx()).kind).toBe("lost");
+    expect(sight(silent(6, { alongM: 1990 }), NOW, ctx()).kind).toBe("lost");
+    expect(sight(silent(6, { alongM: 2001 }), NOW, ctx()).kind).toBe("predicted");
   });
 
   it("a malformed context (no per-spot distances, zero-length leg) never predicts", () => {

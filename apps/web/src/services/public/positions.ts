@@ -11,11 +11,12 @@
  * mobile signal (sight "predicted") is drawn at its estimated place on the route, with `estimate` set, until the
  * prediction expires (sight.ts); the client shows it faded with "No signal · estimated". A guess on a break is not drawn.
  */
-import { istDate, type LatLng, pathLengthM } from "@eci-shuttle/shared";
+import { istDate, istHHMM, type LatLng, pathLengthM } from "@eci-shuttle/shared";
 import { and, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
 import {
+  legStats,
   routes,
   serviceExceptions,
   services,
@@ -28,8 +29,9 @@ import {
 import { activeBreaks } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { loadDeadZones } from "../signal/dead-zones";
+import { predictLegS, routeLegs } from "./leg-estimate";
 import { headingAlongPath, legFraction } from "./map-geo";
-import { baselineLegS, pointAtAlong, predictRoute } from "./predict";
+import { pointAtAlong, predictRoute } from "./predict";
 import { addDays, serviceDaysInPlay } from "./service-days";
 import { type PredictRoute, sight } from "./sight";
 
@@ -172,9 +174,13 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
   }));
 
   const zones = await loadDeadZones(db, workspaceId);
+  const stats = zones.length ? await db.select().from(legStats).where(eq(legStats.workspaceId, workspaceId)) : [];
+  const hour = Number(istHHMM(nowMs).slice(0, 2));
   const predictBy = new Map<string, PredictRoute>();
   for (const r of routeRows) {
-    const p = predictRoute(r, zones, baselineLegS(r));
+    const svc = svcs.find((x) => x.routeId === r.id);
+    // the same leg times as the answer's ETA, so the van and the minutes agree and expire together
+    const p = predictRoute(r, zones, svc ? predictLegS(routeLegs(stats, svc, r, hour)) : []);
     if (p) predictBy.set(r.id, p);
   }
   const onBreak = await activeBreaks(db, workspaceId, now);

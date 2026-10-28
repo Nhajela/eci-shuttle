@@ -24,19 +24,6 @@ export function spotAlongM(route: RouteGeo): number[] | null {
   return out;
 }
 
-/** With no learned time for a leg, its length at this speed (the same 25 km/h baseline as status.ts). */
-export const BASELINE_MPS = 25 / 3.6;
-
-/** Baseline travel time of each leg of a route in seconds (null when the path is not indexed to the spots). */
-export function baselineLegS(route: RouteGeo): (number | null)[] {
-  const along = spotAlongM(route);
-  return route.spotIds
-    .slice(1)
-    .map((_, i) =>
-      along ? Math.round(((along[i + 1] as number) - (along[i] as number)) / BASELINE_MPS) || null : null,
-    );
-}
-
 /**
  * The PredictRoute of a route, or null when it has no dead zone (so nothing is predicted and nothing is computed).
  * `legS` are the caller's leg estimates in seconds (null = none); a leg without one uses the route's learned
@@ -57,6 +44,11 @@ export function predictRoute(
     spotAlongM: along,
     legS: route.spotIds.slice(1).map((_, i) => legS[i] ?? route.typicalLegS[i] ?? null),
     zones: mine,
+    legPaths: route.spotIds.slice(1).map((_, i) => {
+      const a = route.spotPathIdx[i];
+      const b = route.spotPathIdx[i + 1];
+      return a === undefined || b === undefined ? null : route.path.slice(a, b + 1);
+    }),
   };
 }
 

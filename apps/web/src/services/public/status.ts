@@ -42,6 +42,7 @@ import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { activeNotices } from "../notices/notices";
 import { loadDeadZones } from "../signal/dead-zones";
+import { asEstimate, flat, MIN_SAMPLES, pickStat, predictLegS, routeLegs } from "./leg-estimate";
 import { predictRoute } from "./predict";
 import { addDays, serviceDaysInPlay } from "./service-days";
 import {
@@ -55,8 +56,6 @@ import {
 } from "./sight";
 
 const MATCH_WINDOW_MS = 25 * 60_000;
-const MIN_SAMPLES = 5;
-const BASELINE_MPS = 25 / 3.6;
 const BASELINE_DWELL_S = 180;
 const DAY = 86_400_000;
 /** A loop whose every shuttle is on a driver's break (never says why it is late: there is no "late"). */
@@ -71,17 +70,6 @@ const PREDICT_LO = 0.75;
 const PREDICT_HI = 1.5;
 
 const iso = (ms: number) => new Date(ms).toISOString();
-
-type Est = { medianS: number; p20S: number; p80S: number; n: number };
-const asEstimate = ({ medianS, p20S, p80S, n }: Est, level: LegEstimate["level"]): LegEstimate => ({
-  medianS,
-  p20S,
-  p80S,
-  n,
-  level,
-  thin: level === "baseline" || n < MIN_SAMPLES,
-});
-const flat = (s: number): LegEstimate => asEstimate({ medianS: s, p20S: s, p80S: s, n: 0 }, "baseline");
 
 /** One public service running at a service day, with everything needed to answer for its spots. */
 type Running = {
@@ -176,34 +164,11 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
   for (const d of days) {
     const route = routeById.get(d.svc.routeId);
     if (!route || route.spotIds.length === 0) continue;
-    const pick = (kind: "leg" | "dwell", from: string, to: string | null, h: number | null): LegStat | undefined => {
-      const scope = d.svc.kind === "special" ? d.svc.id : null;
-      return stats.find(
-        (s) =>
-          s.kind === kind &&
-          s.fromSpotId === from &&
-          s.toSpotId === to &&
-          s.serviceId === scope &&
-          s.hourBucket === h &&
-          s.n >= (h === null ? 1 : MIN_SAMPLES),
-      );
-    };
+    const pick = (kind: "leg" | "dwell", from: string, to: string | null, h: number | null): LegStat | undefined =>
+      pickStat(stats, d.svc, kind, from, to, h);
     const learned = (s: LegStat | undefined, level: LegEstimate["level"]) => s && asEstimate(s, level);
     const ids = route.spotIds;
-    const pIdx = route.spotPathIdx;
-    const legs: EtaLeg[] = [];
-    for (let i = 0; i < ids.length - 1; i++) {
-      const from = ids[i] as string;
-      const to = ids[i + 1] as string;
-      const lengthM = pIdx.length === ids.length ? pathLengthM(route.path.slice(pIdx[i], (pIdx[i + 1] ?? 0) + 1)) : 0;
-      const typical = route.typicalLegS[i];
-      const estimate =
-        learned(pick("leg", from, to, hour), "leg_hour") ??
-        learned(pick("leg", from, to, null), "leg_day") ??
-        (typical ? asEstimate({ medianS: typical, p20S: typical, p80S: typical, n: MIN_SAMPLES }, "leg_day") : null) ??
-        flat(Math.round(lengthM / BASELINE_MPS));
-      legs.push({ fromSpotId: from, toSpotId: to, lengthM, estimate });
-    }
+    const legs = routeLegs(stats, d.svc, route, hour);
     const dwells: Record<string, LegEstimate> = {};
     for (const id of ids)
       dwells[id] ??=
@@ -245,11 +210,7 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
   const zones = running.length ? await loadDeadZones(db, workspaceId) : [];
   const predictBy = new Map<string, PredictRoute>();
   for (const r of running) {
-    const p = predictRoute(
-      r.route,
-      zones,
-      r.legs.map((l) => l.estimate.medianS || null),
-    );
+    const p = predictRoute(r.route, zones, predictLegS(r.legs));
     if (p) predictBy.set(r.svc.id, p);
   }
   const live = await liveVehicles(db, workspaceId, running, nowMs, predictBy);
@@ -542,8 +503,11 @@ function answerFor(
       if (!best || best.minutes > 0) best = { line: here, minutes: 0 };
       continue;
     }
-    const vehicle = etaVehicle(r, s);
     const pr = v.predicted;
+    // a prediction knows its own leg (the return leg Namaka → Circle is leg 3, not the first Riva → Circle one)
+    const vehicle: EtaVehicle | null = pr
+      ? { kind: "en_route", legIndex: pr.legIndex, alongLegM: Math.max(0, pr.alongM - pr.legStartM) }
+      : etaVehicle(r, s);
     // through the no-signal leg the pace is the one the estimate used, with a wider range; approx always
     const legs = pr
       ? r.legs.map((l, i) =>

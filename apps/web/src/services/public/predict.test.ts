@@ -1,7 +1,7 @@
 import { distanceM, pathLengthM } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
 import type { DeadZone } from "../signal/dead-zones";
-import { BASELINE_MPS, baselineLegS, pointAtAlong, predictRoute, spotAlongM } from "./predict";
+import { pointAtAlong, predictRoute, spotAlongM } from "./predict";
 
 const A = "a";
 const B = "b";
@@ -40,17 +40,6 @@ describe("spotAlongM", () => {
   });
 });
 
-describe("baselineLegS", () => {
-  it("each leg's length at 25 km/h, in seconds", () => {
-    const m = spotAlongM(route) as number[];
-    expect(baselineLegS(route)).toEqual([
-      Math.round((m[1] as number) / BASELINE_MPS),
-      Math.round(((m[2] as number) - (m[1] as number)) / BASELINE_MPS),
-    ]);
-    expect(baselineLegS({ ...route, spotPathIdx: [0] })).toEqual([null, null]);
-  });
-});
-
 describe("predictRoute", () => {
   it("null when the route has no dead zone (nothing to predict)", () => {
     expect(predictRoute(route, [], [])).toBeNull();
@@ -63,6 +52,8 @@ describe("predictRoute", () => {
     expect(p?.spotIds).toEqual([A, B, C]);
     // given estimates win; a missing one uses the route's learned typical time; neither → null
     expect(p?.legS).toEqual([100, 240]);
+    // the sub-path of each leg, to tell a fix on the leg from one on another road
+    expect(p?.legPaths).toEqual([path.slice(0, 3), path.slice(2, 5)]);
     expect(predictRoute(route, [zone], [])?.legS).toEqual([null, 240]);
   });
 });

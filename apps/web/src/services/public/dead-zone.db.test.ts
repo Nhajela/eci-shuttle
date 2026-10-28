@@ -3,11 +3,11 @@ import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { routes, services, serviceVehicles, spots, vehicleBreaks, vehicleState, vehicles } from "@/db/schema";
+import { legStats, routes, services, serviceVehicles, spots, vehicleBreaks, vehicleState, vehicles } from "@/db/schema";
 import { liveBoard } from "../mcp/changes";
 import type { DeadZone } from "../signal/dead-zones";
 import { PublicMap, publicPositions } from "./positions";
-import { NO_SIGNAL_STRETCH } from "./sight";
+import { isPredictedLine, NO_SIGNAL_STRETCH, predictedPhase } from "./sight";
 import { staffMap } from "./staff-map";
 import { CANT_SEE, publicStatus } from "./status";
 
@@ -293,5 +293,95 @@ describe("ops views show the same estimate, clearly marked", () => {
     const late = await liveBoard(db(), actor, { workspaceId: w.id }, at("19:16"));
     expect(late[0]).not.toHaveProperty("estimate");
     expect((await staffMap(db(), actor, { workspaceId: w.id }, at("19:16"))).markers).toEqual([]);
+  });
+});
+
+describe("the way back through the dark leg (Namaka → Circle) and a shared notion of the leg's time", () => {
+  it("is estimated on leg 3: the ETA to Circle is the rest of that leg, not the first Riva → Circle leg", async () => {
+    const { w, circle, namaka, svc, route, along } = await world();
+    zonesNow.list = [
+      ...zonesNow.list,
+      {
+        routeId: route.id,
+        legIndex: 3,
+        fromSpotId: namaka.id,
+        toSpotId: circle.id,
+        startAlongM: null,
+        endAlongM: null,
+        source: "manual",
+        typicalLegS: LEG_S,
+      } satisfies DeadZone,
+    ];
+    await shuttle(w, svc.id, {
+      spotId: namaka.id,
+      nextSpotId: circle.id,
+      alongM: (along[3] as number) + 100,
+      lat: 15.6349,
+      lng: 73.7,
+      lastPingAt: at("19:00"),
+      since: at("18:59"),
+    });
+    const l = await lineAt(w.id, circle.id, at("19:06"));
+    expect(l?.phaseText).toBe(predictedPhase("Circle"));
+    // 6 min on at 1668 m / 600 s = 2.78 m/s: about 570 m (3.4 min) left, not "about 1 min"
+    expect(l?.minutes).toBeGreaterThanOrEqual(3);
+    expect(l?.minutes).toBeLessThanOrEqual(4);
+    const v = (await mapOf(w.id, at("19:06"))).vehicles[0];
+    expect(v?.legIndex).toBe(3);
+    expect(v?.estimate?.reason).toBe("no_signal");
+  });
+
+  it("the ghost van, the ETA and the expiry all use the learned leg time (not a 25 km/h guess)", async () => {
+    const { w, namaka, circle, svc, along } = await world();
+    zonesNow.list = [{ ...(zonesNow.list[0] as DeadZone), typicalLegS: null }];
+    // learned: this leg takes 15 min
+    await db().insert(legStats).values({
+      workspaceId: w.id,
+      kind: "leg",
+      fromSpotId: circle.id,
+      toSpotId: namaka.id,
+      hourBucket: null,
+      n: 10,
+      medianS: 900,
+      p20S: 800,
+      p80S: 1000,
+      level: "leg_day",
+    });
+    await shuttle(w, svc.id, {
+      spotId: circle.id,
+      nextSpotId: namaka.id,
+      alongM: (along[2] as number) + 100,
+      lat: 15.6201,
+      lng: 73.7,
+      lastPingAt: at("19:00"),
+      since: at("18:59"),
+    });
+    const legM = (along[3] as number) - (along[2] as number);
+    const v6 = (await mapOf(w.id, at("19:06"))).vehicles[0];
+    // 6 min at legM / 900 s
+    expect(v6?.alongM).toBeCloseTo((along[2] as number) + 100 + 360 * (legM / 900), 0);
+    // expiry 1.5 × 15 min = 22.5 min on both the map and the answer
+    expect((await lineAt(w.id, namaka.id, at("19:22")))?.phaseText).toBe(predictedPhase("Namaka"));
+    expect((await mapOf(w.id, at("19:22"))).vehicles).toHaveLength(1);
+    expect((await lineAt(w.id, namaka.id, at("19:23")))?.phaseText).toContain(CANT_SEE);
+    expect((await mapOf(w.id, at("19:23"))).vehicles).toEqual([]);
+  });
+
+  it("the producer's wording and the matcher that keeps alerts quiet cannot drift apart", async () => {
+    const { w, namaka, svc, along, circle } = await world();
+    await shuttle(w, svc.id, {
+      spotId: circle.id,
+      nextSpotId: namaka.id,
+      alongM: (along[2] as number) + 100,
+      lat: 15.6201,
+      lng: 73.7,
+      lastPingAt: at("19:00"),
+      since: at("18:59"),
+    });
+    const l = await lineAt(w.id, namaka.id, at("19:06"));
+    expect(l && isPredictedLine(l)).toBe(true);
+    expect(isPredictedLine({ kind: "live", phaseText: predictedPhase("Anywhere") })).toBe(true);
+    expect(isPredictedLine({ kind: "live", phaseText: "on the way" })).toBe(false);
+    expect(predictedPhase("X").endsWith(NO_SIGNAL_STRETCH)).toBe(true);
   });
 });

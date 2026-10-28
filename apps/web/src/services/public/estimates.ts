@@ -3,13 +3,14 @@
  * silent in a leg with no mobile signal (sight "predicted") gets an estimated place on the route; unlike it, no
  * shift or privacy rule applies (staff see every vehicle). Always marked as an estimate by the callers.
  */
-import type { LatLng } from "@eci-shuttle/shared";
+import { istHHMM, type LatLng } from "@eci-shuttle/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "@/db";
-import { routes, services } from "@/db/schema";
+import { legStats, routes, services } from "@/db/schema";
 import type { VehicleState } from "@/db/types";
 import { loadDeadZones } from "../signal/dead-zones";
-import { baselineLegS, pointAtAlong, predictRoute } from "./predict";
+import { predictLegS, routeLegs } from "./leg-estimate";
+import { pointAtAlong, predictRoute } from "./predict";
 import { type PredictRoute, sight } from "./sight";
 
 export type VehicleEstimate = LatLng & {
@@ -36,7 +37,7 @@ export async function estimateVehicles(
   const zones = await loadDeadZones(db, workspaceId);
   if (!zones.length) return out;
   const svcRows = await db
-    .select({ id: services.id, routeId: services.routeId })
+    .select({ id: services.id, routeId: services.routeId, kind: services.kind })
     .from(services)
     .where(
       and(
@@ -48,9 +49,12 @@ export async function estimateVehicles(
   const routeRows = routeIds.length ? await db.select().from(routes).where(inArray(routes.id, routeIds)) : [];
   const routeById = new Map(routeRows.map((r) => [r.id, r]));
   const routeOfService = new Map(svcRows.map((r) => [r.id, r.routeId]));
+  const stats = await db.select().from(legStats).where(eq(legStats.workspaceId, workspaceId));
+  const hour = Number(istHHMM(now.getTime()).slice(0, 2));
   const predictBy = new Map<string, PredictRoute>();
   for (const r of routeRows) {
-    const p = predictRoute(r, zones, baselineLegS(r));
+    const svc = svcRows.find((x) => x.routeId === r.id);
+    const p = predictRoute(r, zones, svc ? predictLegS(routeLegs(stats, svc, r, hour)) : []);
     if (p) predictBy.set(r.id, p);
   }
   for (const s of withService) {
