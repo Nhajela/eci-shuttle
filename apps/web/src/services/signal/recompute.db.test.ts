@@ -229,4 +229,20 @@ describe("recomputeDeadZones", () => {
     await db().update(pings).set({ lng: 73.71 }).where(eq(pings.workspaceId, w.ws.id)); // ~1 km sideways
     expect((await recomputeDeadZones(db(), w.ws.id, NOW)).detected).toBe(0);
   });
+
+  it("never re-adds a detected stretch on a leg the admin marked 'has signal', and keeps the mark", async () => {
+    const w = await world();
+    await db()
+      .update(routes)
+      .set({ noSignalLegs: [{ legIndex: 1, source: "manual", noSignal: false } as never] })
+      .where(eq(routes.id, w.route.id));
+    for (const d of DAYS) await leg1Trip(w, d, { dark: [2.8, 3.4] });
+    const r = await recomputeDeadZones(db(), w.ws.id, NOW);
+    expect(r.detected).toBe(0);
+    expect((await stored(w))?.noSignalLegs).toEqual([{ legIndex: 1, source: "manual", noSignal: false }]);
+    expect(await loadDeadZones(db(), w.ws.id)).toEqual([]);
+    // and again on the next night
+    await recomputeDeadZones(db(), w.ws.id, NOW);
+    expect(await loadDeadZones(db(), w.ws.id)).toEqual([]);
+  });
 });

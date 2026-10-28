@@ -126,6 +126,17 @@ describe("setLegNoSignalAction", () => {
     expect(r).toEqual({ ok: true, message: "Signal restored." });
   });
 
+  it("three-state: mode has_signal / auto / no_signal is passed through with its own toast", async () => {
+    const r = await setLegNoSignalAction(null, form({ w: "live", routeId: "r1", legIndex: "2", mode: "has_signal" }));
+    expect(vi.mocked(setLegNoSignal).mock.calls.at(-1)?.[2]).toMatchObject({ legIndex: 2, mode: "has_signal" });
+    expect(r).toEqual({ ok: true, message: "Marked as having signal." });
+    const a = await setLegNoSignalAction(null, form({ w: "live", routeId: "r1", legIndex: "2", mode: "auto" }));
+    expect(vi.mocked(setLegNoSignal).mock.calls.at(-1)?.[2]).toMatchObject({ mode: "auto" });
+    expect(a).toEqual({ ok: true, message: "Back to automatic." });
+    const n = await setLegNoSignalAction(null, form({ w: "live", routeId: "r1", legIndex: "2", mode: "no_signal" }));
+    expect(n).toEqual({ ok: true, message: "Marked as no signal." });
+  });
+
   it("maps a service error to a message", async () => {
     vi.mocked(setLegNoSignal).mockRejectedValueOnce(new ServiceError("FORBIDDEN", "This needs the admin role."));
     const r = await setLegNoSignalAction(null, form({ w: "live", routeId: "r1", legIndex: "2", noSignal: "1" }));

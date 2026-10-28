@@ -51,6 +51,20 @@ describe("legRows no-signal marks", () => {
     );
     expect(rows.map((r) => r.noSignal)).toEqual(["manual", "detected", null]);
   });
+  it("shows an admin's 'has signal' mark over a detected stretch", () => {
+    const rows = legRows(
+      {
+        spotIds: ["a", "b", "a"],
+        typicalLegS: [],
+        noSignalLegs: [
+          { legIndex: 0, source: "detected" },
+          { legIndex: 0, source: "manual", noSignal: false },
+        ],
+      },
+      names,
+    );
+    expect(rows.map((r) => r.noSignal)).toEqual(["cleared", null]);
+  });
 });
 
 describe("spotChain", () => {

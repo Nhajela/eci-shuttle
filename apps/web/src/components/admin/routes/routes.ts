@@ -16,8 +16,8 @@ export type LegRow = {
   to: string;
   time: string;
   learned: boolean;
-  /** no mobile signal on this leg: marked by an admin, found from late pings, or neither */
-  noSignal: "manual" | "detected" | null;
+  /** no mobile signal on this leg: marked by an admin, found from late pings, "cleared" = admin says it has signal, or neither */
+  noSignal: "manual" | "detected" | "cleared" | null;
 };
 
 /**
@@ -29,7 +29,7 @@ export function legRows(
     spotIds: string[];
     typicalLegS: (number | null)[];
     legSamples?: number[];
-    noSignalLegs?: { legIndex: number; source: "manual" | "detected" }[];
+    noSignalLegs?: { legIndex: number; source: "manual" | "detected"; noSignal?: boolean }[];
   },
   names: Names,
 ): LegRow[] {
@@ -38,7 +38,8 @@ export function legRows(
     const n = route.legSamples?.[i];
     const time = s != null && n ? `${formatLeg(s)} (${n} ${n === 1 ? "trip" : "trips"})` : formatLeg(s);
     const here = (route.noSignalLegs ?? []).filter((e) => e.legIndex === i);
-    const noSignal = here.some((e) => e.source === "manual") ? "manual" : here.length ? "detected" : null;
+    const manual = here.find((e) => e.source === "manual");
+    const noSignal = manual ? (manual.noSignal === false ? "cleared" : "manual") : here.length ? "detected" : null;
     return { from: nameOf(names, route.spotIds[i]), to: nameOf(names, to), time, learned: s != null, noSignal };
   });
 }
