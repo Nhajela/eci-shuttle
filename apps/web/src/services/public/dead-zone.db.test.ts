@@ -385,3 +385,81 @@ describe("the way back through the dark leg (Namaka → Circle) and a shared not
     expect(predictedPhase("X").endsWith(NO_SIGNAL_STRETCH)).toBe(true);
   });
 });
+
+describe("a special service that shares the route paces by its own leg times", () => {
+  /** the regular loop (listed first) has no learned time for Circle → Namaka (~4 min at 25 km/h); the special one learned 20 min */
+  async function sharedRoute() {
+    const x = await world();
+    zonesNow.list = [{ ...(zonesNow.list[0] as DeadZone), typicalLegS: null }];
+    const [special] = await db()
+      .insert(services)
+      .values({
+        workspaceId: x.w.id,
+        name: "Party run",
+        kind: "special",
+        routeId: x.route.id,
+        public: true,
+        validFrom: "2026-10-01",
+        validTo: "2026-11-01",
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        startTime: "08:00",
+        endTime: "22:00",
+        pattern: { kind: "loop" },
+      })
+      .returning();
+    await db().insert(legStats).values({
+      workspaceId: x.w.id,
+      serviceId: special.id,
+      kind: "leg",
+      fromSpotId: x.circle.id,
+      toSpotId: x.namaka.id,
+      hourBucket: null,
+      n: 10,
+      medianS: 1200,
+      p20S: 1100,
+      p80S: 1300,
+      level: "leg_day",
+    });
+    const v = await shuttle(x.w, special.id, {
+      spotId: x.circle.id,
+      nextSpotId: x.namaka.id,
+      alongM: (x.along[2] as number) + 100,
+      lat: 15.6201,
+      lng: 73.7,
+      lastPingAt: at("19:00"),
+      since: at("18:59"),
+    });
+    return { ...x, special, v };
+  }
+
+  it("public map: the van of the special service is still estimated at 10 min (its 20 min pace), at the special pace", async () => {
+    const { w, along } = await sharedRoute();
+    const legM = (along[3] as number) - (along[2] as number);
+    const v10 = (await mapOf(w.id, at("19:10"))).vehicles[0];
+    expect(v10?.estimate).toMatchObject({ reason: "no_signal" });
+    expect(v10?.alongM).toBeCloseTo((along[2] as number) + 100 + 600 * (legM / 1200), 0);
+  });
+
+  it("staff map and live board use the same pace, even with a van of the regular service on the route", async () => {
+    const { w, v, svc, riva } = await sharedRoute();
+    // estimateVehicles looks at every service that has a vehicle: the regular one comes first
+    const [other] = await db().insert(vehicles).values({ workspaceId: w.id, name: "Van 2" }).returning();
+    await db()
+      .insert(vehicleState)
+      .values({
+        vehicleId: other.id,
+        workspaceId: w.id,
+        serviceId: svc.id,
+        phase: "at_spot",
+        spotId: riva.id,
+        lastPingAt: at("19:09"),
+        lat: 15.61,
+        lng: 73.7,
+      });
+    const { actor } = await makeAdmin(db(), w.id, "viewer");
+    const m = await staffMap(db(), actor, { workspaceId: w.id }, at("19:10"));
+    expect(m.markers.find((x) => x.id === v.id)).toMatchObject({ estimated: true });
+    const row = (await liveBoard(db(), actor, { workspaceId: w.id }, at("19:10"))).find((x) => x.vehicle.id === v.id);
+    expect(row?.estimate).toMatchObject({ reason: "no_signal" });
+  });
+});

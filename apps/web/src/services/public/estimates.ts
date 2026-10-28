@@ -52,14 +52,15 @@ export async function estimateVehicles(
   const stats = await db.select().from(legStats).where(eq(legStats.workspaceId, workspaceId));
   const hour = Number(istHHMM(now.getTime()).slice(0, 2));
   const predictBy = new Map<string, PredictRoute>();
-  for (const r of routeRows) {
-    const svc = svcRows.find((x) => x.routeId === r.id);
-    const p = predictRoute(r, zones, svc ? predictLegS(routeLegs(stats, svc, r, hour)) : []);
-    if (p) predictBy.set(r.id, p);
+  // per service (the vehicle's own, as the status answer does): a special service paces by its own leg times
+  for (const svc of svcRows) {
+    const r = routeById.get(svc.routeId);
+    const p = r && predictRoute(r, zones, predictLegS(routeLegs(stats, svc, r, hour)));
+    if (p) predictBy.set(svc.id, p);
   }
   for (const s of withService) {
     const routeId = routeOfService.get(s.serviceId as string);
-    const seen = routeId ? sight(s, now.getTime(), predictBy.get(routeId)) : null;
+    const seen = routeId ? sight(s, now.getTime(), predictBy.get(s.serviceId as string)) : null;
     const route = routeId ? routeById.get(routeId) : undefined;
     if (seen?.kind !== "predicted" || !route) continue;
     const at = pointAtAlong(route.path, seen.estimate.alongM);

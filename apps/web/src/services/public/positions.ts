@@ -178,11 +178,12 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
   const stats = zones.length ? await db.select().from(legStats).where(eq(legStats.workspaceId, workspaceId)) : [];
   const hour = Number(istHHMM(nowMs).slice(0, 2));
   const predictBy = new Map<string, PredictRoute>();
-  for (const r of routeRows) {
-    const svc = svcs.find((x) => x.routeId === r.id);
-    // the same leg times as the answer's ETA, so the van and the minutes agree and expire together
-    const p = predictRoute(r, zones, svc ? predictLegS(routeLegs(stats, svc, r, hour)) : []);
-    if (p) predictBy.set(r.id, p);
+  // per service, like the status answer: a special service sharing the route paces by its own learned leg times, so
+  // the van and the minutes agree and expire together
+  for (const svc of svcs) {
+    const r = routeById.get(svc.routeId);
+    const p = r && predictRoute(r, zones, predictLegS(routeLegs(stats, svc, r, hour)));
+    if (p) predictBy.set(svc.id, p);
   }
   const onBreak = await activeBreaks(db, workspaceId, now);
   const rows = await db
@@ -208,7 +209,7 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
     if (r.state.serviceId !== r.serviceId) continue;
     // live per sight(): a fix ≤ 5 min old; an "offline" state is rebuilt to the stop or leg it had at its last ping
     const routeId = svcById.get(r.serviceId)?.routeId ?? "";
-    const seen = sight(r.state, nowMs, predictBy.get(routeId));
+    const seen = sight(r.state, nowMs, predictBy.get(r.serviceId));
     if (seen.kind === "predicted") {
       const route = routeById.get(routeId);
       const e = seen.estimate;
