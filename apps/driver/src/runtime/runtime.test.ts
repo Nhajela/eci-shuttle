@@ -424,6 +424,15 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(s.fetch).toHaveBeenCalledTimes(3);
   });
 
+  it("a Retry-After deadline further away than the 10 min cap (phone clock moved back) is stale and ignored", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T - 3_600_000); // clock set back an hour: the deadline is now 61 min away
+    await s.rt.sync();
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("a forced sync that is not user-initiated (push, app opened) still waits out a Retry-After", async () => {
     const s = await setup();
     s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));

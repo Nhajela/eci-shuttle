@@ -42,6 +42,9 @@ type Persisted = Pick<SyncState, "clockOffsetMs" | "lastSyncAt" | "failures"> & 
  */
 export const CYCLE_TIMEOUT_MS = 90_000;
 
+/** sync/client caps Retry-After at 10 min; a deadline further out means the phone clock moved back. */
+const MAX_RETRY_AFTER_MS = 10 * 60_000;
+
 // Wakes drift a little early on Android; without slack a 15 min heartbeat that fires at 14:58 waits another 15 min.
 const DUE_SLACK = 0.9;
 
@@ -230,7 +233,8 @@ export function createRuntime(deps: RuntimeDeps) {
     const delay = nextSyncDelayMs(r, now + p.clockOffsetMs, state, (deps.random ?? Math.random)());
     // a 429's Retry-After holds back every automatic sync, forced ones included; only a driver's own tap (Resume,
     // pairing) goes through, once (a new 429 sets a new deadline)
-    const rateLimited = !userInitiated && p.retryAfterAt !== null && now < p.retryAfterAt;
+    const rateLimited =
+      !userInitiated && p.retryAfterAt !== null && now < p.retryAfterAt && p.retryAfterAt - now <= MAX_RETRY_AFTER_MS;
     const due =
       !rateLimited &&
       (force ||
