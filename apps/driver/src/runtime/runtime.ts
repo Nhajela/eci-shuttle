@@ -269,7 +269,10 @@ export function createRuntime(deps: RuntimeDeps) {
         {
           ...attempt,
           lastError: out.error,
-          retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
+          // only a 429 sets the deadline and only a success clears it: a 503 on a bypass sync keeps the old one
+          ...(out.error === "http_429" && {
+            retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
+          }),
         },
         cancelled,
       );

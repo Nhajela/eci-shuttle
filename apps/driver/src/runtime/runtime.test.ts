@@ -433,6 +433,22 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(s.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("a bypass sync that fails with a non-429 keeps the 429 deadline for automatic syncs", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T + 10_000);
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 503 }));
+    await s.rt.sync({ userInitiated: true });
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    s.at(T + 30_000);
+    await s.rt.wake([fix(T + 30_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    s.at(T + 61_000);
+    await s.rt.wake([fix(T + 61_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(3);
+  });
+
   it("a forced sync that is not user-initiated (push, app opened) still waits out a Retry-After", async () => {
     const s = await setup();
     s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
