@@ -99,6 +99,43 @@ describe("locationPlan: patched (per-mode options, in-place updates)", () => {
   });
 });
 
+describe("locationPlan: the native interval is the fastest an active window needs", () => {
+  const fast = res({ mode: "active", intervalS: 5, until: at(11), window: win({ intervalS: 5 }) });
+  const slow = res({ mode: "active", intervalS: 30, until: at(11), window: win({ intervalS: 30 }) });
+
+  it("patched: a force_active window faster than the config interval gets its own interval", () => {
+    expect(locationPlan(fast, CFG, now, P)).toMatchObject({ run: true, mode: "active", timeIntervalMs: 5_000 });
+  });
+
+  it("unpatched: the key stays at the config interval (a change can't be applied from the background)", () => {
+    expect(locationPlan(fast, CFG, now, U)).toMatchObject({ run: true, mode: "active", timeIntervalMs: 10_000 });
+    expect(planKey(locationPlan(fast, CFG, now, U))).toBe(planKey(locationPlan(slow, CFG, now, U)));
+  });
+
+  it("a slower window never slows the task below the config interval", () => {
+    expect(locationPlan(slow, CFG, now, P)).toMatchObject({ timeIntervalMs: 10_000 });
+  });
+
+  it("the key changes with the minimum, and only with it", () => {
+    expect(planKey(locationPlan(fast, CFG, now, P))).not.toBe(planKey(locationPlan(slow, CFG, now, P)));
+    expect(planKey(locationPlan(slow, CFG, now, P))).toBe(
+      planKey(locationPlan(res({ mode: "active", intervalS: 10, window: win() }), CFG, now, P)),
+    );
+  });
+
+  it("unpatched idle before a fast window keeps the config interval, same key as active", () => {
+    const idle = res({ until: now + HOUR, next: win({ intervalS: 5 }) });
+    const p = locationPlan(idle, CFG, now, U);
+    expect(p).toMatchObject({ run: true, mode: "idle", timeIntervalMs: 10_000 });
+    expect(planKey(p)).toBe(planKey(locationPlan(fast, CFG, now, U)));
+  });
+
+  it("patched idle keeps the heartbeat whatever the next window wants", () => {
+    const idle = res({ until: now + HOUR, next: win({ intervalS: 5 }) });
+    expect(locationPlan(idle, CFG, now, P)).toMatchObject({ highAccuracy: false, timeIntervalMs: 900_000 });
+  });
+});
+
 describe("locationPlan: unpatched (one fixed task per tracking day)", () => {
   const active = res({ mode: "active", intervalS: 10, until: at(11), window: win() });
 

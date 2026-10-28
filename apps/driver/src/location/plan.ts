@@ -56,7 +56,14 @@ export function locationPlan(
   capability: Capability,
 ): LocationPlan {
   if (r.mode !== "active" && r.mode !== "idle") return { run: false };
-  const activeOptions = { highAccuracy: true, timeIntervalMs: cfg.activeIntervalS * 1000 };
+  // One task, one interval. Patched: the fastest any active window of this plan needs (a force_active window may ask
+  // for less than activeIntervalS); the key changes when that minimum does, and an in-place update works anywhere.
+  // Unpatched: always activeIntervalS, because a key change can't be applied from the background (it would only
+  // raise "open the app"); the gate still follows the window's cadence.
+  const windowIntervalS = (r.mode === "active" ? r.window : r.next?.mode === "active" ? r.next : null)?.intervalS;
+  const intervalS =
+    capability === "patched" ? Math.min(cfg.activeIntervalS, windowIntervalS ?? Infinity) : cfg.activeIntervalS;
+  const activeOptions = { highAccuracy: true, timeIntervalMs: intervalS * 1000 };
   if (r.mode === "active") return { run: true, mode: "active", ...activeOptions, notification: NOTIFICATION };
   if (capability === "patched") {
     // cheap enough to leave on all night, and a background cold start would be impossible

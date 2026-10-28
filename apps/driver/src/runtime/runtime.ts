@@ -42,6 +42,9 @@ type Persisted = Pick<SyncState, "clockOffsetMs" | "lastSyncAt" | "failures"> & 
  */
 export const CYCLE_TIMEOUT_MS = 90_000;
 
+/** sync/client caps Retry-After at 10 min; a deadline further out means the phone clock moved back. */
+const MAX_RETRY_AFTER_MS = 10 * 60_000;
+
 // Wakes drift a little early on Android; without slack a 15 min heartbeat that fires at 14:58 waits another 15 min.
 const DUE_SLACK = 0.9;
 
@@ -183,7 +186,13 @@ export function createRuntime(deps: RuntimeDeps) {
     }
   }
 
-  async function cycle(fixes: Fix[], force: boolean, cancelled: () => boolean, progress: { synced: boolean }) {
+  async function cycle(
+    fixes: Fix[],
+    force: boolean,
+    userInitiated: boolean,
+    cancelled: () => boolean,
+    progress: { synced: boolean },
+  ) {
     const now = deps.now();
     let p = await loadPersisted();
     const dc = await deps.store.deviceConfig();
@@ -222,8 +231,10 @@ export function createRuntime(deps: RuntimeDeps) {
       failures: p.failures,
     };
     const delay = nextSyncDelayMs(r, now + p.clockOffsetMs, state, (deps.random ?? Math.random)());
-    // a 429's Retry-After holds back every sync, forced ones included
-    const rateLimited = p.retryAfterAt !== null && now < p.retryAfterAt;
+    // a 429's Retry-After holds back every automatic sync, forced ones included; only a driver's own tap (Resume,
+    // pairing) goes through, once (a new 429 sets a new deadline)
+    const rateLimited =
+      !userInitiated && p.retryAfterAt !== null && now < p.retryAfterAt && p.retryAfterAt - now <= MAX_RETRY_AFTER_MS;
     const due =
       !rateLimited &&
       (force ||
@@ -258,7 +269,10 @@ export function createRuntime(deps: RuntimeDeps) {
         {
           ...attempt,
           lastError: out.error,
-          retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
+          // only a 429 sets the deadline and only a success clears it: a 503 on a bypass sync keeps the old one
+          ...(out.error === "http_429" && {
+            retryAfterAt: out.retryAfterMs === undefined ? null : now + out.retryAfterMs,
+          }),
         },
         cancelled,
       );
@@ -290,7 +304,7 @@ export function createRuntime(deps: RuntimeDeps) {
   }
 
   /** One cycle with a deadline. On timeout the queue moves on and the late cycle is told to stand down. */
-  const run = (fixes: Fix[], force: boolean) =>
+  const run = (fixes: Fix[], force: boolean, userInitiated = false) =>
     one(async () => {
       let cut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -298,7 +312,7 @@ export function createRuntime(deps: RuntimeDeps) {
         timer = setTimeout(() => resolve("timeout"), deps.cycleTimeoutMs ?? CYCLE_TIMEOUT_MS);
       });
       const progress = { synced: false };
-      const work = cycle(fixes, force, () => cut, progress).catch((e) => {
+      const work = cycle(fixes, force, userInitiated, () => cut, progress).catch((e) => {
         console.warn("runtime cycle", e instanceof Error ? e.message : e);
       });
       const done = await Promise.race([work, timeout]);
@@ -315,8 +329,8 @@ export function createRuntime(deps: RuntimeDeps) {
   return {
     /** The location task's delivery: fixes while active, an empty clock tick while idle. Never throws. */
     wake: (fixes: Fix[]) => run(fixes, false),
-    /** Sync now (push, Resume, pairing, app opened). Never throws. */
-    sync: () => run([], true),
+    /** Sync now (push, Resume, pairing, app opened). `userInitiated` (Resume, pairing) ignores a Retry-After. Never throws. */
+    sync: (opts?: { userInitiated?: boolean }) => run([], true, opts?.userInitiated === true),
     /** Sync only if one is due (foreground timer when the location service isn't running). Never throws. */
     tick: () => run([], false),
     /** true while the plan wants tracking and only opening the app can start it (read by native.ts to retry) */

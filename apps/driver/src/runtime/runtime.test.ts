@@ -405,7 +405,51 @@ describe("runtime: location wake → resolveMode → queue → sync → apply", 
     expect(s.bodies[0].pings).toEqual([expect.objectContaining({ recordedAt: T, battery: null })]);
   });
 
-  it("a forced sync (Resume, push, app opened) still waits out a Retry-After", async () => {
+  it("a user-initiated sync (Resume, pairing) bypasses a Retry-After once; a new 429 holds it back again", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T + 10_000);
+    await s.rt.sync({ userInitiated: true });
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(s.files.dump()["sync-state"]).retryAfterAt).toBeNull();
+    // the bypass is per call: if the server says 429 again, the next automatic sync waits
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    s.at(T + 20_000);
+    await s.rt.sync({ userInitiated: true });
+    expect(s.fetch).toHaveBeenCalledTimes(3);
+    s.at(T + 30_000);
+    await s.rt.sync();
+    await s.rt.wake([fix(T + 30_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("a Retry-After deadline further away than the 10 min cap (phone clock moved back) is stale and ignored", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T - 3_600_000); // clock set back an hour: the deadline is now 61 min away
+    await s.rt.sync();
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("a bypass sync that fails with a non-429 keeps the 429 deadline for automatic syncs", async () => {
+    const s = await setup();
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
+    await s.rt.sync();
+    s.at(T + 10_000);
+    s.fetch.mockResolvedValueOnce(new Response("", { status: 503 }));
+    await s.rt.sync({ userInitiated: true });
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    s.at(T + 30_000);
+    await s.rt.wake([fix(T + 30_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(2);
+    s.at(T + 61_000);
+    await s.rt.wake([fix(T + 61_000)]);
+    expect(s.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("a forced sync that is not user-initiated (push, app opened) still waits out a Retry-After", async () => {
     const s = await setup();
     s.fetch.mockResolvedValueOnce(new Response("", { status: 429, headers: { "retry-after": "60" } }));
     await s.rt.sync();
