@@ -99,6 +99,40 @@ describe("locationPlan: patched (per-mode options, in-place updates)", () => {
   });
 });
 
+describe("locationPlan: the native interval is the fastest an active window needs", () => {
+  const fast = res({ mode: "active", intervalS: 5, until: at(11), window: win({ intervalS: 5 }) });
+  const slow = res({ mode: "active", intervalS: 30, until: at(11), window: win({ intervalS: 30 }) });
+
+  it("a force_active window faster than the config interval gets its own interval (both builds)", () => {
+    for (const c of [P, U]) {
+      expect(locationPlan(fast, CFG, now, c)).toMatchObject({ run: true, mode: "active", timeIntervalMs: 5_000 });
+    }
+  });
+
+  it("a slower window never slows the task below the config interval", () => {
+    expect(locationPlan(slow, CFG, now, P)).toMatchObject({ timeIntervalMs: 10_000 });
+  });
+
+  it("the key changes with the minimum, and only with it", () => {
+    expect(planKey(locationPlan(fast, CFG, now, P))).not.toBe(planKey(locationPlan(slow, CFG, now, P)));
+    expect(planKey(locationPlan(slow, CFG, now, P))).toBe(
+      planKey(locationPlan(res({ mode: "active", intervalS: 10, window: win() }), CFG, now, P)),
+    );
+  });
+
+  it("unpatched idle before a fast window uses the same interval, so entering the window does not retune", () => {
+    const idle = res({ until: now + HOUR, next: win({ intervalS: 5 }) });
+    const p = locationPlan(idle, CFG, now, U);
+    expect(p).toMatchObject({ run: true, mode: "idle", timeIntervalMs: 5_000 });
+    expect(planKey(p)).toBe(planKey(locationPlan(fast, CFG, now, U)));
+  });
+
+  it("patched idle keeps the heartbeat whatever the next window wants", () => {
+    const idle = res({ until: now + HOUR, next: win({ intervalS: 5 }) });
+    expect(locationPlan(idle, CFG, now, P)).toMatchObject({ highAccuracy: false, timeIntervalMs: 900_000 });
+  });
+});
+
 describe("locationPlan: unpatched (one fixed task per tracking day)", () => {
   const active = res({ mode: "active", intervalS: 10, until: at(11), window: win() });
 

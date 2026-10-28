@@ -56,7 +56,11 @@ export function locationPlan(
   capability: Capability,
 ): LocationPlan {
   if (r.mode !== "active" && r.mode !== "idle") return { run: false };
-  const activeOptions = { highAccuracy: true, timeIntervalMs: cfg.activeIntervalS * 1000 };
+  // One task, one interval: the fastest any active window of this plan needs (a force_active window may ask for
+  // less than the config's activeIntervalS). The key changes when that minimum does.
+  const windowIntervalS = (r.mode === "active" ? r.window : r.next?.mode === "active" ? r.next : null)?.intervalS;
+  const intervalS = Math.min(cfg.activeIntervalS, windowIntervalS ?? Infinity);
+  const activeOptions = { highAccuracy: true, timeIntervalMs: intervalS * 1000 };
   if (r.mode === "active") return { run: true, mode: "active", ...activeOptions, notification: NOTIFICATION };
   if (capability === "patched") {
     // cheap enough to leave on all night, and a background cold start would be impossible
