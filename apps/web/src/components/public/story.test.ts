@@ -151,3 +151,36 @@ describe("pageStory: ride time", () => {
     expect(s?.context).toBe("Waiting for passengers · about 8 min from here once it leaves · last seen 5s ago");
   });
 });
+
+describe("pageStory: a route that passes a stop twice (out and back)", () => {
+  const NANU = "55555555-5555-4555-8555-555555555555";
+  const NAMAKA = "44444444-4444-4444-8444-444444444444";
+  const out: PublicMapRoute = {
+    ...route,
+    spotIds: [NANU, RIVA, CIRCLE, NAMAKA, CIRCLE, RIVA, NANU],
+    path: [0, 1, 2, 3, 2, 1, 0].map((n) => ({ lat: 15.67 - n * km, lng: 73.71 })),
+    spotPathIdx: [0, 1, 2, 3, 4, 5, 6],
+    legS: [60, 120, 180, 240, 300, 360], // Circle → Namaka 4 min, Circle → Riva 5 min
+  };
+  const spots = [spot(NANU, "Nanu"), spot(RIVA, "Riva"), spot(CIRCLE, "Circle"), spot(NAMAKA, "Namaka")];
+  const input = { ...base, routes: [out], line: live(), spots };
+  const at4 = van({ routeId: out.id, atSpotId: CIRCLE, nextSpotId: RIVA });
+
+  it("waiting at Circle on the way back (next Riva): the ride to Riva is leg 4 (5 min), and Riva is next", () => {
+    const s = pageStory({ ...input, spot: spots[1] as PublicSpot, vehicles: [at4] });
+    expect(s?.context).toBe("Waiting for passengers · about 5 min from here once it leaves · last seen 5s ago");
+    expect(s?.mood?.text).toBe("Loading up at Circle. Your stop is next.");
+  });
+
+  it("the same stop on the way out (next Namaka): the ride to Namaka is leg 2 (3 min)", () => {
+    const s = pageStory({ ...input, spot: spots[3] as PublicSpot, vehicles: [{ ...at4, nextSpotId: NAMAKA }] });
+    expect(s?.context).toBe("Waiting for passengers · about 3 min from here once it leaves · last seen 5s ago");
+    expect(s?.mood?.text).toBe("Loading up at Circle. Your stop is next.");
+  });
+
+  it("Namaka is behind a van on its way back: no ride time claimed, and not 'next'", () => {
+    const s = pageStory({ ...input, spot: spots[3] as PublicSpot, vehicles: [at4] });
+    expect(s?.context).toBe("Waiting for passengers · last seen 5s ago");
+    expect(s?.mood?.text).toBe("Loading up at Circle.");
+  });
+});

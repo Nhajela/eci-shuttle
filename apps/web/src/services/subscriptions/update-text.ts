@@ -13,14 +13,17 @@
  * yet the same minute always gives the same words (deterministic, testable). The facts never vary.
  */
 import { type AnswerLine, istHHMM, type PublicSpot } from "@eci-shuttle/shared";
+import { spotIndexOf } from "@eci-shuttle/shared/geo/legOf";
 import { escapeHtml as esc } from "@/lib/telegram/html";
 import { renderAnswer } from "../bot/attendee";
 import { type LastSeen, lastSeenText } from "../public/sight";
 import { running } from "./need-text";
 
 export type ShuttleState =
-  /** at a stop, since it got there; seenAgoMs = how old its position is, when over 2 min (a short drop) */
-  | { kind: "waiting"; spotId: string; since: number; seenAgoMs?: number }
+  /**
+   * at a stop, since it got there; nextSpotId = the stop it heads for next, which tells the two visits to a stop apart
+   * on a route that passes it twice; seenAgoMs = how old its position is, when over 2 min (a short drop) */
+  | { kind: "waiting"; spotId: string; nextSpotId?: string | null; since: number; seenAgoMs?: number }
   /** between stops (fromSpotId = the stop it left, since = when) */
   | { kind: "moving"; toSpotId: string; fromSpotId: string | null; since: number; stopped: boolean; seenAgoMs?: number }
   | { kind: "off_route" }
@@ -166,7 +169,7 @@ function paragraph(ctx: Ctx, s: ShuttleNow, salt: number): string {
       const here = ctx.focusSpotId === st.spotId;
       const head = (tail: string) =>
         here ? `🚐 <b>${say(HERE_LEAD(who, at))}</b>` : `🚐 <b>${who} ${say(WAITING_VERB)} ${at}${tail}`;
-      const k = s.routeSpotIds.indexOf(st.spotId);
+      const k = spotIndexOf({ spotIds: s.routeSpotIds }, st.spotId, { nextSpotId: st.nextSpotId ?? undefined });
       const next = k >= 0 ? (s.routeSpotIds[k + 1] ?? null) : null;
       const legMs = k >= 0 ? (s.legS[k] ?? 0) * 1000 : 0;
       const rows = departures(ctx.spots, st.spotId, s.serviceId);

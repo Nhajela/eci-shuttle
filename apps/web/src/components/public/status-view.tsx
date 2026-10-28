@@ -358,6 +358,10 @@ function AnswerRow({
   );
 }
 
+/** A pass of a stop the route visits twice: serviceName is "Loop · to Namaka" (services/public/status TO_SEP). */
+const svcOf = (r: { serviceName: string }) => r.serviceName.split(" · to ")[0];
+const dir = (r: { serviceName: string }) => r.serviceName.split(" · to ")[1];
+
 function Schedule({ spot }: { spot: PublicSpot }) {
   const { rows, loops, notices } = spot.schedule;
   const manyServices = new Set(rows.map((r) => r.serviceId)).size > 1;
@@ -392,8 +396,10 @@ function Schedule({ spot }: { spot: PublicSpot }) {
               <span>{r.label}</span>
               <span className={cn("truncate", r.next ? "text-ink" : "text-ink-soft", r.past && "text-ink-mute")}>
                 {r.next ? "next" : ""}
-                {r.next && manyServices ? " · " : ""}
-                {manyServices ? r.serviceName : ""}
+                {r.next && (manyServices || dir(r)) ? " · " : ""}
+                {manyServices ? svcOf(r) : ""}
+                {manyServices && dir(r) ? " · " : ""}
+                {dir(r) ? `to ${dir(r)}` : ""}
               </span>
             </li>
           ))}

@@ -9,6 +9,7 @@
  * (a driver going home must not be on the map). No lateness anywhere.
  */
 import { istDate, type LatLng, pathLengthM } from "@eci-shuttle/shared";
+import { legOf } from "@eci-shuttle/shared/geo/legOf";
 import { and, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "@/db";
@@ -192,7 +193,10 @@ export async function publicPositions(db: Db, workspaceId: string, now: Date): P
     if (out.some((v) => v.id === r.vehicle.id)) continue; // two overlapping shifts on public services
     const route = routeById.get(svcById.get(r.serviceId)?.routeId ?? "");
     if (!route) continue;
-    const legIndex = s.phase === "en_route" && s.nextSpotId ? route.spotIds.indexOf(s.nextSpotId, 1) - 1 : -1;
+    const legIndex =
+      s.phase === "en_route" && s.nextSpotId
+        ? legOf(route, { spotId: s.spotId, nextSpotId: s.nextSpotId, alongM: s.alongM })
+        : -1;
     const fraction = legIndex >= 0 ? legFraction(route, legIndex, s.alongM) : null;
     out.push({
       id: r.vehicle.id,
