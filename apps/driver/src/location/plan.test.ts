@@ -103,10 +103,13 @@ describe("locationPlan: the native interval is the fastest an active window need
   const fast = res({ mode: "active", intervalS: 5, until: at(11), window: win({ intervalS: 5 }) });
   const slow = res({ mode: "active", intervalS: 30, until: at(11), window: win({ intervalS: 30 }) });
 
-  it("a force_active window faster than the config interval gets its own interval (both builds)", () => {
-    for (const c of [P, U]) {
-      expect(locationPlan(fast, CFG, now, c)).toMatchObject({ run: true, mode: "active", timeIntervalMs: 5_000 });
-    }
+  it("patched: a force_active window faster than the config interval gets its own interval", () => {
+    expect(locationPlan(fast, CFG, now, P)).toMatchObject({ run: true, mode: "active", timeIntervalMs: 5_000 });
+  });
+
+  it("unpatched: the key stays at the config interval (a change can't be applied from the background)", () => {
+    expect(locationPlan(fast, CFG, now, U)).toMatchObject({ run: true, mode: "active", timeIntervalMs: 10_000 });
+    expect(planKey(locationPlan(fast, CFG, now, U))).toBe(planKey(locationPlan(slow, CFG, now, U)));
   });
 
   it("a slower window never slows the task below the config interval", () => {
@@ -120,10 +123,10 @@ describe("locationPlan: the native interval is the fastest an active window need
     );
   });
 
-  it("unpatched idle before a fast window uses the same interval, so entering the window does not retune", () => {
+  it("unpatched idle before a fast window keeps the config interval, same key as active", () => {
     const idle = res({ until: now + HOUR, next: win({ intervalS: 5 }) });
     const p = locationPlan(idle, CFG, now, U);
-    expect(p).toMatchObject({ run: true, mode: "idle", timeIntervalMs: 5_000 });
+    expect(p).toMatchObject({ run: true, mode: "idle", timeIntervalMs: 10_000 });
     expect(planKey(p)).toBe(planKey(locationPlan(fast, CFG, now, U)));
   });
 

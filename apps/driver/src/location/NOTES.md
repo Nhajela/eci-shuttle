@@ -29,9 +29,10 @@ started GPS for a shift, active phones kept GPS on all night.
 ### Decision table (`plan.nativeDecision`, run by `apply.ts`)
 
 Stable plan key = accuracy + interval + fixed notification text. No countdown, no clock, nothing that changes as a
-window gets closer. The active interval is the fastest any active window of the plan needs: `min(activeIntervalS,
-window.intervalS)` for the current active window (unpatched idle: the next active window), so a force_active 5 s
-directive is honoured. The key changes when that minimum changes (in-place update on patched builds, foreground-only on 0.1.0).
+window gets closer. On patched builds the active interval is the fastest any active window of the plan needs: `min(activeIntervalS,
+window.intervalS)` (idle: the heartbeat), so a force_active 5 s directive is honoured; the key changes with that minimum
+(in-place update). Unpatched (0.1.0) always uses `activeIntervalS`: a key change can't be applied from the background
+and would only raise "open the app"; the gate still follows the window's cadence.
 
 | Build | Plan (resolved mode) | Task state | Foreground | Background |
 |---|---|---|---|---|
