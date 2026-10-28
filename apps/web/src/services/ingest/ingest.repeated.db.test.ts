@@ -152,3 +152,80 @@ describe("departure matching on a route whose first stop reappears mid-route", (
     expect(rows[0]?.dwellId).not.toBeNull();
   });
 });
+
+/** Waypoints in km along the road: dwell `dwellS` at each, `legS` seconds between, a fix every `stepS`. */
+function walk(stopsKm: number[], opts: { stepS?: number; dwellS?: number; legS?: number; t0?: number } = {}) {
+  const { stepS = 10, dwellS = 60, legS = 120 } = opts;
+  let t = opts.t0 ?? T0;
+  const out: Ping[] = [];
+  stopsKm.forEach((km, i) => {
+    for (let s = 0; s < dwellS; s += stepS) out.push(ping(t + s * 1000, km));
+    t += dwellS * 1000;
+    const next = stopsKm[i + 1];
+    if (next === undefined) return;
+    for (let s = 0; s < legS; s += stepS) out.push(ping(t + s * 1000, km + (next - km) * (s / legS)));
+    t += legS * 1000;
+  });
+  return { pings: out, end: t };
+}
+
+describe("ingest: the position outranks the dwell log when they disagree", () => {
+  const send = (w: Awaited<ReturnType<typeof makeOutAndBack>>, pings: Ping[]) =>
+    ingestPings(
+      db(),
+      { workspaceId: w.ws.id, deviceId: w.device.id, pings },
+      new Date((pings.at(-1)?.recordedAt ?? 0) + 2_000),
+    );
+  const stateOf = async (w: Awaited<ReturnType<typeof makeOutAndBack>>) =>
+    (await db().select().from(vehicleState).where(eq(vehicleState.vehicleId, w.vehicle.id)))[0];
+
+  it("ops run Circle → Namaka → Circle → Namaka again: heading north from Circle the van is on leg 2, not Circle → Riva", async () => {
+    const w = await makeOutAndBack(db());
+    // Circle (2), Namaka (3), Circle (2), then 90 % of the way to Namaka again
+    const run = walk([2, 3, 2]);
+    const second = walk([2, 2.9], { t0: run.end, dwellS: 0, legS: 120 }); // leaves Circle at once, north
+    await send(w, [...run.pings, ...second.pings.filter((p) => p.recordedAt > run.end + 40_000)]);
+    const s = await stateOf(w);
+    expect(s).toMatchObject({ phase: "en_route", spotId: w.id.circle, nextSpotId: w.id.namaka });
+    expect(s.alongM).toBeGreaterThan(w.cumM[2] as number);
+    expect(s.alongM).toBeLessThan(w.cumM[3] as number);
+    // Namaka is ~100 m ahead: minutes away at most, not a van driving away from Riva
+    expect(s.etaS ?? 1e9).toBeLessThan(60);
+  });
+
+  it("turning round before the next geofence: on the shared road the position cannot tell the passes apart (documented)", async () => {
+    const w = await makeOutAndBack(db());
+    // Nanu → Riva → Circle, then north 0.5 km and back south again without reaching Namaka
+    const run = walk([0, 1, 2]);
+    const turn = walk([2.5, 2.2], { t0: run.end, dwellS: 0, legS: 60 });
+    await send(w, [...run.pings, ...walk([2, 2.5], { t0: run.end, dwellS: 0, legS: 60 }).pings, ...turn.pings]);
+    const s = await stateOf(w);
+    // still the last dwell's leg (Circle → Namaka): the van is on that road, within the geofence-free stretch
+    expect(s).toMatchObject({ phase: "en_route", spotId: w.id.circle, nextSpotId: w.id.namaka });
+    // its next arrival (Riva) puts it back on the return half through the dwell log
+    const back = walk([2.2, 1], { t0: turn.end, dwellS: 0, legS: 120 });
+    await send(w, [...back.pings, ...walk([1], { t0: back.end }).pings]);
+    expect(await stateOf(w)).toMatchObject({ phase: "at_spot", spotId: w.id.riva, nextSpotId: w.id.nanu });
+  });
+
+  it("a lap with one fix a minute still resolves every pass", async () => {
+    const w = await makeOutAndBack(db());
+    const ids = w.route.spotIds;
+    // stop by stop: after the dwell fixes of stop i the van is at spot i; after the first leg fix it is on leg i
+    let t = T0;
+    for (let i = 0; i < 7; i++) {
+      const km = [0, 1, 2, 3, 2, 1, 0][i] as number;
+      await send(w, [ping(t, km), ping(t + 60_000, km), ping(t + 120_000, km)]);
+      const s = await stateOf(w);
+      expect(s, `dwell ${i}`).toMatchObject({ phase: "at_spot", spotId: ids[i] });
+      expect(s.nextSpotId, `dwell ${i}`).toBe(ids[i + 1] ?? ids[1]);
+      t += 180_000;
+      if (i === 6) break;
+      const nextKm = [0, 1, 2, 3, 2, 1, 0][i + 1] as number;
+      await send(w, [ping(t - 30_000, km + (nextKm - km) * 0.3), ping(t + 30_000, km + (nextKm - km) * 0.7)]);
+      const m = await stateOf(w);
+      expect(m, `leg ${i}`).toMatchObject({ phase: "en_route", spotId: ids[i], nextSpotId: ids[i + 1] });
+      t += 60_000;
+    }
+  });
+});

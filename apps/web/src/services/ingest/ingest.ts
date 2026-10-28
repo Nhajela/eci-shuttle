@@ -432,19 +432,28 @@ async function occurrenceOf(
   if (ids.indexOf(spotId) === ids.lastIndexOf(spotId)) return ids.indexOf(spotId);
   const pool = spotCandidates(route, spotId, { recent: await recentVisits(db, vehicleId) });
   const { path, spotPathIdx: idx } = route;
-  if (pool.length < 2 || atSpot || !fix || path.length < 2 || idx.length !== ids.length) return pool[0] ?? -1;
-  let best = pool[0] as number;
-  let bestOff = Number.POSITIVE_INFINITY;
+  if (atSpot || !fix || path.length < 2 || idx.length !== ids.length) return pool[0] ?? -1;
   const loop = ids[0] === ids[ids.length - 1];
-  for (const i of pool) {
-    if (i === ids.length - 1 && !loop) continue; // no leg leaves a one-way route's last spot
+  /** how far the fix lies from the leg that leaves occurrence i (Infinity: no such leg) */
+  const offFrom = (i: number) => {
+    if (i === ids.length - 1 && !loop) return Number.POSITIVE_INFINITY; // no leg leaves a one-way route's last spot
     const leg = i % (ids.length - 1); // a loop's last spot starts the next lap
     const sub = path.slice(idx[leg], (idx[leg + 1] ?? 0) + 1);
-    if (sub.length < 2) continue;
-    const off = projectOntoPath(sub, fix).offsetM;
-    if (off < bestOff - 1) {
-      best = i;
-      bestOff = off;
+    return sub.length < 2 ? Number.POSITIVE_INFINITY : projectOntoPath(sub, fix).offsetM;
+  };
+  // several passes left by the dwell log: the one the fix lies on; one pass: that one, unless the van is clearly
+  // not on its leg but is on another pass's (ops turned round, or ran the same stretch twice)
+  let best = pool[0] ?? -1;
+  let bestOff = best < 0 ? Number.POSITIVE_INFINITY : offFrom(best);
+  for (const i of pool.length > 1 ? pool : []) {
+    const off = offFrom(i);
+    if (off < bestOff - 1) [best, bestOff] = [i, off];
+  }
+  if (pool.length === 1 && bestOff > OFF_ROUTE_M) {
+    for (const i of ids.keys()) {
+      if (ids[i] !== spotId || i === pool[0]) continue;
+      const off = offFrom(i);
+      if (off <= OFF_ROUTE_M && off < bestOff) [best, bestOff] = [i, off];
     }
   }
   return best;
