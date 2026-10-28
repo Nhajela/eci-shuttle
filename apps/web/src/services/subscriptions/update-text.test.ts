@@ -123,6 +123,31 @@ describe("storyText: a shuttle waiting at a stop", () => {
     expect(text).toMatch(MOVE_PROMISE);
   });
 
+  it("an out-and-back route: waiting at Circle on the way back, the next stop is Riva, not Namaka", () => {
+    const NANU = "33333333-3333-4333-8333-333333333333";
+    const NAMAKA = "44444444-4444-4444-8444-444444444444";
+    const spots = [
+      spot(RIVA, "Riva", [live(14)], [], 23),
+      spot(CIRCLE, "Circle", [live(0)], [], 23),
+      spot(NAMAKA, "Namaka", [live(9)], [], 23),
+    ];
+    const back: ShuttleNow = {
+      ...shuttle({ kind: "waiting", spotId: CIRCLE, nextSpotId: RIVA, since: NOW - min(2) }),
+      routeSpotIds: [NANU, RIVA, CIRCLE, NAMAKA, CIRCLE, RIVA, NANU],
+      legS: [60, 120, 180, 240, 300, 360], // Circle → Namaka 4 min, Circle → Riva 5 min
+    };
+    const text = storyText({ shuttles: [back], spots, focusSpotId: null, now: NOW }) as string;
+    expect(text).toContain("\nOnce it leaves, Riva is about 5 min away.\n");
+    // the same stop on the way out heads for Namaka
+    const out: ShuttleNow = {
+      ...back,
+      state: { kind: "waiting", spotId: CIRCLE, nextSpotId: NAMAKA, since: NOW - min(2) },
+    };
+    expect(storyText({ shuttles: [out], spots, focusSpotId: null, now: NOW })).toContain(
+      "\nOnce it leaves, Namaka is about 3 min away.\n",
+    );
+  });
+
   it("varies its phrasing from minute to minute, but says the same thing for the same minute", () => {
     const spots = [spot(RIVA, "Riva", [live(14)], [], 23), spot(CIRCLE, "Circle", [live(0)], [], 23)];
     const say = (now: number) =>

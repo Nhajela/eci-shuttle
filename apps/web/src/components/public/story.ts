@@ -6,6 +6,7 @@
  * stop first keeps its time and says so. Everything else keeps the usual answer (null). Never "late". Pure.
  */
 import { type AnswerLine, istHHMM, type PublicSpot } from "@eci-shuttle/shared";
+import { spotIndexOf } from "@eci-shuttle/shared/geo/legOf";
 import type { PublicMapRoute, PublicVehicle } from "@/services/public/positions";
 import { routePath } from "./map/motion";
 import type { Mood } from "./whimsy";
@@ -55,14 +56,11 @@ export function pageStory(input: {
 
   if (v.phase !== "at_spot" || !v.atSpotId || v.atSpotId === spot.spotId) return null;
   const there = name(v.atSpotId);
-  const rideMs = rideTimeMs(
-    routes.find((r) => r.id === v.routeId),
-    v.atSpotId,
-    spot.spotId,
-  );
-  const ride = rideMs ? `about ${Math.max(1, Math.round(rideMs / MIN))} min from here once it leaves` : null;
   const route = routes.find((r) => r.id === v.routeId);
-  const k = route ? route.spotIds.indexOf(v.atSpotId) : -1;
+  // a stop the route passes twice: the vehicle's next stop says which pass it is at
+  const k = route ? spotIndexOf(route, v.atSpotId, { nextSpotId: v.nextSpotId ?? undefined, alongM: v.alongM }) : -1;
+  const rideMs = rideTimeMs(route, k, spot.spotId);
+  const ride = rideMs ? `about ${Math.max(1, Math.round(rideMs / MIN))} min from here once it leaves` : null;
   const nextIsHere = !!route && k >= 0 && route.spotIds[k + 1] === spot.spotId;
   const mood: Mood = {
     emoji: "🧺",
@@ -84,10 +82,12 @@ export function pageStory(input: {
   return { label: "Shuttle is", value: `at ${there}`, context: `${plan} · ${seen}`, mood };
 }
 
-/** Ride time from one stop to the next time the route reaches another, at the baseline speed; null when unknown. */
-function rideTimeMs(route: PublicMapRoute | undefined, fromId: string, toId: string): number | null {
+/**
+ * Ride time from the route's stop number `k` to the next time the route reaches `toId`, at the baseline speed; null
+ * when unknown (or the route does not reach it again).
+ */
+function rideTimeMs(route: PublicMapRoute | undefined, k: number, toId: string): number | null {
   if (!route || route.spotPathIdx.length !== route.spotIds.length) return null;
-  const k = route.spotIds.indexOf(fromId);
   const j = k >= 0 ? route.spotIds.indexOf(toId, k + 1) : -1;
   if (k < 0 || j < 0) return null;
   // learned leg times when every leg on the way has one
