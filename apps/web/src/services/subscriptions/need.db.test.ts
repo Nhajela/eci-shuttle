@@ -7,6 +7,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { alertPrefs, auditLog, outbox, subscriptions, vehicleState } from "@/db/schema";
 import type { Spot } from "@/db/types";
+import { predictedPhase } from "../public/sight";
 import { publicStatus, spotAnswer } from "../public/status";
 import { PICKUP_MAX_MS, requestPickup, runPickups, waitingAtSpots } from "./need";
 import { unsubscribe } from "./subscriptions";
@@ -238,6 +239,20 @@ describe("runPickups", () => {
     const [row] = await db().select().from(subscriptions).where(eq(subscriptions.id, request.id));
     expect(row.firedAt).toEqual(later(2));
     expect(await runPickups(db(), { workspaceId: ws.id }, later(3))).toEqual({ fired: 0, onTheWay: 0, expired: 0 });
+  });
+
+  it("an estimate through a no-signal stretch never fires 'here' or 'on the way'; the real fix does", async () => {
+    const { ws, riva, circle, actor } = await setup();
+    await requestPickup(db(), actor, { workspaceId: ws.id, fromSpotId: riva.id, toSpotId: circle.id }, NOW);
+    const guess = line({ minutes: 1, approx: true, phaseText: predictedPhase("Riva") });
+    answer.mockResolvedValue([guess]);
+    expect(await runPickups(db(), { workspaceId: ws.id }, later(1))).toEqual({ fired: 0, onTheWay: 0, expired: 0 });
+    // even a (hypothetical) 0 from a guess is not "here"
+    answer.mockResolvedValue([{ ...guess, minutes: 0 }]);
+    expect(await runPickups(db(), { workspaceId: ws.id }, later(2))).toEqual({ fired: 0, onTheWay: 0, expired: 0 });
+    // it is picked up again once the shuttle is seen
+    answer.mockResolvedValue([line({ minutes: 4, approx: true })]);
+    expect(await runPickups(db(), { workspaceId: ws.id }, later(3))).toEqual({ fired: 0, onTheWay: 1, expired: 0 });
   });
 
   it("'on the way' once when the live ETA is ≤ 10 min, then 'here'", async () => {

@@ -11,6 +11,7 @@ import type { Db } from "@/db";
 import { people, spots, subscriptions } from "@/db/schema";
 import type { Person, Subscription } from "@/db/types";
 import { type Actor, enqueue, getInWorkspace, mutate, parseInput, readable, ServiceError } from "../kernel";
+import { isPredictedLine } from "../public/sight";
 import { spotAnswer } from "../public/status";
 
 export const ARRIVAL_ALERT_MAX_MS = 2 * 60 * 60_000;
@@ -256,6 +257,8 @@ export async function runArrivalAlerts(
       ?.filter(
         (l) =>
           l.kind === "live" &&
+          // a guess through a no-signal stretch never fires an alert (the first real fix will)
+          !isPredictedLine(l) &&
           l.minutes != null &&
           l.minutes <= (sub.leadMin ?? DEFAULT_LEAD_MIN) &&
           (!sub.serviceId || l.serviceId === sub.serviceId),

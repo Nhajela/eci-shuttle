@@ -41,8 +41,18 @@ import type { LegStat, Notice, Route, Service, Spot, VehicleState } from "@/db/t
 import { activeBreaks, breakEnd } from "../catalog/breaks";
 import { ServiceError } from "../kernel";
 import { activeNotices } from "../notices/notices";
+import { loadDeadZones } from "../signal/dead-zones";
+import { predictRoute } from "./predict";
 import { addDays, serviceDaysInPlay } from "./service-days";
-import { FRESH_MS, type LastSeen, lastSeenText, sight } from "./sight";
+import {
+  FRESH_MS,
+  type LastSeen,
+  lastSeenText,
+  type PredictedFix,
+  type PredictRoute,
+  predictedPhase,
+  sight,
+} from "./sight";
 
 const MATCH_WINDOW_MS = 25 * 60_000;
 const MIN_SAMPLES = 5;
@@ -55,6 +65,10 @@ export const ON_BREAK = "on a short break";
 export const CANT_SEE = "can't see it right now";
 /** The freshest shuttle was last seen inside a stop 5–15 min ago: "last seen at Riva at 19:12 · may still be there". */
 export const MAY_STILL_BE_THERE = "may still be there";
+
+/** Range of a predicted ETA, as multiples of the estimate of the rest of the leg (p20 / p80 stand-ins). */
+const PREDICT_LO = 0.75;
+const PREDICT_HI = 1.5;
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -227,7 +241,18 @@ export async function publicStatus(db: Db, workspaceId: string, now: Date): Prom
       if (s && !spotOrder.includes(s)) spotOrder.push(s);
     }
 
-  const live = await liveVehicles(db, workspaceId, running, nowMs);
+  // dead zones once per request; a route without one is never predicted
+  const zones = running.length ? await loadDeadZones(db, workspaceId) : [];
+  const predictBy = new Map<string, PredictRoute>();
+  for (const r of running) {
+    const p = predictRoute(
+      r.route,
+      zones,
+      r.legs.map((l) => l.estimate.medianS || null),
+    );
+    if (p) predictBy.set(r.svc.id, p);
+  }
+  const live = await liveVehicles(db, workspaceId, running, nowMs, predictBy);
   const typical = await typicalDelays(db, workspaceId, nowMs);
   const notices = await activeNotices(db, workspaceId, now);
   const placed = (p: string) => notices.filter((n) => n.placements.includes(p as Notice["placements"][number]));
@@ -318,7 +343,13 @@ function cycleMin(r: Running, vehicleCount: number): number {
   return Math.max(1, Math.round(lapS / 60 / Math.max(1, vehicleCount)));
 }
 
-type Live = { vehicle: { id: string; name: string }; state: VehicleState; stopped: boolean };
+type Live = {
+  vehicle: { id: string; name: string };
+  state: VehicleState;
+  stopped: boolean;
+  /** set when the position is an estimate through a no-signal stretch (state.alongM is the estimate) */
+  predicted?: PredictedFix;
+};
 /** A shuttle on shift that we can't see now (sight.ts parked / lost / hidden). */
 type Unseen = { parked: boolean; last: LastSeen | null };
 
@@ -335,7 +366,13 @@ function blindText(unseen: Unseen[], name: (spotId: string) => string, nowMs: nu
   return where ? `${CANT_SEE} · last seen ${where}` : CANT_SEE;
 }
 
-async function liveVehicles(db: Db, workspaceId: string, running: Running[], nowMs: number) {
+async function liveVehicles(
+  db: Db,
+  workspaceId: string,
+  running: Running[],
+  nowMs: number,
+  predictBy: Map<string, PredictRoute>,
+) {
   const byService = new Map<string, Live[]>();
   /** per service, its shuttles on shift that we can't see now */
   const unseen = new Map<string, Unseen[]>();
@@ -370,7 +407,7 @@ async function liveVehicles(db: Db, workspaceId: string, running: Running[], now
       breaks.set(r.serviceId, [...(breaks.get(r.serviceId) ?? []), breakEnd(brk)?.getTime() ?? null]);
       continue;
     }
-    const v = sight(s, nowMs);
+    const v = sight(s, nowMs, predictBy.get(r.serviceId));
     const blind = (u: Unseen) => unseen.set(r.serviceId, [...(unseen.get(r.serviceId) ?? []), u]);
     // silent for 30 min: not running as far as attendees can tell, so not one of the shuttles sharing the loop
     if (v.kind === "hidden") {
@@ -378,6 +415,13 @@ async function liveVehicles(db: Db, workspaceId: string, running: Running[], now
       continue;
     }
     assigned.set(r.serviceId, (assigned.get(r.serviceId) ?? 0) + 1);
+    if (v.kind === "predicted") {
+      if (v.state.serviceId !== r.serviceId) continue;
+      const list = byService.get(r.serviceId) ?? [];
+      list.push({ vehicle: r.vehicle, state: v.state, stopped: false, predicted: v.estimate });
+      byService.set(r.serviceId, list);
+      continue;
+    }
     if (v.kind !== "live") {
       blind({ parked: v.kind === "parked", last: v.last });
       continue;
@@ -499,10 +543,25 @@ function answerFor(
       continue;
     }
     const vehicle = etaVehicle(r, s);
+    const pr = v.predicted;
+    // through the no-signal leg the pace is the one the estimate used, with a wider range; approx always
+    const legs = pr
+      ? r.legs.map((l, i) =>
+          i === pr.legIndex
+            ? {
+                ...l,
+                estimate: asEstimate(
+                  { medianS: pr.legS, p20S: pr.legS * PREDICT_LO, p80S: pr.legS * PREDICT_HI, n: MIN_SAMPLES },
+                  "leg_day",
+                ),
+              }
+            : l,
+        )
+      : r.legs;
     const eta =
       vehicle &&
       etaToSpot({
-        legs: r.legs,
+        legs,
         dwells: r.dwells,
         vehicle,
         targetSpotId: spot.id,
@@ -511,22 +570,27 @@ function answerFor(
       });
     if (!eta || !runLeft(nowMs + eta.seconds * 1000)) continue;
     const at = s.spotId ? spotById.get(s.spotId)?.shortName : undefined;
-    const phaseText = v.stopped
-      ? "stopped on the way"
-      : s.phase === "at_spot" && at
-        ? `at ${at}`
-        : at && nowMs - s.since.getTime() < 60_000
-          ? `leaving ${at} now`
-          : "on the way";
-    if (!best || eta.minutes < best.minutes)
+    const toName = pr && (spotById.get(pr.toSpotId)?.shortName ?? "the next stop");
+    const phaseText = toName
+      ? predictedPhase(toName)
+      : v.stopped
+        ? "stopped on the way"
+        : s.phase === "at_spot" && at
+          ? `at ${at}`
+          : at && nowMs - s.since.getTime() < 60_000
+            ? `leaving ${at} now`
+            : "on the way";
+    // a guess never says "here now": at least a minute away
+    const minutes = pr ? Math.max(1, eta.minutes) : eta.minutes;
+    if (!best || minutes < best.minutes)
       best = {
-        minutes: eta.minutes,
+        minutes,
         line: {
           ...line,
-          minutes: eta.minutes,
-          rangeLo: eta.lo,
-          rangeHi: eta.hi,
-          approx: eta.basis === "estimate",
+          minutes,
+          rangeLo: pr ? Math.max(1, eta.lo) : eta.lo,
+          rangeHi: pr ? Math.max(minutes, eta.hi) : eta.hi,
+          approx: pr ? true : eta.basis === "estimate",
           phaseText,
         },
       };
