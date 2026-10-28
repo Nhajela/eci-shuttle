@@ -1,21 +1,33 @@
 {
-  "cli": { "version": ">= 16.0.0", "appVersionSource": "local" },
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "local"
+  },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      },
+      "pnpm": "10.18.1"
     },
     "test": {
       "distribution": "internal",
       "channel": "test",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      },
+      "pnpm": "10.18.1"
     },
     "live": {
       "distribution": "internal",
       "channel": "live",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      },
+      "pnpm": "10.18.1"
     }
   }
 }

@@ -8,7 +8,8 @@
     "android": "expo run:android",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "doctor": "expo-doctor"
+    "doctor": "expo-doctor",
+    "eas-build-post-install": "node scripts/verify-native-patch.cjs"
   },
   "dependencies": {
     "@eci-shuttle/shared": "workspace:*",
