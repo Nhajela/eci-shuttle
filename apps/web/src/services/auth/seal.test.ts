@@ -5,6 +5,13 @@ const A = "first-secret-at-least-32-characters-long";
 const B = "second-secret-at-least-32-characters-long";
 const NOW = 1_760_000_000_000;
 
+/** Changes the second-to-last character of the ciphertext (always a different one, decided by that character). */
+function tamper(sealed: string): string {
+  const [k, iv, ct] = sealed.split(".");
+  const at = ct.length - 2;
+  return `${k}.${iv}.${ct.slice(0, at)}${ct[at] === "A" ? "B" : "A"}${ct.slice(at + 1)}`;
+}
+
 describe("seal / unseal", () => {
   it("round-trips a payload, URL-safe", () => {
     const s = seal({ a: 1, b: ["x"] }, [A], NOW + 1000);
@@ -31,11 +38,22 @@ describe("seal / unseal", () => {
     expect(unseal(fresh, [B], NOW)).toBeNull();
   });
 
+  it("tamper() changes the text for every possible character, so a tamper test can never be a no-op", () => {
+    // the old test picked A/B by the LAST char but replaced the second-to-last: ~1 in 64 seals came out unchanged
+    for (const c of "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+      for (const last of ["A", "B", "z"]) {
+        const sealed = `k.iv.xyz${c}${last}`;
+        expect(tamper(sealed)).not.toBe(sealed);
+      }
+  });
+
+  it("every tampered seal is refused (many random seals)", () => {
+    for (let i = 0; i < 300; i++) expect(unseal(tamper(seal({ personId: `p${i}` }, [A], null)), [A], NOW)).toBeNull();
+  });
+
   it("null on tampering, garbage or an unknown key", () => {
     const s = seal({ personId: "p1" }, [A], null);
-    const [k, iv, ct] = s.split(".");
-    const flipped = `${k}.${iv}.${ct.slice(0, -2)}${ct.endsWith("A") ? "B" : "A"}${ct.slice(-1)}`;
-    expect(unseal(flipped, [A], NOW)).toBeNull();
+    expect(unseal(tamper(s), [A], NOW)).toBeNull();
     expect(unseal("nope", [A], NOW)).toBeNull();
     expect(unseal("a.b.c", [A], NOW)).toBeNull();
     expect(unseal("", [A], NOW)).toBeNull();
