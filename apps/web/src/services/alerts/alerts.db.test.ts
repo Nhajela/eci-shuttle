@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { alertPrefs, auditLog, deviceAssignments, memberships, outbox } from "@/db/schema";
 import { adminActor } from "@/services/auth/actor";
 import { systemActor, type TelegramPayload } from "../kernel";
-import { alertAdminChanges, muteAlert, raiseAlert, sendDigest } from "./alerts";
+import { alertAdminChanges, muteAlert, muteEntityFor, raiseAlert, sendDigest } from "./alerts";
 
 // learning/insights is another task's module: fake its two reads
 vi.mock("@/services/learning/insights", () => ({
@@ -252,6 +252,14 @@ describe("muteAlert: vehicle problems follow the vehicle", () => {
     await muteAlert(db(), actor, { workspaceId: ws.id, deviceId: phone1.id, kind: "low_battery" }, NOW);
     expect(await raiseAlert(db(), event("low_battery", phone2.id, "low_battery:p2:1"), NOW)).toBe(2);
     expect(await raiseAlert(db(), event("low_battery", phone1.id, "low_battery:p1:1"), NOW)).toBe(1);
+  });
+
+  it("muteEntityFor: one entity for both phones of a vehicle (vehicle kinds), one per phone otherwise", async () => {
+    const { ws, phone1, phone2 } = await setup();
+    const e = (d: string, k: string) => muteEntityFor(db(), ws.id, d, k);
+    expect(await e(phone1.id, "silent")).toBe(await e(phone2.id, "silent"));
+    expect(await e(phone1.id, "low_battery")).not.toBe(await e(phone2.id, "low_battery"));
+    expect(await e("d1", "silent")).toBe("silent:d1");
   });
 
   it("a repeat press via the vehicle's other phone is already muted (one audit row); expires after the hour", async () => {

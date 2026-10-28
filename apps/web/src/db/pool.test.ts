@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDb, poolMax } from "./index";
 
 describe("poolMax (DB_POOL_MAX)", () => {
@@ -14,6 +14,17 @@ describe("poolMax (DB_POOL_MAX)", () => {
 
   it("ignores garbage, zero, negatives, fractions and absurd sizes (falls back to 10)", () => {
     for (const bad of ["abc", "0", "-3", "2.5", "1e3", "10000"]) expect(poolMax(bad)).toBe(10);
+  });
+
+  it("warns about an invalid value before falling back, never about unset or valid ones", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    poolMax(undefined);
+    poolMax("20");
+    expect(warn).not.toHaveBeenCalled();
+    poolMax("abc");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("DB_POOL_MAX");
+    warn.mockRestore();
   });
 
   it("the pool uses the given size (postgres-js options.max); no connection is opened", async () => {

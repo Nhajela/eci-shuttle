@@ -96,6 +96,16 @@ async function vehicleOf(db: Db, workspaceId: string, deviceId: string): Promise
   return row?.vehicleId ?? null;
 }
 
+async function resolveMute(db: Db, workspaceId: string, deviceId: string, kind: string) {
+  const vehicleId = VEHICLE_KINDS.has(kind) ? await vehicleOf(db, workspaceId, deviceId) : null;
+  return { vehicleId, entityId: vehicleId ? vehicleMuteEntity(kind, vehicleId) : muteEntity(kind, deviceId) };
+}
+
+/** What a mute of this kind on this phone is keyed to (the vehicle's entity or the phone's): for callers' locks. */
+export async function muteEntityFor(db: Db, workspaceId: string, deviceId: string, kind: string): Promise<string> {
+  return (await resolveMute(db, workspaceId, deviceId, kind)).entityId;
+}
+
 /**
  * viewer+ (a person). "Mute alert 1h": this person gets no alert of `kind` about that phone for an hour (kind "*"
  * = every kind). A silent / off_route mute covers the phone's whole vehicle (those problems belong to the vehicle,
@@ -117,8 +127,7 @@ export async function muteAlert(
   readable(actor, p.workspaceId);
   // silent / off_route belong to the vehicle, and the problem can be attributed to any of its phones: key the mute
   // to the phone's current vehicle. A phone without one (or an unknown id) mutes per device, like phone problems.
-  const vehicleId = VEHICLE_KINDS.has(p.kind) ? await vehicleOf(db, p.workspaceId, p.deviceId) : null;
-  const entityId = vehicleId ? vehicleMuteEntity(p.kind, vehicleId) : muteEntity(p.kind, p.deviceId);
+  const { entityId, vehicleId } = await resolveMute(db, p.workspaceId, p.deviceId, p.kind);
   const running = await mutedUntil(db, p.workspaceId, actor.id, { ...p, vehicleId }, now);
   if (running && running.getTime() - now.getTime() > MUTE_MS - 5 * 60_000) return { until: running, already: true };
   const until = new Date(now.getTime() + MUTE_MS);
