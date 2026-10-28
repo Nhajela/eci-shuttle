@@ -18,20 +18,38 @@ describe("formatLeg", () => {
 describe("legRows", () => {
   it("pairs consecutive spots with their learned time", () => {
     expect(legRows({ spotIds: ["a", "b", "a"], typicalLegS: [600, null] }, names)).toEqual([
-      { from: "Riva", to: "Circle", time: "10 min", learned: true },
-      { from: "Circle", to: "Riva", time: "not learned yet", learned: false },
+      { from: "Riva", to: "Circle", time: "10 min", learned: true, noSignal: null },
+      { from: "Circle", to: "Riva", time: "not learned yet", learned: false, noSignal: null },
     ]);
   });
   it("says how many trips a learned leg comes from", () => {
     expect(legRows({ spotIds: ["a", "b", "a"], typicalLegS: [600, null], legSamples: [24, 0] }, names)).toEqual([
-      { from: "Riva", to: "Circle", time: "10 min (24 trips)", learned: true },
-      { from: "Circle", to: "Riva", time: "not learned yet", learned: false },
+      { from: "Riva", to: "Circle", time: "10 min (24 trips)", learned: true, noSignal: null },
+      { from: "Circle", to: "Riva", time: "not learned yet", learned: false, noSignal: null },
     ]);
   });
   it("treats a missing typical_leg_s entry as unknown and names a spot it can't find", () => {
     expect(legRows({ spotIds: ["a", "zz"], typicalLegS: [] }, names)).toEqual([
-      { from: "Riva", to: "Unknown spot", time: "not learned yet", learned: false },
+      { from: "Riva", to: "Unknown spot", time: "not learned yet", learned: false, noSignal: null },
     ]);
+  });
+});
+
+describe("legRows no-signal marks", () => {
+  it("shows manual over detected, detected alone, and none", () => {
+    const rows = legRows(
+      {
+        spotIds: ["a", "b", "a", "b"],
+        typicalLegS: [],
+        noSignalLegs: [
+          { legIndex: 0, source: "detected" },
+          { legIndex: 0, source: "manual" },
+          { legIndex: 1, source: "detected" },
+        ],
+      },
+      names,
+    );
+    expect(rows.map((r) => r.noSignal)).toEqual(["manual", "detected", null]);
   });
 });
 

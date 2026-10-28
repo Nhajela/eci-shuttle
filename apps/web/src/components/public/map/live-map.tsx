@@ -10,7 +10,7 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import { LngLatBounds, Marker, Map as MlMap, setWorkerUrl } from "maplibre-gl";
 import { useEffect, useRef } from "react";
-import type { PublicMap } from "@/services/public/positions";
+import { isEstimated, mapAriaLabel, type ClientMap as PublicMap, vanLabelText } from "./estimate";
 import { PalmLayer } from "./palm-layer";
 import { palmSites } from "./palms";
 import { type VanFix, VanLayer } from "./van-layer";
@@ -150,6 +150,7 @@ function vanFixes(data: PublicMap): VanFix[] {
     colour: v.colour,
     routeId: v.routeId,
     alongM: v.alongM,
+    estimated: isEstimated(v),
   }));
 }
 
@@ -428,7 +429,7 @@ export function LiveMap({
     else if (matchMedia("(pointer: coarse)").matches) cg.enable();
   }, [expanded]);
 
-  return <div ref={box} className={className} aria-label="Live map of the shuttle" role="img" />;
+  return <div ref={box} className={className} aria-label={mapAriaLabel(data.vehicles)} role="img" />;
 }
 
 function syncStops(s: Live, data: PublicMap) {
@@ -470,8 +471,9 @@ function syncLabels(s: Live, data: PublicMap) {
       s.labels.set(v.id, m);
     }
     const el = m.getElement();
-    el.textContent = v.onBreak ? `☕ ${v.name} · on a break` : v.name;
+    el.textContent = vanLabelText(v);
     el.classList.toggle("is-break", v.onBreak);
+    el.classList.toggle("is-estimated", isEstimated(v));
   }
   for (const [id, m] of s.labels)
     if (!seen.has(id)) {

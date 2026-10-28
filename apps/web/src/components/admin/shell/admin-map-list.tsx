@@ -3,7 +3,16 @@ import type { LatLng } from "@eci-shuttle/shared";
 import { AlertTriangle } from "lucide-react";
 
 export type MapSpot = { id: string; name: string; lat: number; lng: number; radiusM: number };
-export type MapMarker = { id: string; name: string; colour: string | null; lat: number; lng: number; problem: boolean };
+export type MapMarker = {
+  id: string;
+  name: string;
+  colour: string | null;
+  lat: number;
+  lng: number;
+  problem: boolean;
+  /** no signal: the position is a prediction (optional; drawn faded and dashed) */
+  estimated?: boolean;
+};
 
 /** Points to fit the view to: spots and paths (they don't move); markers only when there is nothing else. */
 export function fitPoints(spots: MapSpot[], paths: LatLng[][], markers: MapMarker[]): [number, number][] {
@@ -23,6 +32,7 @@ export function MapList({ spots, markers }: { spots: MapSpot[]; markers: MapMark
         <li key={`m:${m.id}`} className={row}>
           <span aria-hidden className="size-3 shrink-0 rounded-full" style={{ background: m.colour ?? "#e39a2e" }} />
           <span className="min-w-0 flex-1 font-medium">{m.name}</span>
+          {m.estimated && <span className="text-muted-foreground">estimated, no signal</span>}
           {m.problem && (
             <span className="flex items-center gap-1 text-orange-800">
               <AlertTriangle className="size-4" aria-hidden /> needs attention

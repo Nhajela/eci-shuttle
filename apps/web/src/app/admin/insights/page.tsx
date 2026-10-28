@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { ExcludeDayForm } from "@/components/admin/insights/exclude-day-form";
 import { InsightsView } from "@/components/admin/insights/insights-view";
 import { SuggestionCard } from "@/components/admin/insights/suggestion-card";
-import { insightsRange } from "@/components/admin/insights/view";
+import { deadZoneLines, insightsRange } from "@/components/admin/insights/view";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ import { listRoutes } from "@/services/catalog/routes";
 import { listSpots } from "@/services/catalog/spots";
 import { can } from "@/services/kernel";
 import { getInsights, listSuggestions } from "@/services/learning/insights";
+import { loadDeadZones } from "@/services/signal/dead-zones";
 
 /** admin-insights (SPEC §6a.5–6, §7): on-time %, delay heatmap, dwell, leg times, loop, average wait, suggestions. */
 export const metadata: Metadata = { title: "Insights" };
@@ -26,11 +27,12 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
   const range = insightsRange(sp, now);
   const ws = { workspaceId: workspace.id };
 
-  const [data, suggestions, spots, routes] = await Promise.all([
+  const [data, suggestions, spots, routes, deadZones] = await Promise.all([
     getInsights(db(), actor, { ...ws, ...range }),
     listSuggestions(db(), actor, { ...ws, status: "open" }),
     listSpots(db(), actor, { ...ws, includeArchived: true }),
     listRoutes(db(), actor, ws),
+    loadDeadZones(db(), workspace.id),
   ]);
   const canDecide = can(actor, workspace.id, "ops");
 
@@ -72,6 +74,17 @@ export default async function InsightsPage({ searchParams }: { searchParams: Pro
           </div>
         )}
       </section>
+
+      {deadZones.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-lg font-semibold">Stretches without signal</h2>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {deadZoneLines(deadZones, new Map(spots.map((s) => [s.id, s.name]))).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {canDecide && (
         <section className="space-y-2">

@@ -55,6 +55,18 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+/** One leg of a route without mobile signal (routes.no_signal_legs). Metres are along the whole route path. */
+export type NoSignalLeg = {
+  legIndex: number;
+  source: "manual" | "detected";
+  /** detected only: the stretch within the leg (absent = whole leg) */
+  startAlongM?: number;
+  endAlongM?: number;
+  /** detected only: trips / distinct IST days that saw the stretch, for Insights */
+  trips?: number;
+  days?: number;
+};
+
 const id = () => uuid("id").primaryKey().defaultRandom();
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: "date" });
 const createdAt = () => ts("created_at").notNull().defaultNow();
@@ -203,6 +215,12 @@ export const routes = pgTable(
     typicalLegS: nullableIntArray("typical_leg_s").notNull().default(sql`'{}'::integer[]`),
     /** planned dwell (seconds) per spot id on this route; a spot without an entry has no planned dwell */
     plannedDwellS: jsonb("planned_dwell_s").$type<Record<string, number>>().notNull().default({}),
+    /**
+     * legs with no mobile signal (services/signal/dead-zones.ts): `manual` (an admin marked the whole leg, at most
+     * one per leg, written through the service and audited) and `detected` (stretches found by the nightly learning
+     * job from late-arriving Android pings; derived, unaudited, possibly several per leg). Manual wins per leg.
+     */
+    noSignalLegs: jsonb("no_signal_legs").$type<NoSignalLeg[]>().notNull().default([]),
     archivedAt: ts("archived_at"),
     version: version(),
     createdAt: createdAt(),

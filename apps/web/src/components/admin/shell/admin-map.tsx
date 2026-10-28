@@ -129,9 +129,14 @@ function drawMarkers(m: Live, markers: MapMarker[]) {
       color: v.problem ? RED : "#141b34",
       weight: 3,
       fillColor: v.colour ?? "#e39a2e",
-      fillOpacity: 1,
+      fillOpacity: v.estimated ? 0.35 : 1,
+      opacity: v.estimated ? 0.8 : 1,
+      dashArray: v.estimated ? "4 4" : undefined,
     })
-      .bindTooltip(esc(v.name), { permanent: true, direction: "right" })
+      .bindTooltip(esc(v.estimated ? `${v.name} · no signal, estimated` : v.name), {
+        permanent: true,
+        direction: "right",
+      })
       .addTo(m.markers);
   }
 }

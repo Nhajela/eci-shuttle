@@ -1,5 +1,6 @@
 import type { AnswerLine } from "@eci-shuttle/shared";
 import { describe, expect, it } from "vitest";
+import { NO_SIGNAL_STRETCH } from "@/services/public/sight";
 import { dayPart, mood, noShuttleMood } from "./whimsy";
 
 const base: AnswerLine = {
@@ -97,5 +98,18 @@ describe("noShuttleMood", () => {
   it("is a day off", () => {
     expect(noShuttleMood(12).emoji).toBe("🏖️");
     expect(noShuttleMood(1).emoji).toBe("🌙");
+  });
+});
+
+describe("mood: an estimate through a no-signal stretch", () => {
+  it("is not read as the timetable, and says it is a guess", () => {
+    const m = mood(
+      live(4, { lastSeenS: 400, approx: true, phaseText: `on its way to Namaka · ${NO_SIGNAL_STRETCH}` }),
+      0,
+      19,
+    );
+    expect(m.text).not.toMatch(/timetable/i);
+    expect(m.text).toMatch(/signal/i);
+    expect(m.text).toMatch(/guess|estimate/i);
   });
 });

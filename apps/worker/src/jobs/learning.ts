@@ -1,19 +1,30 @@
 import { sendDigest } from "@/services/alerts/alerts";
 import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { recomputeAll } from "@/services/learning/learning";
+import { recomputeDeadZones } from "@/services/signal/recompute";
 import type { Job, JobContext } from "../job";
 
 /**
  * Nightly 02:30 IST (SPEC §2b, §6a): for every workspace, learning.recomputeAll (stats + suggestions), then
- * alerts.sendDigest. One workspace failing must not stop the others (log and continue).
+ * signal/recompute.recomputeDeadZones (stretches without signal, from late-arriving Android pings; stored on the
+ * route so the public request paths never scan pings), then alerts.sendDigest. One step or workspace failing must
+ * not stop the others (log and continue).
  */
-export async function runLearning(ctx: JobContext, svc = { recomputeAll, sendDigest }): Promise<{ failed: number }> {
+export async function runLearning(
+  ctx: JobContext,
+  overrides: Partial<{
+    recomputeAll: typeof recomputeAll;
+    recomputeDeadZones: typeof recomputeDeadZones;
+    sendDigest: typeof sendDigest;
+  }> = {},
+): Promise<{ failed: number }> {
   const { db, now, log } = ctx;
+  const svc = { recomputeAll, recomputeDeadZones, sendDigest, ...overrides };
   const all = await listAllWorkspaces(db);
   let failed = 0;
   for (const w of all) {
     // separate tries: the digest (yesterday's insights) is still worth sending when recompute fails
-    for (const step of [svc.recomputeAll, svc.sendDigest]) {
+    for (const step of [svc.recomputeAll, svc.recomputeDeadZones, svc.sendDigest]) {
       try {
         await step(db, w.id, now);
       } catch (e) {

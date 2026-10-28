@@ -19,11 +19,13 @@ const TEAL = 0x286c71;
 const MARIGOLD = 0xe39a2e;
 const BLUE = 0x4d65ff;
 const LEAF = 0x3c8a4f;
+/** how see-through a van is while it is only an estimate */
+const GHOST_OPACITY = 0.42;
 
 type Parts = {
   geometries: THREE.BufferGeometry[];
   materials: THREE.Material[];
-  build: (colour: string | null) => { group: THREE.Group; wheels: THREE.Mesh[] };
+  build: (colour: string | null, ghost?: boolean) => { group: THREE.Group; wheels: THREE.Mesh[] };
 };
 
 let parts: Parts | null = null;
@@ -78,7 +80,22 @@ function buildParts(): Parts {
   );
   const accent = new Map<string, THREE.Material>();
 
-  const build = (colour: string | null) => {
+  const dashed = m(
+    new THREE.LineDashedMaterial({ color: 0x141b34, dashSize: 0.45, gapSize: 0.3, transparent: true, opacity: 0.8 }),
+  );
+  const ghostOf = new Map<THREE.Material, THREE.Material>();
+  const ghostMat = (src: THREE.Material) => {
+    let gm = ghostOf.get(src);
+    if (!gm) {
+      gm = m(src.clone());
+      gm.transparent = true;
+      gm.opacity = GHOST_OPACITY;
+      gm.depthWrite = false;
+      ghostOf.set(src, gm);
+    }
+    return gm;
+  };
+  const build = (colour: string | null, ghost = false) => {
     let stripeM: THREE.Material = teal;
     if (colour) {
       stripeM = accent.get(colour) ?? m(lambert(new THREE.Color(colour).getHex()));
@@ -130,6 +147,26 @@ function buildParts(): Parts {
         h.rotation.z = Math.PI / 2;
         wheels.push(w, h);
       }
+    if (ghost) {
+      // an estimate, not a fix: see-through, no ground shadow, and a dashed footprint so it is not colour alone
+      group.remove(ground);
+      for (const child of group.children) if (child instanceof THREE.Mesh) child.material = ghostMat(child.material);
+      const hw = 1.25;
+      const hl = 3.1;
+      const outline = new THREE.LineLoop(
+        g(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(-hw, 0.05, -hl),
+            new THREE.Vector3(hw, 0.05, -hl),
+            new THREE.Vector3(hw, 0.05, hl),
+            new THREE.Vector3(-hw, 0.05, hl),
+          ]),
+        ),
+        dashed,
+      );
+      outline.computeLineDistances();
+      group.add(outline);
+    }
     return { group, wheels };
   };
 
@@ -144,6 +181,8 @@ type Van = {
   track: Track;
   /** metres per second it is gliding at, for wheel spin */
   speed: number;
+  /** drawn as a ghost: its place is a prediction (dead zone), not a fix */
+  estimated: boolean;
 };
 
 /**
@@ -180,6 +219,8 @@ export type VanFix = {
   /** its route and metres along it: the van then glides along the road (motion.retarget) */
   routeId?: string;
   alongM?: number | null;
+  /** no signal: this is a prediction along the route, drawn see-through with a dashed footprint */
+  estimated?: boolean;
 };
 
 /** The vans layer: feed it fixes with `update()`; it glides each van there over `glideMs`. */
@@ -257,12 +298,22 @@ export class VanLayer implements CustomLayerInterface {
       keep.add(f.id);
       const path = f.routeId ? this.routes.get(f.routeId)?.path : undefined;
       let van = this.vans.get(f.id);
+      const estimated = f.estimated === true;
+      if (van && van.estimated !== estimated) {
+        // live <-> estimated: swap the look, keep the track so it does not jump
+        van.scene.remove(van.group);
+        const built = parts.build(f.colour, estimated);
+        van.scene.add(built.group);
+        van.group = built.group;
+        van.wheels = built.wheels;
+        van.estimated = estimated;
+      }
       if (!van) {
-        const { group, wheels } = parts.build(f.colour);
+        const { group, wheels } = parts.build(f.colour, estimated);
         const scene = new THREE.Scene();
         lit(scene, this.dark);
         scene.add(group);
-        van = { scene, group, wheels, track: retarget(undefined, f, nowMs, 0, path), speed: 0 };
+        van = { scene, group, wheels, track: retarget(undefined, f, nowMs, 0, path), speed: 0, estimated };
         this.vans.set(f.id, van);
       } else {
         const from = sample(van.track, nowMs);

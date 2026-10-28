@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { NoSignalToggle } from "@/components/admin/routes/NoSignalToggle";
 import { PathEditor } from "@/components/admin/routes/PathEditor";
 import { RouteForm } from "@/components/admin/routes/RouteForm";
 import { legRows, spotChain } from "@/components/admin/routes/routes";
@@ -21,6 +22,7 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
     listSpots(db(), actor, { ...input, includeArchived: true }),
   ]);
   const canEdit = can(actor, workspace.id, "ops");
+  const canMarkSignal = can(actor, workspace.id, "admin");
   const names = Object.fromEntries(allSpots.map((s) => [s.id, s.name]));
   const spotsById = new Map(allSpots.map((s) => [s.id, s]));
   const pickable = allSpots.filter((s) => !s.archivedAt).map((s) => ({ id: s.id, name: s.name }));
@@ -48,15 +50,28 @@ export default async function RoutesPage({ searchParams }: { searchParams: Promi
               </CardHeader>
               <CardContent className="flex flex-col gap-4">
                 <section>
-                  <h2 className="mb-1 text-sm font-medium">Typical leg times</h2>
+                  <h2 className="mb-1 text-sm font-medium">Legs: typical times and signal</h2>
                   <ul className="flex flex-col divide-y">
                     {legs.map((l, i) => (
                       // biome-ignore lint/suspicious/noArrayIndexKey: legs are positional
-                      <li key={i} className="flex justify-between gap-3 py-2">
-                        <span className="min-w-0 truncate">
-                          {l.from} → {l.to}
-                        </span>
-                        <span className={l.learned ? "tabular-nums" : "text-muted-foreground"}>{l.time}</span>
+                      <li key={i} className="py-2">
+                        <div className="flex justify-between gap-3">
+                          <span className="min-w-0 truncate">
+                            {l.from} → {l.to}
+                          </span>
+                          <span className={l.learned ? "tabular-nums" : "text-muted-foreground"}>{l.time}</span>
+                        </div>
+                        {canMarkSignal ? (
+                          <NoSignalToggle
+                            w={workspace.slug}
+                            routeId={r.id}
+                            version={r.version}
+                            legIndex={i}
+                            state={l.noSignal}
+                          />
+                        ) : (
+                          l.noSignal && <p className="text-xs text-muted-foreground">No signal on this stretch</p>
+                        )}
                       </li>
                     ))}
                   </ul>

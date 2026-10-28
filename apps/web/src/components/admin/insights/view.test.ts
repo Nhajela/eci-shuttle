@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fmtDelay, fmtDuration, heatmap, heatTone, insightsRange } from "./view";
+import { deadZoneLines, fmtDelay, fmtDuration, heatmap, heatTone, insightsRange } from "./view";
 
 // 2026-10-12 23:00 IST = 17:30Z
 const NOW = new Date("2026-10-12T17:30:00Z");
@@ -81,5 +81,37 @@ describe("fmtDuration", () => {
     expect(fmtDuration(90)).toBe("2 min");
     expect(fmtDuration(540)).toBe("9 min");
     expect(fmtDuration(3900)).toBe("1 h 05 min");
+  });
+});
+
+describe("deadZoneLines", () => {
+  const names = new Map([
+    ["c", "Circle"],
+    ["n", "Namaka"],
+  ]);
+  const z = (o: object) => ({
+    routeId: "r",
+    legIndex: 1,
+    fromSpotId: "c",
+    toSpotId: "n",
+    startAlongM: null,
+    endAlongM: null,
+    source: "detected" as const,
+    typicalLegS: null,
+    ...o,
+  });
+
+  it("says where a detected stretch is, in metres, and a marked leg as the whole leg", () => {
+    expect(deadZoneLines([z({ startAlongM: 2830, endAlongM: 3410 })], names)).toEqual([
+      "Circle → Namaka: no signal for about 580 m (found from late phone uploads)",
+    ]);
+    expect(deadZoneLines([z({ source: "manual" })], names)).toEqual([
+      "Circle → Namaka: no signal (marked by an admin)",
+    ]);
+  });
+
+  it("adds the typical leg time when learned, and names an unknown spot", () => {
+    expect(deadZoneLines([z({ source: "manual", typicalLegS: 240 })], names)[0]).toContain("typically 4 min");
+    expect(deadZoneLines([z({ fromSpotId: "zz" })], names)[0]).toContain("Unknown spot");
   });
 });
