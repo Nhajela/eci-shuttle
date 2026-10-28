@@ -3,6 +3,7 @@
  * never lateness, never planned-vs-expected (§6a.2).
  */
 import type { AnswerLine } from "@eci-shuttle/shared";
+import { isPredictedLine } from "@/services/public/sight";
 
 /** `small`: not a time, so it is shown in the small style. */
 export type AnswerParts = { label: string; value: string; range: string | null; small?: true };
@@ -19,8 +20,12 @@ const blind = (line: AnswerLine) =>
 /** Past this, a live answer is no longer live (services/public/sight.ts LIVE_MS: a short drop stays live). */
 const STALE_S = 300;
 
+/**
+ * A live line whose last fix is old. Not an estimate through a no-signal stretch (sight.ts predicted): its last fix
+ * is always over 5 min old, and the estimate is the answer (the server drops it when it stops being believable).
+ */
 const isStale = (line: AnswerLine, ageS: number) =>
-  line.kind === "live" && line.lastSeenS !== null && line.lastSeenS + ageS > STALE_S;
+  line.kind === "live" && !isPredictedLine(line) && line.lastSeenS !== null && line.lastSeenS + ageS > STALE_S;
 
 /**
  * The big line. `single` = the only service at this spot, so it reads as a sentence.
