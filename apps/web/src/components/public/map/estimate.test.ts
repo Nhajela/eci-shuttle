@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type MapVehicle,
-  estimatedCount,
-  isEstimated,
-  mapAriaLabel,
-  summaryCopy,
-  vanLabelText,
-} from "./estimate";
+import { estimatedCount, isEstimated, type MapVehicle, mapAriaLabel, summaryCopy, vanLabelText } from "./estimate";
 
 const v = (over: Partial<MapVehicle> = {}): MapVehicle => ({
   id: "v1",
