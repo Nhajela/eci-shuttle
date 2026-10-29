@@ -19,7 +19,9 @@ const src = fs.readFileSync(file, "utf8");
 const missing = MARKERS.filter((m) => !src.includes(m));
 if (missing.length) {
   console.error(`expo-location patch NOT applied (${file}); missing: ${missing.join(", ")}`);
-  console.error("Check the install step: pnpm 10.18.1 (eas.json build.<profile>.pnpm), --frozen-lockfile, no EAS_NO_FROZEN_LOCKFILE, and patches/ uploaded.");
+  console.error(
+    "Check the install step: pnpm 10.18.1 (eas.json build.<profile>.pnpm), --frozen-lockfile, no EAS_NO_FROZEN_LOCKFILE, and patches/ uploaded.",
+  );
   process.exit(1);
 }
 console.log("expo-location patch applied ✓");
