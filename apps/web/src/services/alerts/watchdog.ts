@@ -199,14 +199,20 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
 
 /**
  * Vehicles of `states` that are silent past SILENT_AFTER_MS but sight() still predicts through a dead zone
- * (services/public/estimates, the same rule the public map uses). Nothing is queried when none is that silent.
+ * (services/public/estimates, the same rule the public map uses). Returns early (no query) when none is that silent or the workspace has no dead zones; a failed lookup counts as none.
  */
 async function predictedVehicles(db: Db, workspaceId: string, states: VehicleState[], now: Date): Promise<Set<string>> {
   const silent = [...new Map(states.map((s) => [s.vehicleId, s])).values()].filter(
     (s) => s.lastPingAt && now.getTime() - s.lastPingAt.getTime() > SILENT_AFTER_MS,
   );
   if (!silent.length) return new Set();
-  return new Set((await estimateVehicles(db, workspaceId, silent, now)).keys());
+  // a failed lookup must not take every other alert down with it: fall back to "silent" as before
+  try {
+    return new Set((await estimateVehicles(db, workspaceId, silent, now)).keys());
+  } catch (e) {
+    console.error(`watchdog: dead-zone lookup failed for workspace ${workspaceId}`, e);
+    return new Set();
+  }
 }
 
 /** When the "sync now" push for this config version was queued (devices/config.bumpConfigs dedupe key). */

@@ -6,9 +6,15 @@ import { makeAssignedDevice } from "@tests/factories/alerts";
 import { makeAdmin, makeWorkspace } from "@tests/factories/core";
 import { testDb } from "@tests/helpers/db";
 import { eq, like } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { outbox, routes, services, serviceVehicles, spots, vehicleState } from "@/db/schema";
+import { estimateVehicles } from "@/services/public/estimates";
 import { detectProblems, runWatchdog } from "./watchdog";
+
+// the real estimateVehicles, wrapped so one test can make it fail
+vi.mock("@/services/public/estimates", async (orig) => ({
+  estimateVehicles: vi.fn((await orig<typeof import("@/services/public/estimates")>()).estimateVehicles),
+}));
 
 const db = () => testDb();
 const html = (o?: { payload: unknown }) => (o?.payload as { html?: string } | undefined)?.html ?? "";
@@ -175,5 +181,17 @@ describe("one silent episode, one alert", () => {
     await runWatchdog(db(), at("10:08"));
     await t.backlog(at("10:02", 40));
     expect(await t.silentProblems(at("10:14"))).toEqual([expect.objectContaining({ since: at("10:02", 40) })]);
+  });
+});
+
+describe("when the dead-zone lookup fails", () => {
+  it("still reports every problem (alerts fail open, not closed)", async () => {
+    const t = await setup({ marked: true });
+    vi.mocked(estimateVehicles).mockRejectedValueOnce(new Error("boom"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const problems = await detectProblems(db(), t.ws.id, at("10:08"));
+    expect(problems).toContainEqual(expect.objectContaining({ kind: "silent", vehicleId: t.vehicle.id }));
+    expect(err).toHaveBeenCalledTimes(1);
+    err.mockRestore();
   });
 });
