@@ -6,6 +6,7 @@ import { type AlertKind, dutyWindows, istHHMM, resolveMode } from "@eci-shuttle/
 import { and, eq, inArray, isNotNull, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "@/db";
 import { deviceAssignments, devices, outbox, vehicleState, vehicles, workspaces } from "@/db/schema";
+import type { VehicleState } from "@/db/types";
 import { escapeHtml } from "@/lib/telegram/html";
 import { encodeCallback } from "@/services/bot/callbacks";
 import { activeBreaks } from "@/services/catalog/breaks";
@@ -13,6 +14,7 @@ import { listAllWorkspaces } from "@/services/catalog/workspaces";
 import { desiredConfig } from "@/services/devices/config";
 import { isOutsideApp } from "@/services/devices/phones";
 import { refreshPhases } from "@/services/ingest/ingest";
+import { estimateVehicles } from "@/services/public/estimates";
 import { PARKED_MS } from "@/services/public/sight";
 import { adminButton, alertAdminChanges, raiseAlert } from "./alerts";
 import { LOW_BATTERY_PCT, SILENT_AFTER_MS } from "./thresholds";
@@ -30,8 +32,13 @@ export type Problem = {
   workspaceId: string;
   vehicleId: string | null;
   deviceId: string | null;
-  /** when the problem started (episode start: also the alert key) */
+  /** when the problem started (shown to people; for silent, the last fix) */
   since: Date;
+  /**
+   * The alert key's episode start when it differs from `since`: a silent vehicle's `since` follows its last fix, which
+   * an offline backlog moves forward while it is still silent, so its episode is the start of its offline stretch.
+   */
+  episode?: Date;
   /** plain English, no time in it: "Bus 1 has been silent", "Ravi's phone is at 12% battery" */
   message: string;
 };
@@ -39,7 +46,8 @@ export type Problem = {
 /**
  * Open problems of a workspace at `now` (no actor: callers check access):
  * silent (inside its tracking window, last ping > SILENT_AFTER_MS ago; PARKED_MS for a Telegram live-location phone
- * whose last fix was inside a stop), off_route (vehicle_state.off_route),
+ * whose last fix was inside a stop; not while sight() still predicts it through a no-signal leg, see estimateVehicles),
+ * off_route (vehicle_state.off_route),
  * low_battery (< LOW_BATTERY_PCT and not charging, since devices.low_battery_since), permission_lost (location
  * not "always", or notifications off, since devices.permission_lost_since; both since `now` until the watchdog
  * stamps them), mode_mismatch (on its current config, reported mode ≠ what it was told at its last sync while that is
@@ -66,14 +74,22 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
   // several sources may back each other up on one vehicle: its silent / off-route problem is raised once
   const flagged = new Set<string>();
   const problems: Problem[] = [];
+  // a van silent inside a known no-signal leg, within its expected time there, is silent because of the road
+  const inDeadZone = await predictedVehicles(
+    db,
+    workspaceId,
+    rows.flatMap((r) => (r.state ? [r.state] : [])),
+    now,
+  );
   for (const { device: d, vehicle: v, state: s } of rows) {
-    const add = (kind: Problem["kind"], since: Date, message: string, onVehicle = false) =>
+    const add = (kind: Problem["kind"], since: Date, message: string, onVehicle = false, episode?: Date) =>
       problems.push({
         kind,
         workspaceId,
         vehicleId: v?.id ?? null,
         deviceId: d.id,
         since,
+        ...(episode && { episode }),
         message: onVehicle ? message : `${d.label}${message}`,
       });
 
@@ -98,13 +114,23 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
     const dutyStart = duty.window ? new Date(duty.window.startsAt) : null;
 
     const resting = v !== null && onBreak.has(v.id);
-    if (v && !resting && !flagged.has(`silent:${v.id}`) && duty.mode === "active" && dutyStart) {
+    if (
+      v &&
+      !resting &&
+      !flagged.has(`silent:${v.id}`) &&
+      duty.mode === "active" &&
+      dutyStart &&
+      !inDeadZone.has(v.id)
+    ) {
       const last = s?.lastPingAt && s.lastPingAt > dutyStart ? s.lastPingAt : dutyStart;
       // Telegram live location sends nothing while the phone is stationary, so a shuttle parked at a stop is
       // quiet by design: give it the parked limit (the same one the public page uses) instead of 5 min.
       const parked = d.appVersion === "telegram" && (s?.phase === "at_spot" ? s.spotId : s?.geofence?.insideSpotId);
       if (t - last.getTime() > (parked ? PARKED_MS : SILENT_AFTER_MS)) {
-        add("silent", last, `${v.name} has been silent`, true);
+        // the episode ends when the vehicle reports live again: while ingest keeps it offline (a stale backlog
+        // doesn't revive it) the offline stretch's start is stable, whereas the last fix creeps forward
+        const episode = s?.phase === "offline" && s.since > last ? s.since : undefined;
+        add("silent", last, `${v.name} has been silent`, true, episode);
         flagged.add(`silent:${v.id}`);
       }
     }
@@ -171,6 +197,24 @@ export async function detectProblems(db: Db, workspaceId: string, now: Date): Pr
   return problems;
 }
 
+/**
+ * Vehicles of `states` that are silent past SILENT_AFTER_MS but sight() still predicts through a dead zone
+ * (services/public/estimates, the same rule the public map uses). Returns early (no query) when none is that silent or the workspace has no dead zones; a failed lookup counts as none.
+ */
+async function predictedVehicles(db: Db, workspaceId: string, states: VehicleState[], now: Date): Promise<Set<string>> {
+  const silent = [...new Map(states.map((s) => [s.vehicleId, s])).values()].filter(
+    (s) => s.lastPingAt && now.getTime() - s.lastPingAt.getTime() > SILENT_AFTER_MS,
+  );
+  if (!silent.length) return new Set();
+  // a failed lookup must not take every other alert down with it: fall back to "silent" as before
+  try {
+    return new Set((await estimateVehicles(db, workspaceId, silent, now)).keys());
+  } catch (e) {
+    console.error(`watchdog: dead-zone lookup failed for workspace ${workspaceId}`, e);
+    return new Set();
+  }
+}
+
 /** When the "sync now" push for this config version was queued (devices/config.bumpConfigs dedupe key). */
 async function pushedAtFor(db: Db, deviceId: string, configVersion: number): Promise<Date | null> {
   const [row] = await db
@@ -182,7 +226,7 @@ async function pushedAtFor(db: Db, deviceId: string, configVersion: number): Pro
 
 /**
  * The watchdog job (every minute), for every workspace: ingest.refreshPhases (marks vehicles offline/off duty),
- * detectProblems → stampEpisodes (phone episode starts) → alerts.raiseAlert per problem (key `<kind>:<vehicleId|deviceId>:<sinceMs>`), and
+ * detectProblems → stampEpisodes (phone episode starts) → alerts.raiseAlert per problem (key `<kind>:<vehicleId|deviceId>:<episode start ms>`, the problem's `episode ?? since`), and
  * alerts.alertAdminChanges for the last 2 min.
  */
 export async function runWatchdog(
@@ -263,7 +307,7 @@ async function alertProblems(db: Db, id: string, found: Problem[], now: Date): P
       {
         workspaceId: id,
         kind: alertKindOf(p.kind),
-        key: `${p.kind}:${subject}:${p.since.getTime()}`,
+        key: `${p.kind}:${subject}:${(p.episode ?? p.since).getTime()}`,
         html: `<b>${escapeHtml(p.message)}</b>\nSince ${istHHMM(p.since)}`,
         buttons,
         ...(p.deviceId && { mute: { kind: p.kind, deviceId: p.deviceId, vehicleId: p.vehicleId } }),
